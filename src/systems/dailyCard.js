@@ -13,8 +13,9 @@
 
 import en from '../locales/en.json'
 import zhTW from '../locales/zh-TW.json'
+import ja from '../locales/ja.json'
 
-const LOCALES = { en, 'zh-TW': zhTW }
+const LOCALES = { en, 'zh-TW': zhTW, ja }
 
 // Resolve the dailyCard string sub-tree for a locale, falling back to en per-key.
 export function resolveCardStrings(locale = 'en') {

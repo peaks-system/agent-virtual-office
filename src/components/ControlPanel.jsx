@@ -194,7 +194,7 @@ export default function ControlPanel({ platform = 'browser', mode = 'full' }) {
     const locales = availableLocales()
     const idx = locales.indexOf(lang)
     const next = locales[(idx + 1) % locales.length]
-    const labels = { en: 'EN', 'zh-TW': 'ZH' }
+    const labels = { en: 'EN', 'zh-TW': 'ZH', ja: '日本語' }
     return labels[next] || next.toUpperCase()
   })()
 
@@ -230,7 +230,7 @@ export default function ControlPanel({ platform = 'browser', mode = 'full' }) {
             {agentList.map((agent) => {
               const ext = externalStatus[agent.id]
               return (
-                <div key={agent.id} className="flex items-center gap-0.5 shrink-0" title={`${charName(agent.id)}: ${ext ? (blockedReasonLabel(ext) || taskChipLabel(ext.task) || ext.status) : agent.behavior}`}>
+                <div key={agent.id} className="flex items-center gap-0.5 shrink-0" title={`${charName(agent.id)}: ${ext ? (blockedReasonLabel(ext) || taskChipLabel(ext.task) || t(`statusLabels.${ext.status}`, ext.status)) : behaviorLabel(agent.behavior)}`}>
                   <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: agent.color }} />
                   <span className="inline-block w-1 h-1 rounded-full" style={{ backgroundColor: STATUS_COLORS[agent.status] || '#888' }} aria-hidden="true" />
                 </div>
@@ -434,7 +434,7 @@ export default function ControlPanel({ platform = 'browser', mode = 'full' }) {
             const name = charName(agent.id)
             const label = ext ? agentLineLabel(ext, t) : behaviorLabel(agent.behavior)
             return (
-              <div key={agent.id} className="flex items-center gap-1 shrink-0" title={`${name}: ${ext ? (blockedReasonLabel(ext) || taskChipLabel(ext.task) || ext.status) : agent.behavior}`}>
+              <div key={agent.id} className="flex items-center gap-1 shrink-0" title={`${name}: ${ext ? (blockedReasonLabel(ext) || taskChipLabel(ext.task) || t(`statusLabels.${ext.status}`, ext.status)) : behaviorLabel(agent.behavior)}`}>
                 <span className="inline-block w-2.5 h-2.5 rounded-full border border-white/50" style={{ backgroundColor: agent.color }} />
                 <span className="text-gray-700 dark:text-gray-200 font-medium">{name}</span>
                 <span className="text-gray-400 dark:text-gray-500">·</span>

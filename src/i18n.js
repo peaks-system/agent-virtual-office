@@ -3,14 +3,15 @@
 // Usage: import { t, locale, setLocale } from './i18n'
 //   t('behaviorLabels.typing')  → "Typing" or "打字中"
 //   t('bubbles.typing')         → ["hmm...", ...] (array)
-//   locale()                    → "en" | "zh-TW"
+//   locale()                    → "en" | "zh-TW" | "ja"
 
 import { useState, useEffect } from 'react'
 import en from './locales/en.json'
 import zhTW from './locales/zh-TW.json'
+import ja from './locales/ja.json'
 import { rng } from './systems/rng.js'
 
-const LOCALES = { en, 'zh-TW': zhTW }
+const LOCALES = { en, 'zh-TW': zhTW, ja }
 
 // Detect language: ?lang= > localStorage > navigator > 'en'
 function detectLang() {
@@ -22,6 +23,7 @@ function detectLang() {
     if (saved && LOCALES[saved]) return saved
     // Check browser language — only map Traditional Chinese variants
     const nav = navigator.language
+    if (nav === 'ja' || nav?.startsWith('ja-')) return 'ja'
     if (nav === 'zh-TW' || nav === 'zh-HK' || nav === 'zh-Hant' || nav?.startsWith('zh-Hant')) return 'zh-TW'
   }
   return 'en'
@@ -41,6 +43,7 @@ export function setLocale(lang) {
   if (typeof window !== 'undefined') {
     localStorage.setItem('office-lang', lang)
     document.documentElement.lang = lang
+    document.title = t('ui.documentTitle', 'Agent Virtual Office — AI Agent Activity Visualizer')
     // Persist to ~/.claude/office-lang so hooks can read it
     fetch('/api/lang', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: lang }).catch((err) => console.warn('[Office] Failed to persist language preference:', err))
   }

@@ -1,5 +1,6 @@
 import React from 'react'
 import { classifyMood } from '../systems/classify.js'
+import { t, useLocale } from '../i18n'
 
 // All furniture below is wrapped in React.memo. PixelOffice re-renders on every minute/
 // hour clock tick, every activeEvent/activeWorkflow change, and every agentOrderSignature
@@ -172,12 +173,13 @@ export const MeetingTable = React.memo(function MeetingTable({ x, y, w = 90, h =
 
 // ─── Coffee / Vending Machine ─────────────────────────────────────────────
 export const CoffeeMachine = React.memo(function CoffeeMachine({ x, y }) {
+  useLocale()
   return (
     <g>
       <rect x={x} y={y} width={18} height={26} rx={2} fill="#5A4A3E" />
       <rect x={x + 2} y={y + 2} width={14} height={10} rx={1} fill="#222" />
       <rect x={x + 3} y={y + 3} width={12} height={8} rx={0.5} fill="#0a2a1a" />
-      <text x={x + 9} y={y + 9} textAnchor="middle" fontSize="4" fill="#0f0" fontFamily="monospace">CAFE</text>
+      <text x={x + 9} y={y + 9} textAnchor="middle" fontSize="4" fill="#0f0" fontFamily="monospace">{t('office.cafe', 'CAFE')}</text>
       <circle cx={x + 9} cy={y + 18} r={3.5} fill="#E24B4A">
         <animate attributeName="opacity" values="0.6;1;0.6" dur="2.5s" repeatCount="indefinite" />
       </circle>
@@ -201,6 +203,7 @@ export const WaterCooler = React.memo(function WaterCooler({ x, y }) {
 
 // ─── Gate / Security Booth ────────────────────────────────────────────────
 export const GateBooth = React.memo(function GateBooth({ x, y }) {
+  useLocale()
   return (
     <g>
       <rect x={x - 16} y={y - 10} width={32} height={22} rx={3} fill="#888" stroke="#666" strokeWidth="1" />
@@ -208,7 +211,7 @@ export const GateBooth = React.memo(function GateBooth({ x, y }) {
       <rect x={x + 16} y={y - 6} width={28} height={3} rx={1.5} fill="#E24B4A" stroke="#C43" strokeWidth="0.5" />
       <rect x={x - 44} y={y - 6} width={28} height={3} rx={1.5} fill="#E24B4A" stroke="#C43" strokeWidth="0.5" />
       <rect x={x - 16} y={y - 16} width={32} height={7} rx={1} fill="#E24B4A" />
-      <text x={x} y={y - 11} textAnchor="middle" fontSize="4.5" fill="white" fontFamily="monospace" fontWeight="bold">GATE</text>
+      <text x={x} y={y - 11} textAnchor="middle" fontSize="4.5" fill="white" fontFamily="monospace" fontWeight="bold">{t('office.gate', 'GATE')}</text>
     </g>
   )
 })

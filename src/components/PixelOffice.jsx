@@ -36,6 +36,7 @@ import {
 // agentOrderSignature change. SprintKanban's props (x, y, doneCount) are
 // unchanged on a clock tick, so memo skips re-building its ~25 SVG elements.
 const SprintKanban = React.memo(function SprintKanban({ x, y, doneCount = 0 }) {
+  useLocale()
   const W = 78, H = 52
   const MAX_CELLS = 6  // 3 rows × 2 per row, leaves row 4 for overflow text
   const filled = Math.min(doneCount, MAX_CELLS)
@@ -47,15 +48,15 @@ const SprintKanban = React.memo(function SprintKanban({ x, y, doneCount = 0 }) {
       <rect x={x} y={y} width={W} height={H} rx={2} fill="#F8F4E8" stroke="#C8C0A8" strokeWidth="0.8" />
       {/* Header bar */}
       <rect x={x} y={y} width={W} height={10} rx={2} fill="#7070A0" opacity="0.9" />
-      <text x={x + 28} y={y + 7.5} textAnchor="middle" fontSize="6" fill="white" fontFamily="monospace" fontWeight="bold">SPRINT</text>
+      <text x={x + 28} y={y + 7.5} textAnchor="middle" fontSize="6" fill="white" fontFamily="monospace" fontWeight="bold">{t('office.sprint', 'SPRINT')}</text>
       <text x={x + W - 4} y={y + 7.5} textAnchor="end" fontSize="6" fill="#FFE08A" fontFamily="monospace" fontWeight="bold">{doneCount}</text>
       {/* Column dividers */}
       <line x1={x + 26} y1={y + 10} x2={x + 26} y2={y + H} stroke="#D8D0C0" strokeWidth="0.6" />
       <line x1={x + 52} y1={y + 10} x2={x + 52} y2={y + H} stroke="#D8D0C0" strokeWidth="0.6" />
       {/* Column headers */}
-      <text x={x + 13} y={y + 17} textAnchor="middle" fontSize="5.5" fill="#888" fontFamily="monospace">TODO</text>
-      <text x={x + 39} y={y + 17} textAnchor="middle" fontSize="5.5" fill="#888" fontFamily="monospace">DOING</text>
-      <text x={x + 65} y={y + 17} textAnchor="middle" fontSize="5.5" fill={filled > 0 ? '#2E7D32' : '#888'} fontFamily="monospace" fontWeight={filled > 0 ? 'bold' : 'normal'}>DONE</text>
+      <text x={x + 13} y={y + 17} textAnchor="middle" fontSize="5.5" fill="#888" fontFamily="monospace">{t('office.todo', 'TODO')}</text>
+      <text x={x + 39} y={y + 17} textAnchor="middle" fontSize="5.5" fill="#888" fontFamily="monospace">{t('office.doing', 'DOING')}</text>
+      <text x={x + 65} y={y + 17} textAnchor="middle" fontSize="5.5" fill={filled > 0 ? '#2E7D32' : '#888'} fontFamily="monospace" fontWeight={filled > 0 ? 'bold' : 'normal'}>{t('office.done', 'DONE')}</text>
       {/* TODO column: static colored task cards */}
       {todoCards.map((color, i) => (
         <rect key={i} x={x + 3} y={y + 20 + i * 8} width={20} height={6} rx={1} fill={color} opacity="0.25" />
@@ -501,6 +502,7 @@ function growthLevel(count) {
 // re-execute on every such render. The ops desk's onDeployClick is stabilized
 // with useCallback in PixelOffice so its identity stays constant across renders.
 const PersonalDesk = React.memo(function PersonalDesk({ x, y, label, color, variant, coffeeCount = 0, stickyCount = 0, booksCount = 0, onDeployClick, labelScale = 1 }) {
+  useLocale()
   const W = 60, H = 38
   return (
     <g>
@@ -574,7 +576,7 @@ const PersonalDesk = React.memo(function PersonalDesk({ x, y, label, color, vari
           <g style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); onDeployClick?.() }}>
             <circle cx={x + 20} cy={y + 4} r={7} fill="#CC3333" stroke="#AA2222" strokeWidth="1" />
             <circle cx={x + 20} cy={y + 3} r={5} fill="#E24B4A" />
-            <text x={x + 20} y={y + 5} textAnchor="middle" fontSize="3.5" fill="white" fontFamily="monospace" fontWeight="bold">GO</text>
+            <text x={x + 20} y={y + 5} textAnchor="middle" fontSize="3.5" fill="white" fontFamily="monospace" fontWeight="bold">{t('office.go', 'GO')}</text>
           </g>
           {/* Terminal */}
           <rect x={x - 28} y={y - 2} width={12} height={8} rx={1} fill="#1a1a1a" />
@@ -1104,7 +1106,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       <GateBooth x={100} y={90} />
       <Plant x={170} y={50} />
       <rect x={65} y={120} width={70} height={12} rx={2} fill="#9B8B6B" opacity="0.7" />
-      <text x={100} y={129} textAnchor="middle" fontSize="6.5" fill="#C8A878" fontFamily="monospace" opacity="0.85">WELCOME</text>
+      <text x={100} y={129} textAnchor="middle" fontSize="6.5" fill="#C8A878" fontFamily="monospace" opacity="0.85">{t('office.welcome', 'WELCOME')}</text>
 
       {/* ═══ HALLWAY (connecting entrance to meeting room) ═══ */}
       <WallWindow x={250} y={14} w={44} h={28} hour={hour} weather={weather} reducedMotion={weatherReduced} />
@@ -1117,7 +1119,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       <rect x={236} y={58} width={10} height={7} fill="#FF9E9E" />
       <rect x={223} y={68} width={10} height={7} fill="#A8E6CF" />
       <rect x={236} y={68} width={10} height={7} fill="#87CEEB" />
-      <text x={245} y={87} textAnchor="middle" fontSize="6" fill="#8B7355" fontFamily="monospace" opacity="0.7">NOTICE</text>
+      <text x={245} y={87} textAnchor="middle" fontSize="6" fill="#8B7355" fontFamily="monospace" opacity="0.7">{t('office.notice', 'NOTICE')}</text>
       {/* Coat rack */}
       <line x1={400} y1={50} x2={400} y2={80} stroke="#6B5335" strokeWidth="2" />
       <circle cx={400} cy={47} r={3} fill="#6B5335" />
@@ -1137,8 +1139,8 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       {/* ═══ MAIN OFFICE ═══ */}
       {/* SHIP IT poster on north wall interior */}
       <rect x={15} y={170} width={50} height={28} rx={2} fill="#F5F0E0" stroke="#CCC" strokeWidth="0.8" />
-      <text x={40} y={184} textAnchor="middle" fontSize="7" fill="#7F77DD" fontFamily="monospace">SHIP IT</text>
-      <text x={40} y={194} textAnchor="middle" fontSize="6" fill="#888" fontFamily="monospace">everyday</text>
+      <text x={40} y={184} textAnchor="middle" fontSize="7" fill="#7F77DD" fontFamily="monospace">{t('office.ship', 'SHIP IT')}</text>
+      <text x={40} y={194} textAnchor="middle" fontSize="6" fill="#888" fontFamily="monospace">{t('office.everyday', 'everyday')}</text>
 
       {/* Sprint Kanban board on north wall, planning area (clear of door at x=88-140) */}
       <SprintKanban x={160} y={165} doneCount={totalDoneToday} />
@@ -1146,16 +1148,16 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       {/* Team area labels — faint opacity-0.4 BACKGROUND text that sits among the desks. Left at
           native size (NOT counter-scaled): enlarging them collides with the desk nameplates in the
           dense desk cluster (跑版). The desk nameplates below carry the readable "who sits here". */}
-      <text x={200} y={200} textAnchor="middle" fontSize="7" fill="#378ADD" fontFamily="monospace" opacity="0.4">PLANNING</text>
-      <text x={460} y={200} textAnchor="middle" fontSize="7" fill="#BA7517" fontFamily="monospace" opacity="0.4">REVIEW</text>
-      <text x={400} y={310} textAnchor="middle" fontSize="7" fill="#1D9E75" fontFamily="monospace" opacity="0.4">ENGINEERING</text>
+      <text x={200} y={200} textAnchor="middle" fontSize="7" fill="#378ADD" fontFamily="monospace" opacity="0.4">{t('office.planning', 'PLANNING')}</text>
+      <text x={460} y={200} textAnchor="middle" fontSize="7" fill="#BA7517" fontFamily="monospace" opacity="0.4">{t('office.review', 'REVIEW')}</text>
+      <text x={400} y={310} textAnchor="middle" fontSize="7" fill="#1D9E75" fontFamily="monospace" opacity="0.4">{t('office.engineering', 'ENGINEERING')}</text>
 
       {/* Personalized desks */}
       {DESK_DATA.map((d) => (
         <PersonalDesk
           key={d.id}
           x={d.x} y={d.y}
-          label={d.label}
+          label={t(`office.desks.${d.id}`, d.label)}
           color={d.color}
           variant={d.variant}
           coffeeCount={coffeeCountMap[d.id] || 0}
@@ -1174,7 +1176,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       <Plant x={22} y={290} />
 
       {/* ═══ MEETING ROOM ═══ */}
-      <ScaledText x={705} y={26} scale={labelTextScale} textAnchor="middle" fontSize="8" fill="#7070A0" fontFamily="monospace" opacity="0.7">MEETING</ScaledText>
+      <ScaledText x={705} y={26} scale={labelTextScale} textAnchor="middle" fontSize="8" fill="#7070A0" fontFamily="monospace" opacity="0.7">{t('office.meeting', 'MEETING')}</ScaledText>
       <Rug x={634} y={70} w={150} h={120} color="#7070A0" />
       <MeetingTable x={705} y={162} w={100} h={60} />
       <Plant x={630} y={55} />
@@ -1195,7 +1197,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       <Plant x={644} y={390} />
 
       {/* ═══ RESEARCH ═══ */}
-      <ScaledText x={700} y={432} scale={labelTextScale} textAnchor="middle" fontSize="7" fill="#6060A0" fontFamily="monospace" opacity="0.7">RESEARCH</ScaledText>
+      <ScaledText x={700} y={432} scale={labelTextScale} textAnchor="middle" fontSize="7" fill="#6060A0" fontFamily="monospace" opacity="0.7">{t('office.research', 'RESEARCH')}</ScaledText>
       {/* Bookshelves along south outer wall, away from door */}
       <Bookshelf x={470} y={440} width={65} rows={2} />
       <Bookshelf x={625} y={440} width={65} rows={2} />
@@ -1204,7 +1206,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       <Plant x={788} y={540} />
 
       {/* ═══ LOUNGE ═══ */}
-      <ScaledText x={120} y={432} scale={labelTextScale} textAnchor="middle" fontSize="7" fill="#507050" fontFamily="monospace" opacity="0.7">LOUNGE</ScaledText>
+      <ScaledText x={120} y={432} scale={labelTextScale} textAnchor="middle" fontSize="7" fill="#507050" fontFamily="monospace" opacity="0.7">{t('office.lounge', 'LOUNGE')}</ScaledText>
       <Rug x={50} y={440} w={180} h={95} color="#507050" />
       <Couch x={55} y={450} width={90} color="#B97A4E" />
       <RoundTable x={175} y={490} r={22} />
@@ -1222,7 +1224,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       {/* Toilet / WC (bigger) */}
       <g>
         <rect x={340} y={445} width={80} height={55} rx={4} fill="#C8D8C0" stroke="#8A9A7A" strokeWidth="1" />
-        <text x={380} y={458} textAnchor="middle" fontSize="7" fill="#5A6A4A" fontFamily="monospace" fontWeight="bold" opacity="0.8">WC</text>
+        <text x={380} y={458} textAnchor="middle" fontSize="7" fill="#5A6A4A" fontFamily="monospace" fontWeight="bold" opacity="0.8">{t('office.restroom', 'WC')}</text>
         {/* Toilet stalls */}
         <rect x={348} y={465} width={18} height={14} rx={2} fill="#E8E0D0" stroke="#BBB" strokeWidth="0.5" />
         <rect x={370} y={465} width={18} height={14} rx={2} fill="#E8E0D0" stroke="#BBB" strokeWidth="0.5" />
@@ -1238,7 +1240,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       {/* Phone booth */}
       <g>
         <rect x={735} y={455} width={45} height={45} rx={4} fill="#8888AA" stroke="#6666AA" strokeWidth="1" />
-        <text x={758} y={470} textAnchor="middle" fontSize="6" fill="#BBBBDD" fontFamily="monospace" fontWeight="bold" opacity="0.9">PHONE</text>
+        <text x={758} y={470} textAnchor="middle" fontSize="6" fill="#BBBBDD" fontFamily="monospace" fontWeight="bold" opacity="0.9">{t('office.phone', 'PHONE')}</text>
         {/* Phone on wall */}
         <rect x={745} y={478} width={14} height={16} rx={2} fill="#666688" />
         <circle cx={752} cy={485} r={4} fill="#555577" />

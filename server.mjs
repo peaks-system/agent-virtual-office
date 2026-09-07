@@ -54,7 +54,7 @@ const port = _parsedPort
 const bindHost = rawArgs.includes('--host') ? '0.0.0.0' : '127.0.0.1'
 const lang = argVal('--lang=')
 if (lang && !/^[a-zA-Z-]{2,10}$/.test(lang)) {
-  console.error(`\n  Invalid --lang "${lang}". Use "en" or "zh-TW".\n`)
+  console.error(`\n  Invalid --lang "${lang}". Use "en", "zh-TW", or "ja".\n`)
   process.exit(1)
 }
 const openBrowser = !rawArgs.includes('--no-open')
@@ -300,7 +300,7 @@ function handleLang(req, res) {
   req.on('end', () => {
     if (aborted) return
     const l = body.trim()
-    if (l !== 'en' && l !== 'zh-TW') { res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: 'Invalid lang' })) }
+    if (l !== 'en' && l !== 'zh-TW' && l !== 'ja') { res.statusCode = 400; return res.end(JSON.stringify({ ok: false, error: 'Invalid lang' })) }
     const langFile = path.join(os.homedir(), '.claude', 'office-lang')
     try {
       const dir = path.dirname(langFile)

@@ -457,7 +457,7 @@ function officeStatusPlugin() {
           req.on('end', () => {
             if (langAborted) return
             const lang = body.trim()
-            if (lang === 'en' || lang === 'zh-TW') {
+            if (lang === 'en' || lang === 'zh-TW' || lang === 'ja') {
               const langFile = path.join(os.homedir(), '.claude', 'office-lang')
               try {
                 const dir = path.dirname(langFile)

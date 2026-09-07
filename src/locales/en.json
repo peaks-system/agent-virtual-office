@@ -262,6 +262,7 @@
     "idle": "Idle"
   },
   "ui": {
+    "documentTitle": "Agent Virtual Office — AI Agent Activity Visualizer",
     "live": "Live",
     "fallbackAgents": "{0} agents",
     "gateInferred": "inferred",
@@ -382,6 +383,9 @@
     "turnaway": ["ok ok, I see you", "haha enough~", "back to work~"]
   },
   "time": {
+    "compactSeconds": "{0}s",
+    "compactMinutes": "{0}m",
+    "compactHours": "{0}h",
     "now": "now",
     "secondsAgo": "{0}s ago",
     "minutesAgo": "{0}m ago",
@@ -440,5 +444,35 @@
   },
   "pairLink": {
     "coediting": "both editing"
+  },
+  "office": {
+    "sprint": "SPRINT",
+    "todo": "TODO",
+    "doing": "DOING",
+    "done": "DONE",
+    "welcome": "WELCOME",
+    "notice": "NOTICE",
+    "ship": "SHIP IT",
+    "everyday": "everyday",
+    "planning": "PLANNING",
+    "review": "REVIEW",
+    "engineering": "ENGINEERING",
+    "meeting": "MEETING",
+    "research": "RESEARCH",
+    "lounge": "LOUNGE",
+    "restroom": "WC",
+    "phone": "PHONE",
+    "go": "GO",
+    "cafe": "CAFE",
+    "gate": "GATE",
+    "desks": {
+      "pm": "PM",
+      "arch": "Arch",
+      "qa": "QA",
+      "res": "Research",
+      "dev": "Dev",
+      "ops": "Ops",
+      "designer": "Design"
+    }
   }
 }
