@@ -12,7 +12,7 @@ import { t, useLocale } from '../i18n'
 
 // ─── Desk (top-down view) ────────────────────────────────────────────────
 // facing: 'down' (default, monitor at top) or 'up' (monitor at bottom, for paired desks)
-export const Desk = React.memo(function Desk({ x, y, color = '#B8864E', hasMonitor = true, coffeeCount = 0, facing = 'down' }) {
+export const Desk = React.memo(function Desk({ x, y, color = '#FDFDFB', hasMonitor = true, coffeeCount = 0, facing = 'down' }) {
   const W = 52, H = 34
   const up = facing === 'up'
   return (
@@ -21,11 +21,11 @@ export const Desk = React.memo(function Desk({ x, y, color = '#B8864E', hasMonit
       <rect x={x - 9} y={up ? y - H / 2 - 15 : y + H / 2 + 1} width={18} height={14} rx={6} fill="#444" opacity="0.7" />
       <rect x={x - 6} y={up ? y - H / 2 - 11 : y + H / 2 + 2} width={12} height={8} rx={3} fill="#666" opacity="0.5" />
       {/* Desk back edge / shelf */}
-      <rect x={x - W / 2} y={up ? y + H / 2 - 8 : y - H / 2} width={W} height={8} rx={1} fill="#7A5230" />
+      <rect x={x - W / 2} y={up ? y + H / 2 - 8 : y - H / 2} width={W} height={8} rx={1} fill="#CFD7DC" />
       {/* Desk surface */}
       <rect x={x - W / 2} y={up ? y - H / 2 : y - H / 2 + 8} width={W} height={H - 8} rx={1} fill={color} />
       {/* Front edge */}
-      <rect x={x - W / 2} y={up ? y - H / 2 : y + H / 2 - 3} width={W} height={3} rx={0.5} fill="#C8965E" />
+      <rect x={x - W / 2} y={up ? y - H / 2 : y + H / 2 - 3} width={W} height={3} rx={0.5} fill="#FDFDFB" />
       {/* Desk shadow */}
       <rect x={x - W / 2 + 2} y={up ? y - H / 2 - 3 : y + H / 2} width={W - 4} height={3} rx={1} fill="rgba(0,0,0,0.07)" />
       {/* Monitor */}
@@ -84,8 +84,8 @@ export const Bookshelf = React.memo(function Bookshelf({ x, y, width = 70, rows 
   const H = rows * 17
   return (
     <g>
-      <rect x={x} y={y} width={width} height={H + 6} rx={1} fill="#8B6538" />
-      <rect x={x + 2} y={y + 2} width={width - 4} height={H + 2} rx={1} fill="#A07848" />
+      <rect x={x} y={y} width={width} height={H + 6} rx={1} fill="#CCD5DA" />
+      <rect x={x + 2} y={y + 2} width={width - 4} height={H + 2} rx={1} fill="#FDFDFB" />
       {Array.from({ length: rows }).map((_, row) => {
         const ry = y + 4 + row * 17
         let bx = x + 4
@@ -102,7 +102,7 @@ export const Bookshelf = React.memo(function Bookshelf({ x, y, width = 70, rows 
         return (
           <g key={row}>
             {items}
-            <rect x={x + 2} y={ry + 14} width={width - 4} height={2} fill="#7A5228" />
+            <rect x={x + 2} y={ry + 14} width={width - 4} height={2} fill="#D8DEE3" />
           </g>
         )
       })}
@@ -114,8 +114,8 @@ export const Bookshelf = React.memo(function Bookshelf({ x, y, width = 70, rows 
 export const Plant = React.memo(function Plant({ x, y }) {
   return (
     <g>
-      <rect x={x - 5} y={y} width={10} height={9} rx={2} fill="#C4724B" />
-      <rect x={x - 6} y={y} width={12} height={3} rx={1} fill="#A55A3A" />
+      <rect x={x - 5} y={y} width={10} height={9} rx={2} fill="#F2F0E9" />
+      <rect x={x - 6} y={y} width={12} height={3} rx={1} fill="#D3D9D4" />
       <ellipse cx={x - 4} cy={y - 7} rx={4.5} ry={5.5} fill="#3D8B3D" />
       <ellipse cx={x + 4} cy={y - 8} rx={4} ry={5} fill="#4CAF50" />
       <ellipse cx={x} cy={y - 10} rx={3.5} ry={5} fill="#388E3C" />
@@ -125,15 +125,15 @@ export const Plant = React.memo(function Plant({ x, y }) {
 })
 
 // ─── Couch ───────────────────────────────────────────────────────────────
-export const Couch = React.memo(function Couch({ x, y, width = 80, color = '#B97A4E' }) {
+export const Couch = React.memo(function Couch({ x, y, width = 80, color = '#DDE4E5' }) {
   return (
     <g>
       <rect x={x} y={y} width={width} height={34} rx={5} fill={color} />
-      <rect x={x + 4} y={y + 9} width={width / 2 - 8} height={21} rx={3} fill="#CC8C5E" />
-      <rect x={x + width / 2 + 4} y={y + 9} width={width / 2 - 8} height={21} rx={3} fill="#CC8C5E" />
-      <rect x={x} y={y} width={width} height={11} rx={4} fill="#9A5E38" />
-      <rect x={x} y={y + 9} width={10} height={25} rx={3} fill="#A86B44" />
-      <rect x={x + width - 10} y={y + 9} width={10} height={25} rx={3} fill="#A86B44" />
+      <rect x={x + 4} y={y + 9} width={width / 2 - 8} height={21} rx={3} fill="#EDF0ED" />
+      <rect x={x + width / 2 + 4} y={y + 9} width={width / 2 - 8} height={21} rx={3} fill="#EDF0ED" />
+      <rect x={x} y={y} width={width} height={11} rx={4} fill="#C8D2D5" />
+      <rect x={x} y={y + 9} width={10} height={25} rx={3} fill="#D2DBDE" />
+      <rect x={x + width - 10} y={y + 9} width={10} height={25} rx={3} fill="#D2DBDE" />
     </g>
   )
 })
@@ -142,9 +142,9 @@ export const Couch = React.memo(function Couch({ x, y, width = 80, color = '#B97
 export const RoundTable = React.memo(function RoundTable({ x, y, r = 22 }) {
   return (
     <g>
-      <circle cx={x} cy={y} r={r} fill="#C8965E" stroke="#A07040" strokeWidth="1.5" />
-      <circle cx={x} cy={y} r={r - 4} fill="#D4A870" opacity="0.35" />
-      <ellipse cx={x} cy={y} rx={r - 8} ry={r - 10} fill="none" stroke="#B07840" strokeWidth="0.5" opacity="0.4" />
+      <circle cx={x} cy={y} r={r} fill="#FDFDFB" stroke="#D0D8DD" strokeWidth="1.5" />
+      <circle cx={x} cy={y} r={r - 4} fill="#E6EAE6" opacity="0.35" />
+      <ellipse cx={x} cy={y} rx={r - 8} ry={r - 10} fill="none" stroke="#CDD6DA" strokeWidth="0.5" opacity="0.4" />
     </g>
   )
 })
@@ -153,8 +153,8 @@ export const RoundTable = React.memo(function RoundTable({ x, y, r = 22 }) {
 export const MeetingTable = React.memo(function MeetingTable({ x, y, w = 90, h = 50 }) {
   return (
     <g>
-      <rect x={x - w / 2} y={y - h / 2} width={w} height={h} rx={8} fill="#C8965E" stroke="#A07040" strokeWidth="1.5" />
-      <rect x={x - w / 2 + 6} y={y - h / 2 + 6} width={w - 12} height={h - 12} rx={5} fill="#D4A870" opacity="0.35" />
+      <rect x={x - w / 2} y={y - h / 2} width={w} height={h} rx={8} fill="#FDFDFB" stroke="#D0D8DD" strokeWidth="1.5" />
+      <rect x={x - w / 2 + 6} y={y - h / 2 + 6} width={w - 12} height={h - 12} rx={5} fill="#E6EAE6" opacity="0.35" />
       {/* Meeting chairs */}
       {[-1, 1].map((side) =>
         [-1, 0, 1].map((pos) => (
@@ -176,7 +176,7 @@ export const CoffeeMachine = React.memo(function CoffeeMachine({ x, y }) {
   useLocale()
   return (
     <g>
-      <rect x={x} y={y} width={18} height={26} rx={2} fill="#5A4A3E" />
+      <rect x={x} y={y} width={18} height={26} rx={2} fill="#9AA8AE" />
       <rect x={x + 2} y={y + 2} width={14} height={10} rx={1} fill="#222" />
       <rect x={x + 3} y={y + 3} width={12} height={8} rx={0.5} fill="#0a2a1a" />
       <text x={x + 9} y={y + 9} textAnchor="middle" fontSize="4" fill="#0f0" fontFamily="monospace">{t('office.cafe', 'CAFE')}</text>
@@ -192,7 +192,7 @@ export const CoffeeMachine = React.memo(function CoffeeMachine({ x, y }) {
 export const WaterCooler = React.memo(function WaterCooler({ x, y }) {
   return (
     <g>
-      <rect x={x - 5} y={y + 6} width={10} height={14} rx={2} fill="#D8CDBE" />
+      <rect x={x - 5} y={y + 6} width={10} height={14} rx={2} fill="#EDF0ED" />
       <ellipse cx={x} cy={y + 6} rx={5} ry={6} fill="#B0D4F0" stroke="#88B4D8" strokeWidth="0.8" />
       <ellipse cx={x} cy={y} rx={3} ry={4} fill="#D8EEFF" opacity="0.8" />
       <circle cx={x - 2} cy={y + 14} r={1.5} fill="#E24B4A" opacity="0.7" />

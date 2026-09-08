@@ -8,77 +8,11 @@
 //   Every function that produces a position runs through clampToFloor().
 // ═══════════════════════════════════════════════════════════════════════
 
-// ─── Floor zones (walkable areas matching thick-wall layout) ────────
-// These match the PixelOffice.jsx visual floor rects, inset from walls
-const FLOOR_ZONES = [
-  // Entrance + Hallway (above north wall)
-  { id: 'entrance',    x1: 15, y1: 15,  x2: 593, y2: 133 },
-  // Main Office (between north and south thick walls)
-  { id: 'mainOffice',  x1: 15, y1: 168, x2: 593, y2: 394 },
-  // Meeting Room (east of east thick wall)
-  { id: 'meetingRoom', x1: 628, y1: 15,  x2: 785, y2: 413 },
-  // Lounge (south-west, below south wall, left of divider)
-  { id: 'lounge',      x1: 15, y1: 424, x2: 451, y2: 545 },
-  // Research (south-east, below south wall, right of divider)
-  { id: 'research',    x1: 469, y1: 424, x2: 785, y2: 545 },
-  // Door passages (walkable corridors through thick walls)
-  { id: 'door-entrance', x1: 90,  y1: 133, x2: 138, y2: 168 },
-  { id: 'door-lounge',   x1: 215, y1: 394, x2: 266, y2: 424 },
-  { id: 'door-research', x1: 510, y1: 394, x2: 561, y2: 424 },
-  { id: 'door-meeting',  x1: 593, y1: 187, x2: 628, y2: 233 },
-]
-
-// ─── Obstacle rects (furniture characters must not stand ON) ────────
-const OBSTACLE_RECTS = [
-  // Desks (with margin so characters don't clip edges)
-  { x1: 105, y1: 215, x2: 175, y2: 260 },  // PM desk
-  { x1: 225, y1: 215, x2: 295, y2: 260 },  // Arch desk
-  { x1: 365, y1: 195, x2: 435, y2: 240 },  // QA desk
-  { x1: 485, y1: 195, x2: 555, y2: 240 },  // Res desk
-  { x1: 305, y1: 315, x2: 375, y2: 360 },  // Dev desk
-  { x1: 425, y1: 315, x2: 495, y2: 360 },  // Ops desk
-  { x1: 105, y1: 335, x2: 175, y2: 370 },  // Designer desk (design corner below PM)
-  // Meeting table
-  { x1: 650, y1: 128, x2: 760, y2: 195 },
-  // Whiteboard area
-  { x1: 525, y1: 278, x2: 590, y2: 342 },
-  // WC area (lounge)
-  { x1: 338, y1: 443, x2: 422, y2: 502 },
-  // Bookshelves in lounge
-  { x1: 278, y1: 438, x2: 412, y2: 458 },
-  // Coffee machine area
-  { x1: 15,  y1: 438, x2: 70,  y2: 465 },
-  // ─ Furniture-clipping completion (owner screenshot 2026-06-11: designer standing
-  //   INSIDE the gate booth). These rooms' furniture was never in this list, so
-  //   clampToFloor/isOnObstacle (placement + the pet's segmentWalkable) happily put
-  //   characters inside the graphics. NOT included on purpose: the phone booth (the
-  //   `phone` waypoint (755,480) stands INSIDE it by design — you enter a booth) and
-  //   the entrance barrier arms (3px-thin gate arms; making them solid would wall off
-  //   the entrance). Index-based zone slices above (0-9, 9-12) are unaffected because
-  //   these append at the END.
-  // Gate booth: LEFT 2/3 only — the right strip stays walkable as the gate agent's exit
-  // lane (home (100,80) → entrance door (115,125) crosses x≈103–111 between y 88–114; a
-  // full-width rect walls the agent behind its own counter). Sprites can still slightly
-  // clip the booth's right edge — accepted over trapping the gate.
-  { x1: 84,  y1: 88,  x2: 101, y2: 114 },
-  { x1: 472, y1: 434, x2: 528, y2: 460 },  // research bookshelf A (x2<535 keeps the research door side clear)
-  { x1: 627, y1: 434, x2: 688, y2: 460 },  // research bookshelf B
-  { x1: 702, y1: 434, x2: 763, y2: 460 },  // research bookshelf C
-  // (server rack deliberately NOT an obstacle: flush against the right wall, so
-  //  pushOutOfObstacle has no clean escape direction — and no waypoint places agents there)
-  { x1: 590, y1: 488, x2: 612, y2: 508 },  // printer (researchLib waypoint (620,490) stays clear right)
-]
-
-// Main-office obstacles for path line-crossing checks.
-const MAIN_OFFICE_OBSTACLES = OBSTACLE_RECTS.slice(0, 9) // 7 desks + meeting-side whiteboard
-const LOUNGE_OBSTACLES = OBSTACLE_RECTS.slice(9, 12) // WC, bookshelves, coffee machine
-// Research-zone furniture (3 bookshelves + printer), selected by GEOMETRY (inside the
-// research floor band) so the list survives OBSTACLE_RECTS reordering. First soak-gate CI
-// run (2026-06-10) caught designer resting INSIDE bookshelf B: research had no in-zone
-// obstacle routing — straight segments crossed the shelves and any mid-walk pause parked
-// the character inside the graphic (the agent version of the pet wall-phase bug).
-const RESEARCH_OBSTACLES = OBSTACLE_RECTS.filter(r => r.x1 >= 460 && r.y1 >= 424)
-const MEETING_TABLE = OBSTACLE_RECTS[7]
+import { FLOOR_ZONES, ROOM_RECTS, OBSTACLE_RECTS, WAYPOINTS, HOME_POSITIONS, MEETING_CHAIRS, DOOR_SIDES } from './officeLayout.js'
+export { WAYPOINTS, HOME_POSITIONS, MEETING_CHAIRS, DOOR_SIDES } from './officeLayout.js'
+const ZONE_OBSTACLES = Object.fromEntries(Object.entries(ROOM_RECTS).map(([id, z]) => [id,
+  OBSTACLE_RECTS.filter(r => r.x1 >= z.x1 && r.x2 <= z.x2 && r.y1 >= z.y1 && r.y2 <= z.y2),
+]))
 
 // ─── Walkability functions ──────────────────────────────────────────
 
@@ -114,11 +48,12 @@ export function clampToFloor(pos) {
   // Step 1: If not on any floor zone, snap to nearest one
   if (!isOnFloor(x, y)) {
     let bestDist = Infinity
+    const originalX = x, originalY = y
     for (const z of FLOOR_ZONES) {
       if (z.id.startsWith('door-')) continue // skip door passages for snapping
-      const cx = Math.max(z.x1 + 5, Math.min(z.x2 - 5, x))
-      const cy = Math.max(z.y1 + 5, Math.min(z.y2 - 5, y))
-      const d = Math.hypot(x - cx, y - cy)
+      const cx = Math.max(z.x1 + 5, Math.min(z.x2 - 5, originalX))
+      const cy = Math.max(z.y1 + 5, Math.min(z.y2 - 5, originalY))
+      const d = Math.hypot(originalX - cx, originalY - cy)
       if (d < bestDist) { bestDist = d; x = cx; y = cy }
     }
   }
@@ -134,43 +69,13 @@ export function clampToFloor(pos) {
   return { x, y }
 }
 
-// ─── Waypoints ──────────────────────────────────────────────────────
-export const WAYPOINTS = {
-  gate:         { x: 100, y: 80 },
-  // Desk positions (centers, for furniture rendering)
-  pmDesk:       { x: 140, y: 240 },
-  archDesk:     { x: 260, y: 240 },
-  devDesk:      { x: 340, y: 340 },
-  opsDesk:      { x: 460, y: 340 },
-  qaDesk:       { x: 400, y: 220 },
-  resDesk:      { x: 520, y: 220 },
-  // Destinations (all validated to be on walkable floor)
-  coffeeArea:   { x: 80,  y: 475 },
-  waterCooler:  { x: 130, y: 475 },
-  whiteboard:   { x: 560, y: 350 },  // below whiteboard, not on it
-  lounge:       { x: 180, y: 490 },
-  researchLib:  { x: 620, y: 490 },
-  phone:        { x: 755, y: 480 },
-  toilet:       { x: 380, y: 510 },  // below WC area
-  printer:      { x: 600, y: 510 },
-  window:       { x: 340, y: 100 },  // hallway near windows
-  snackArea:    { x: 30,  y: 520 },  // near vending machine
-}
-
-// Meeting chair positions AROUND the table (not on it)
-export const MEETING_CHAIRS = [
-  { x: 660, y: 205 }, { x: 700, y: 205 }, { x: 745, y: 205 },  // below table
-  { x: 660, y: 120 }, { x: 700, y: 120 }, { x: 745, y: 120 },  // above table
-  { x: 645, y: 160 }, { x: 765, y: 160 },                       // sides
-]
-
 // Overflow positions for dynamically spawned worktree agents (entrance hallway)
 // Agents from other sessions appear here — feels like a "visiting team"
 export const OVERFLOW_POSITIONS = [
   { x: 200, y: 80 },
   { x: 370, y: 80 },
   { x: 490, y: 80 },
-  { x: 100, y: 55 },
+  { x: 150, y: 55 },
   { x: 540, y: 60 },
   { x: 300, y: 50 },
 ]
@@ -183,19 +88,6 @@ export const OVERFLOW_SLOT_BY_XY = (() => {
   OVERFLOW_POSITIONS.forEach((p, i) => map.set(`${p.x},${p.y}`, i))
   return map
 })()
-
-// Home = chair position (behind desk, y+24), NOT desk center
-export const HOME_POSITIONS = {
-  pm:   { x: 140, y: 264 },
-  arch: { x: 260, y: 264 },
-  dev:  { x: 340, y: 364 },
-  ops:  { x: 460, y: 364 },
-  qa:   { x: 400, y: 244 },
-  res:  { x: 520, y: 244 },
-  gate: WAYPOINTS.gate,
-  designer: { x: 140, y: 384 },
-  planner: { x: 200, y: 274 }, worker: { x: 400, y: 304 }, checker: { x: 500, y: 254 },
-}
 
 // ─── Subagent helper-huddle placement ───────────────────────────────
 // Small downward fan around the parent's chair. HARD-CAP at 3 visible + a tight ±15px clamp,
@@ -229,52 +121,31 @@ export function resolveHelperLayout(parentRole, count, anchor = HOME_POSITIONS[p
 }
 
 // ─── Zones (for pathfinding — which room is a point in?) ────────────
-const ZONES = [
-  { id: 'entrance',    x1: 0,   y1: 0,   x2: 598, y2: 148 },
-  { id: 'meetingRoom', x1: 598, y1: 0,   x2: 800, y2: 420 },
-  { id: 'mainOffice',  x1: 0,   y1: 148, x2: 598, y2: 418 },
-  { id: 'lounge',      x1: 0,   y1: 418, x2: 460, y2: 560 },
-  { id: 'research',    x1: 460, y1: 418, x2: 800, y2: 560 },
-]
-
+const ZONES = Object.entries(ROOM_RECTS).map(([id, r]) => ({ id, ...r }))
 export function getZone(x, y) {
-  for (const z of ZONES) {
-    if (x >= z.x1 && x < z.x2 && y >= z.y1 && y < z.y2) return z.id
-  }
+  for (const z of ZONES) if (x >= z.x1 && x <= z.x2 && y >= z.y1 && y <= z.y2) return z.id
+  if (x >= 500 && y < 215) return x < 510 ? 'mainOffice' : 'entrance'
+  if (x >= 500 && y >= 235) return x < 510 ? 'mainOffice' : 'meetingRoom'
+  if (y >= 345 && x <= 500) return y < 355 ? 'mainOffice' : 'lounge'
   return 'mainOffice'
 }
-
-const DOORS = {
-  entranceToMain: { x: 115, y: 150 },
-  mainToMeeting:  { x: 610, y: 210 },
-  mainToLounge:   { x: 240, y: 410 },
-  mainToResearch: { x: 535, y: 410 },
-}
-
+const DOORS = Object.fromEntries(Object.entries(DOOR_SIDES).map(([id, sides]) => {
+  const [a, b] = Object.values(sides)
+  return [id, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }]
+}))
 const ROUTE = {
-  entrance:    { mainOffice: 'entranceToMain', lounge: 'entranceToMain', meetingRoom: 'entranceToMain', research: 'entranceToMain' },
-  mainOffice:  { entrance: 'entranceToMain', lounge: 'mainToLounge', meetingRoom: 'mainToMeeting', research: 'mainToResearch' },
-  meetingRoom: { mainOffice: 'mainToMeeting', entrance: 'mainToMeeting', lounge: 'mainToMeeting', research: 'mainToMeeting' },
-  lounge:      { mainOffice: 'mainToLounge', entrance: 'mainToLounge', meetingRoom: 'mainToLounge', research: 'mainToLounge' },
-  research:    { mainOffice: 'mainToResearch', entrance: 'mainToResearch', lounge: 'mainToResearch', meetingRoom: 'mainToResearch' },
+ entrance: { mainOffice:'entranceToMain', lounge:'entranceToMain', meetingRoom:'entranceToMain' },
+ mainOffice: { entrance:'entranceToMain', lounge:'mainToLounge', meetingRoom:'mainToMeeting' },
+ meetingRoom: { mainOffice:'mainToMeeting', entrance:'mainToMeeting', lounge:'mainToMeeting' },
+ lounge: { mainOffice:'mainToLounge', entrance:'mainToLounge', meetingRoom:'mainToLounge' },
 }
-
-// ─── Corridor waypoints (open aisles in mainOffice) ─────────────────
-const CORRIDORS = [
-  { x: 80,  y: 290 },  // left aisle
-  { x: 300, y: 180 },  // top aisle center
-  { x: 300, y: 290 },  // mid aisle center (between desk rows)
-  { x: 505, y: 290 },  // right aisle — kept left of the whiteboard obstacle (x≥525)
-  { x: 300, y: 385 },  // bottom aisle (below dev/ops desks)
-]
-
-export const MAIN_ROUTE_NODES = [
-  ...CORRIDORS,
-  { x: 80,  y: 180 },
-  { x: 550, y: 180 },
-  { x: 80,  y: 385 },
-  { x: 550, y: 385 },
-]
+// Room-local corners feed the existing visibility graph; no per-frame rerouting.
+const ZONE_ROUTE_NODES = Object.fromEntries(Object.entries(ROOM_RECTS).map(([id,z]) => [id,
+ ZONE_OBSTACLES[id].flatMap(r => [
+ {x:r.x1-10,y:r.y1-10},{x:r.x2+10,y:r.y1-10},{x:r.x1-10,y:r.y2+10},{x:r.x2+10,y:r.y2+10},
+ ]).filter(p => p.x>=z.x1+5 && p.x<=z.x2-5 && p.y>=z.y1+5 && p.y<=z.y2-5 && !isOnObstacle(p.x,p.y)),
+]))
+export const MAIN_ROUTE_NODES = ZONE_ROUTE_NODES.mainOffice
 
 // ─── Path calculation ───────────────────────────────────────────────
 
@@ -306,37 +177,8 @@ export function lineHitsRect(ax, ay, bx, by, r) {
   return true
 }
 
-function lineHitsAnyDesk(ax, ay, bx, by) {
-  return MAIN_OFFICE_OBSTACLES.some(r => lineHitsRect(ax, ay, bx, by, r))
-}
-
 function lineHitsAnyRect(ax, ay, bx, by, rects) {
   return rects.some(r => lineHitsRect(ax, ay, bx, by, r))
-}
-
-function findBestCorridor(from, to) {
-  let best = null, bestDist = Infinity
-  for (const c of CORRIDORS) {
-    if (lineHitsAnyDesk(from.x, from.y, c.x, c.y)) continue
-    if (lineHitsAnyDesk(c.x, c.y, to.x, to.y)) continue
-    const d = Math.hypot(from.x - c.x, from.y - c.y) + Math.hypot(c.x - to.x, c.y - to.y)
-    if (d < bestDist) { bestDist = d; best = c }
-  }
-  if (!best) return null
-  // Anti-stack jitter, VALIDATED: the corridor point was chosen because BOTH its segments
-  // clear the desks — an unvalidated jitter (the old code) could push it just enough for a
-  // segment to clip a desk/whiteboard corner (fuzz-observed: "crosses opsDesk", "crosses
-  // whiteboard" — the routeWithinMainOffice fallback's known rare hole). Accept a jittered
-  // candidate only when it keeps the floor, avoids furniture, and BOTH segments stay
-  // clear; otherwise fall back to the exact validated point (never worse than validated).
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const cand = { x: best.x + (Math.random() - 0.5) * CORRIDOR_JITTER, y: best.y + (Math.random() - 0.5) * 12 }
-    if (!isOnFloor(cand.x, cand.y) || isOnObstacle(cand.x, cand.y)) continue
-    if (lineHitsAnyDesk(from.x, from.y, cand.x, cand.y)) continue
-    if (lineHitsAnyDesk(cand.x, cand.y, to.x, to.y)) continue
-    return cand
-  }
-  return { x: best.x, y: best.y }
 }
 
 // Wedge-escape candidates (issue #27): an endpoint parked in the 1–7px band off a
@@ -369,7 +211,10 @@ function wedgeEscapeNodes(p, obstacles) {
 }
 
 function findSafePolyline(from, to, nodes, obstacles) {
-  const pts = [from, to, ...nodes, ...wedgeEscapeNodes(from, obstacles), ...wedgeEscapeNodes(to, obstacles)]
+  const room = ROOM_RECTS[getZone(from.x, from.y)]
+  const inside = p => p.x >= room.x1 + 5 && p.x <= room.x2 - 5 && p.y >= room.y1 + 5 && p.y <= room.y2 - 5
+  const candidates = [...nodes, ...wedgeEscapeNodes(from, obstacles), ...wedgeEscapeNodes(to, obstacles)].filter(inside)
+  const pts = [from, to, ...candidates]
   const n = pts.length
   const dist = Array(n).fill(Infinity)
   const prev = Array(n).fill(-1)
@@ -422,7 +267,7 @@ function findSafePolyline(from, to, nodes, obstacles) {
         x: node.x + (Math.random() - 0.5) * CORRIDOR_JITTER,
         y: node.y + (Math.random() - 0.5) * 12,
       }
-      if (!isOnFloor(cand.x, cand.y) || isOnObstacle(cand.x, cand.y)) continue
+      if (!inside(cand) || isOnObstacle(cand.x, cand.y)) continue
       if (lineHitsAnyRect(prevPt.x, prevPt.y, cand.x, cand.y, obstacles)) continue
       if (nextPt && lineHitsAnyRect(cand.x, cand.y, nextPt.x, nextPt.y, obstacles)) continue
       placed = cand
@@ -430,25 +275,6 @@ function findSafePolyline(from, to, nodes, obstacles) {
     out.push(placed || { x: node.x, y: node.y })
   }
   return out
-}
-
-export const DOOR_SIDES = {
-  entranceToMain: {
-    entrance:   { x: 115, y: 125 },
-    mainOffice: { x: 115, y: 176 },
-  },
-  mainToMeeting: {
-    mainOffice:  { x: 585, y: 210 },
-    meetingRoom: { x: 636, y: 210 },
-  },
-  mainToLounge: {
-    mainOffice: { x: 240, y: 386 },
-    lounge:     { x: 240, y: 432 },
-  },
-  mainToResearch: {
-    mainOffice: { x: 535, y: 386 },
-    research:   { x: 535, y: 432 },
-  },
 }
 
 function pushPoint(path, pt) {
@@ -486,117 +312,7 @@ function jitterDoorCrossing(fromSide, toSide) {
   return [fromSide, toSide]
 }
 
-function routeWithinMeetingRoom(from, to) {
-  if (!lineHitsRect(from.x, from.y, to.x, to.y, MEETING_TABLE)) return [to]
-
-  const candidates = [
-    [{ x: 640, y: from.y }, { x: 640, y: to.y }],
-    [{ x: 770, y: from.y }, { x: 770, y: to.y }],
-    [{ x: from.x, y: 120 }, { x: to.x, y: 120 }],
-    [{ x: from.x, y: 205 }, { x: to.x, y: 205 }],
-  ]
-  let best = null, bestDist = Infinity
-  for (const candidate of candidates) {
-    const pts = [...candidate, to]
-    let cursor = from, ok = true, dist = 0
-    for (const pt of pts) {
-      if (lineHitsRect(cursor.x, cursor.y, pt.x, pt.y, MEETING_TABLE)) { ok = false; break }
-      dist += Math.hypot(cursor.x - pt.x, cursor.y - pt.y)
-      cursor = pt
-    }
-    if (ok && dist < bestDist) { best = pts; bestDist = dist }
-  }
-  return best || [{ x: 640, y: from.y }, { x: 640, y: to.y }, to]
-}
-
-// Lounge route nodes (issue #27): the single south lane (y=520) descended straight
-// columns into wedged targets — a point 1–7px ABOVE the WC/shelves/coffee row was
-// approached vertically THROUGH the rect. Two clear lanes instead: the original south
-// lane (all lounge furniture ends by y≤502) and the north strip y=430 (all lounge
-// furniture starts at y≥438), routed via the same fully edge-validated Dijkstra as the
-// main office; wedge-escape augmentation connects sub-margin endpoints. The pre-fix
-// lane path is kept verbatim as the degraded fallback, so no input routes worse.
-const LOUNGE_ROUTE_NODES = [
-  { x: 40, y: 520 }, { x: 120, y: 520 }, { x: 200, y: 520 }, { x: 240, y: 520 }, { x: 300, y: 520 }, { x: 430, y: 520 },
-  { x: 90, y: 430 }, { x: 200, y: 430 }, { x: 240, y: 430 }, { x: 300, y: 430 }, { x: 430, y: 430 },
-]
-
-function routeWithinLounge(from, to) {
-  if (!lineHitsAnyRect(from.x, from.y, to.x, to.y, LOUNGE_OBSTACLES)) return [to]
-  // Graph routing ONLY when both endpoints sit inside the lounge's convex floor rect:
-  // findSafePolyline validates furniture rects, never floor membership of segment
-  // interiors — that is safe inside one convex floor rect, but an endpoint in the door
-  // strip (getZone says lounge from y≥418 while the floor there is only the passage
-  // x 215–266) admits a diagonal through the south wall (fresh-review HIGH, measured:
-  // 104/720 door-strip pairs went off-floor). Door-strip endpoints keep the pre-fix
-  // lane path verbatim, so no input routes worse than before this change.
-  const inLoungeRect = (p) => p.x >= 15 && p.x <= 451 && p.y >= 424 && p.y <= 545
-  if (inLoungeRect(from) && inLoungeRect(to)) {
-    const graphPath = findSafePolyline(from, to, LOUNGE_ROUTE_NODES, LOUNGE_OBSTACLES)
-    if (graphPath) return graphPath
-  }
-  const y = 520
-  const pts = [
-    clampToFloor({ x: from.x, y }),
-    clampToFloor({ x: to.x, y }),
-    to,
-  ]
-  return pts
-}
-
-function routeWithinResearch(from, to) {
-  if (!lineHitsAnyRect(from.x, from.y, to.x, to.y, RESEARCH_OBSTACLES)) return [to]
-  // Clear horizontal lane between the bookshelves' bottom (y=460) and the printer's top
-  // (y=488) — mirrors routeWithinLounge's corridor approach. The DESCENT column out of
-  // the lane is obstacle-aware: targets adjacent to furniture (the printer stand spot sits
-  // 2px below the printer body) would otherwise be approached straight through the rect —
-  // shift the column sideways and finish with a horizontal approach at the target's y.
-  const y = 472
-  // Column picker: a vertical column at `cand` between the lane and `targetY` must be
-  // furniture-free AND stay on the research floor — a column shifted past the zone's west
-  // edge (x<469) would be yanked across the office by clampToFloor's zone snapping.
-  const clearColumn = (baseX, targetY) => {
-    for (const dx of [0, -28, 28, -45, 45]) {
-      const cand = baseX + dx
-      if (!isOnFloor(cand, y) || !isOnFloor(cand, targetY)) continue
-      if (getZone(cand, y) !== 'research') continue
-      if (!lineHitsAnyRect(cand, y, cand, targetY, RESEARCH_OBSTACLES)) return cand
-    }
-    return baseX // degraded: direct column (pre-fix behavior)
-  }
-  const pts = []
-  const upX = clearColumn(from.x, from.y)
-  if (upX !== from.x) pts.push(clampToFloor({ x: upX, y: from.y }))
-  pts.push(clampToFloor({ x: upX, y }))
-  const dropX = clearColumn(to.x, to.y)
-  if (dropX !== upX) pts.push(clampToFloor({ x: dropX, y }))
-  if (dropX !== to.x) pts.push(clampToFloor({ x: dropX, y: to.y }))
-  pts.push(to)
-  return pts
-}
-
-function routeWithinMainOffice(from, to) {
-  if (!lineHitsAnyDesk(from.x, from.y, to.x, to.y)) return [to]
-  const graphPath = findSafePolyline(from, to, MAIN_ROUTE_NODES, MAIN_OFFICE_OBSTACLES)
-  if (graphPath) return graphPath
-  const corridor = findBestCorridor(from, to)
-  if (corridor) return [corridor, to]
-  // Last resort — findSafePolyline AND every single-corridor relay failed, meaning the
-  // target is wedged against furniture with no clean route by construction (see the fuzz
-  // test's MARGIN rationale). Relay via the center corridor as before — but as a COPY
-  // (pushing the shared CORRIDORS[2] object into paths was latent aliasing).
-  const mid = CORRIDORS[2]
-  return [{ x: mid.x, y: mid.y }, to]
-}
-
-// Convex floor rect per zone — matches FLOOR_ZONES' room rects (not the door passages).
-const ZONE_FLOOR_RECTS = {
-  entrance:    { x1: 15,  y1: 15,  x2: 593, y2: 133 },
-  mainOffice:  { x1: 15,  y1: 168, x2: 593, y2: 394 },
-  meetingRoom: { x1: 628, y1: 15,  x2: 785, y2: 413 },
-  lounge:      { x1: 15,  y1: 424, x2: 451, y2: 545 },
-  research:    { x1: 469, y1: 424, x2: 785, y2: 545 },
-}
+const ZONE_FLOOR_RECTS = Object.fromEntries(FLOOR_ZONES.filter(z => !z.id.startsWith('door-')).map(z => [z.id,z]))
 
 // Zone-mouth stub (issue-#27 review Finding 2): every zone router validates segments
 // against furniture rects only — floor membership of segment INTERIORS is implied by
@@ -621,11 +337,9 @@ function zoneMouth(p, zone) {
 
 function routeWithinZone(from, to, zone) {
   const inner = (a, b) => {
-    if (zone === 'mainOffice') return routeWithinMainOffice(a, b)
-    if (zone === 'meetingRoom') return routeWithinMeetingRoom(a, b)
-    if (zone === 'lounge') return routeWithinLounge(a, b)
-    if (zone === 'research') return routeWithinResearch(a, b)
-    return [b]
+    const obstacles = ZONE_OBSTACLES[zone] || []
+    if (!lineHitsAnyRect(a.x, a.y, b.x, b.y, obstacles)) return [b]
+    return findSafePolyline(a, b, ZONE_ROUTE_NODES[zone] || [], obstacles) || [a]
   }
   const fromMouth = zoneMouth(from, zone)
   const toMouth = zoneMouth(to, zone)

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useOfficeStore } from '../systems/store.js'
 import { clampToFloor, isOnFloor, isOnObstacle } from '../systems/movementSystem.js'
+import { ROOM_RECTS } from '../systems/officeLayout.js'
 import { derivePetState, petIsMobile, resolvePetMode, petReadabilityScale, petMotionGrammar, runTarget, modeEmote, pickWanderTarget, countAttentionBlockers, firstAttentionBlockerId, PET_MODES } from '../systems/petState.js'
 import PetSprite from './petSprites.jsx'
 import { useTransientFlag } from './useTransientFlag.js'
@@ -20,12 +21,12 @@ const START = clampToFloor({ x: 120, y: 512 })
 // sprite's local origin (0,0) = floor contact, so feet stay planted.
 const PET_BASE_SCALE = 1.7
 
-// Sample a floor point in the lower office band (walkway/lounge) so the pet stays low and out of the
-// desk rows. Band: y 400–525 (so the larger pet can't reach up into desks) and x ≥ 80 (so the now-
-// clickable pet doesn't sit over the lower-left coffee-machine tea-break click target at ~x20 y445).
+// Keep ambient hops in the lounge; segment validation below still excludes furniture.
+const PET_BOUNDS = { x1: ROOM_RECTS.lounge.x1 + 70, x2: ROOM_RECTS.lounge.x2 - 25,
+  y1: ROOM_RECTS.lounge.y1 + 65, y2: ROOM_RECTS.lounge.y2 - 25 }
 function randomFloorTarget() {
-  const x = 80 + Math.random() * 670
-  const y = 400 + Math.random() * 125
+  const x = PET_BOUNDS.x1 + Math.random() * (PET_BOUNDS.x2 - PET_BOUNDS.x1)
+  const y = PET_BOUNDS.y1 + Math.random() * (PET_BOUNDS.y2 - PET_BOUNDS.y1)
   return clampToFloor({ x, y })
 }
 
@@ -39,8 +40,8 @@ const petWalkable = (x, y) => isOnFloor(x, y) && !isOnObstacle(x, y)
 // consecutive empty ticks, sample SHORT hops around the current spot instead — locally open
 // space accepts them readily, and they go through the SAME segment gate (never phasing).
 function nearTarget(from) {
-  const x = Math.min(750, Math.max(80, from.x + (Math.random() - 0.5) * 120))
-  const y = Math.min(525, Math.max(400, from.y + (Math.random() - 0.5) * 80))
+  const x = Math.min(PET_BOUNDS.x2, Math.max(PET_BOUNDS.x1, from.x + (Math.random() - 0.5) * 120))
+  const y = Math.min(PET_BOUNDS.y2, Math.max(PET_BOUNDS.y1, from.y + (Math.random() - 0.5) * 80))
   return clampToFloor({ x, y })
 }
 

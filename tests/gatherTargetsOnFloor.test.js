@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { useOfficeStore } from '../src/systems/store.js'
 import { isOnFloor, isOnObstacle } from '../src/systems/movementSystem.js'
+import { STANDUP_SPOTS } from '../src/systems/officeLayout.js'
 
 // Regression guard (the gap that let the standup-spread bug ship green): event gather targets must
 // never place an agent in a wall or on furniture. Two layers:
@@ -12,9 +13,9 @@ afterEach(() => { useOfficeStore.getState().clearAgentGroupEvent('dev') })
 describe('event gather targets stay on the walkable floor', () => {
   it('the store CLAMPS an off-floor groupTarget (agent can never be placed in a wall/furniture)', () => {
     const bad = [
-      { x: 612, y: 360 }, // the dead wall gap between mainOffice (x≤593) and meetingRoom (x≥628)
+      { x: 510, y: 360 }, // solid divider between main office and meeting room
       { x: 999, y: 999 }, // far off-map
-      { x: 545, y: 320 }, // ON the whiteboard obstacle (x525-590, y278-342)
+      { x: 750, y: 260 }, // whiteboard obstacle
     ]
     for (const gt of bad) {
       useOfficeStore.getState().setMultipleAgentGroupEvents([
@@ -27,11 +28,7 @@ describe('event gather targets stay on the walkable floor', () => {
   })
 
   it('the standup gather spots are all on-floor + clear of furniture (incl. ±4 jitter corners)', () => {
-    // Mirror of officeLife.js standup whiteboardSpots — fails loudly if a future edit drifts one off-floor.
-    const spots = [
-      { x: 500, y: 350 }, { x: 525, y: 348 }, { x: 550, y: 350 }, { x: 578, y: 354 },
-      { x: 445, y: 382 }, { x: 490, y: 384 }, { x: 535, y: 382 }, { x: 578, y: 380 },
-    ]
+    const spots = STANDUP_SPOTS
     for (const s of spots) {
       for (const dx of [-4, 4]) for (const dy of [-4, 4]) {
         expect(isOnFloor(s.x + dx, s.y + dy), `standup ${JSON.stringify(s)}+(${dx},${dy}) off-floor`).toBe(true)

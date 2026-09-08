@@ -21,7 +21,7 @@ import { isOnObstacle, isOnFloor } from '../src/systems/movementSystem.js'
 // `!isOnFloor || isOnObstacle`, so "off-floor rest" includes standing inside furniture. Asserting
 // only `isOnFloor` here would pass against the broken code and prove nothing.
 describe('react-in-place group-event participants come to rest somewhere valid', () => {
-  const OBSTACLE_POS = { x: 89, y: 103 }   // the exact coordinate the soak caught
+  const OBSTACLE_POS = { x: 70, y: 60 }   // reception furniture in the current layout
 
   beforeEach(() => {
     expect(isOnObstacle(OBSTACLE_POS.x, OBSTACLE_POS.y), 'fixture must sit inside furniture').toBe(true)
@@ -96,7 +96,7 @@ describe('react-in-place group-event participants come to rest somewhere valid',
   it('an agent frozen somewhere already valid is left exactly where it stood', () => {
     const actor = Object.keys(useOfficeStore.getState().agents)[0]
     scatterOthers(actor)
-    const VALID = { x: 115, y: 175 }   // ops' own start point from the same forensic tail
+    const VALID = { x: 70, y: 90 }   // ops' own start point from the same forensic tail
     expect(isOnObstacle(VALID.x, VALID.y)).toBe(false)
     useOfficeStore.setState((st) => ({
       agents: { ...st.agents, [actor]: { ...st.agents[actor], position: { ...VALID }, targetPosition: { ...VALID }, isMoving: true, inGroupEvent: false } },

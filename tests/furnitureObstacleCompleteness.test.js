@@ -53,8 +53,8 @@ describe('every standing destination is on-floor and furniture-free', () => {
 })
 
 describe('the reported clipping cases are actually fixed', () => {
-  it('a point inside the gate booth is pushed OUT by clampToFloor', () => {
-    const inside = { x: 100, y: 100 }              // booth body center
+  it('a point inside the executive desk is pushed OUT by clampToFloor', () => {
+    const inside = { x: 650, y: 110 }              // booth body center
     expect(isOnObstacle(inside.x, inside.y)).toBe(true)
     const out = clampToFloor(inside)
     expect(isOnObstacle(out.x, out.y)).toBe(false)
@@ -62,7 +62,7 @@ describe('the reported clipping cases are actually fixed', () => {
 
   it('points inside the research bookshelves / printer are obstacles now', () => {
     // (server rack intentionally excluded: flush against the wall → no clean push-out)
-    for (const p of [{ x: 500, y: 445 }, { x: 650, y: 445 }, { x: 730, y: 445 }, { x: 600, y: 495 }]) {
+    for (const p of [{ x: 400, y: 400 }, { x: 435, y: 400 }, { x: 460, y: 400 }, { x: 350, y: 400 }]) {
       expect(isOnObstacle(p.x, p.y), `(${p.x},${p.y}) should be furniture`).toBe(true)
       const out = clampToFloor(p)
       expect(isOnObstacle(out.x, out.y), `clampToFloor escape for (${p.x},${p.y})`).toBe(false)

@@ -82,7 +82,7 @@ describe('calculateJourney — physical door identity', () => {
   it('reports both physical doors in traversal order for a multi-room journey', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
     const journey = calculateJourney({ x: 180, y: 490 }, { x: 620, y: 490 })
-    expect(journey.doorIds).toEqual(['mainToLounge', 'mainToResearch'])
+    expect(journey.doorIds).toEqual(['mainToLounge', 'mainToMeeting'])
     vi.restoreAllMocks()
   })
 })

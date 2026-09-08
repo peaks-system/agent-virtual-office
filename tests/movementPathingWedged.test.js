@@ -1,3 +1,4 @@
+import { FLOOR_ZONES, OBSTACLE_RECTS, ROOMS } from './whiteLayoutFixture.js'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { calculatePath } from '../src/systems/movementSystem.js'
 
@@ -24,49 +25,18 @@ const realRandom = Math.random
 beforeAll(() => { Math.random = mulberry32(0x27aabbcc) })
 afterAll(() => { Math.random = realRandom })
 
-const ROOMS = [
-  { id: 'entrance',    x1: 15,  y1: 15,  x2: 593, y2: 133 },
-  { id: 'mainOffice',  x1: 15,  y1: 168, x2: 593, y2: 394 },
-  { id: 'meetingRoom', x1: 628, y1: 15,  x2: 785, y2: 413 },
-  { id: 'lounge',      x1: 15,  y1: 424, x2: 451, y2: 545 },
-  { id: 'research',    x1: 469, y1: 424, x2: 785, y2: 545 },
-]
-const FLOOR_ZONES = [
-  ...ROOMS,
-  { id: 'door-entrance', x1: 90,  y1: 133, x2: 138, y2: 168 },
-  { id: 'door-lounge',   x1: 215, y1: 394, x2: 266, y2: 424 },
-  { id: 'door-research', x1: 510, y1: 394, x2: 561, y2: 424 },
-  { id: 'door-meeting',  x1: 593, y1: 187, x2: 628, y2: 233 },
-]
-
 // Independent oracle (re-declared, not imported). Superset of the fuzz list: adds the
 // research furniture. The entrance gate booth is deliberately ABSENT — sprites clipping
 // its right edge is an accepted trade-off (see movementSystem OBSTACLE_RECTS comment:
 // a full-width rect would wall the gate behind its own counter).
-const OBSTACLE_RECTS = [
-  { name: 'pmDesk',       x1: 105, y1: 215, x2: 175, y2: 260 },
-  { name: 'archDesk',     x1: 225, y1: 215, x2: 295, y2: 260 },
-  { name: 'qaDesk',       x1: 365, y1: 195, x2: 435, y2: 240 },
-  { name: 'resDesk',      x1: 485, y1: 195, x2: 555, y2: 240 },
-  { name: 'devDesk',      x1: 305, y1: 315, x2: 375, y2: 360 },
-  { name: 'opsDesk',      x1: 425, y1: 315, x2: 495, y2: 360 },
-  { name: 'designerDesk', x1: 105, y1: 335, x2: 175, y2: 370 },
-  { name: 'meetingTable', x1: 650, y1: 128, x2: 760, y2: 195 },
-  { name: 'whiteboard',   x1: 525, y1: 278, x2: 590, y2: 342 },
-  { name: 'wc',           x1: 338, y1: 443, x2: 422, y2: 502 },
-  { name: 'bookshelves',  x1: 278, y1: 438, x2: 412, y2: 458 },
-  { name: 'coffee',       x1: 15,  y1: 438, x2: 70,  y2: 465 },
-  { name: 'resShelfA',    x1: 472, y1: 434, x2: 528, y2: 460 },
-  { name: 'resShelfB',    x1: 627, y1: 434, x2: 688, y2: 460 },
-  { name: 'resShelfC',    x1: 702, y1: 434, x2: 763, y2: 460 },
-  { name: 'printer',      x1: 590, y1: 488, x2: 612, y2: 508 },
-]
 
 const onFloor = (p) => FLOOR_ZONES.some((z) => p.x >= z.x1 && p.x <= z.x2 && p.y >= z.y1 && p.y <= z.y2)
 const obstacleAt = (p) => OBSTACLE_RECTS.find((r) => p.x >= r.x1 && p.x <= r.x2 && p.y >= r.y1 && p.y <= r.y2)
 
 function firstViolation(from, to, step = 2) {
   const path = calculatePath(from, to)
+  const last = path[path.length - 1]
+  if (!last || last.x !== to.x || last.y !== to.y) return { kind: 'unreachable destination', at: last || from, path }
   let cursor = from
   for (const waypoint of path) {
     const dist = Math.hypot(waypoint.x - cursor.x, waypoint.y - cursor.y)
@@ -116,9 +86,9 @@ const CLEAN_ORIGINS = [
 // wall for exactly these inputs (measured 104/720 pairs); the gate falls back to the
 // pre-fix lane path, which is fully on-floor.
 describe('door-strip endpoints keep an on-floor route (lounge graph gate)', () => {
-  it('the reviewed counterexample (218,418.5)→(430,470) never leaves the floor', () => {
+  it('the reviewed counterexample (228,358.5)→(430,470) never leaves the floor', () => {
     for (let i = 0; i < 25; i++) {
-      const v = firstViolation({ x: 218, y: 418.5 }, { x: 430, y: 470 })
+      const v = firstViolation({ x: 228, y: 358.5 }, { x: 430, y: 470 })
       expect(v, v && `${v.kind} at (${v.at.x.toFixed(1)},${v.at.y.toFixed(1)}) via ${JSON.stringify(v.path)}`).toBeNull()
     }
   })
@@ -129,9 +99,9 @@ describe('door-strip endpoints keep an on-floor route (lounge graph gate)', () =
     // stub in routeWithinZone now walks the passage axis onto the convex floor rect
     // before any straight-line shortcut is taken.
     const failures = []
-    for (const sx of [216, 230, 240, 255, 265]) {
-      for (const sy of [410, 416, 420, 423]) {
-        for (const t of [{ x: 430, y: 470 }, { x: 300, y: 535 }, { x: 40, y: 480 }]) {
+    for (const sx of [226, 235, 250, 265, 279]) {
+      for (const sy of [345, 351, 359, 368]) {
+        for (const t of [{ x: 430, y: 470 }, { x: 300, y: 535 }, { x: 80, y: 480 }]) {
           for (const [from, to] of [[{ x: sx, y: sy }, t], [t, { x: sx, y: sy }]]) {
             const v = firstViolation(from, to)
             if (v) failures.push(`(${from.x},${from.y})->(${to.x},${to.y}) ${v.kind} at (${v.at.x.toFixed(1)},${v.at.y.toFixed(1)})`)
@@ -147,16 +117,12 @@ describe('door-strip endpoints keep an on-floor route (lounge graph gate)', () =
     // One on-passage-floor endpoint per zone strip (getZone classifies it into the zone,
     // but it sits outside the zone's convex floor rect), paired with in-room targets.
     const cases = [
-      // mainOffice strips: below-floor band y 394–418 (lounge + research passages), east band x 593–598 (meeting passage)
-      [{ x: 240, y: 400 }, { x: 520, y: 310 }],
-      [{ x: 537, y: 400 }, { x: 60, y: 300 }],
-      [{ x: 595, y: 210 }, { x: 60, y: 300 }],
-      // entrance strip y 133–148 (entrance passage)
-      [{ x: 115, y: 140 }, { x: 400, y: 60 }],
-      // meetingRoom strip x 598–628 (meeting passage)
-      [{ x: 610, y: 210 }, { x: 700, y: 350 }],
-      // research strip y 418–424 (research passage)
-      [{ x: 537, y: 420 }, { x: 740, y: 520 }],
+      [{ x: 252, y: 350 }, { x: 60, y: 300 }],
+      [{ x: 505, y: 127 }, { x: 60, y: 300 }],
+      [{ x: 505, y: 292 }, { x: 60, y: 300 }],
+      [{ x: 515, y: 127 }, { x: 700, y: 160 }],
+      [{ x: 515, y: 292 }, { x: 700, y: 300 }],
+      [{ x: 252, y: 360 }, { x: 440, y: 520 }],
     ]
     const failures = []
     for (const [a, b] of cases) {

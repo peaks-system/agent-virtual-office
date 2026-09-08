@@ -1,3 +1,4 @@
+import { FLOOR_ZONES as FLOOR_ZONES_MIRROR, OBSTACLE_RECTS as OBSTACLE_RECTS_MIRROR } from './whiteLayoutFixture.js'
 import { describe, it, expect } from 'vitest'
 import {
   calcFacing,
@@ -100,8 +101,8 @@ function assertPathInvariants(path, to) {
 
 describe('calculatePath — structural invariants', () => {
   it('same zone (entrance) with clear line → direct [to] path', () => {
-    const from = { x: 50,  y: 50 }
-    const to   = { x: 180, y: 80 }
+    const from = { x: 550, y: 50 }
+    const to   = { x: 730, y: 50 }
     const path = calculatePath(from, to)
     assertPathInvariants(path, to)
     expect(path).toHaveLength(1)
@@ -110,8 +111,8 @@ describe('calculatePath — structural invariants', () => {
   it('same zone mainOffice with desk crossing → corridor detour (length = 2)', () => {
     // Vertical line through PM desk (x1:105,y1:215,x2:175,y2:260)
     // and Designer desk (x1:105,y1:335,x2:175,y2:370) — always triggers corridor routing
-    const from = { x: 140, y: 180 }
-    const to   = { x: 140, y: 380 }
+    const from = { x: 130, y: 130 }
+    const to   = { x: 130, y: 230 }
     for (let i = 0; i < 10; i++) {
       const path = calculatePath(from, to)
       assertPathInvariants(path, to)
@@ -159,10 +160,10 @@ describe('getTargetForBehavior', () => {
     for (let i = 0; i < 20; i++) {
       const pos = getTargetForBehavior('dev', 'meeting', {})
       expect(pos).not.toBeNull()
-      expect(pos.x).toBeGreaterThanOrEqual(620)
+      expect(pos.x).toBeGreaterThanOrEqual(590)
       expect(pos.x).toBeLessThanOrEqual(790)
-      expect(pos.y).toBeGreaterThanOrEqual(100)
-      expect(pos.y).toBeLessThanOrEqual(230)
+      expect(pos.y).toBeGreaterThanOrEqual(340)
+      expect(pos.y).toBeLessThanOrEqual(435)
     }
   })
 
@@ -252,25 +253,25 @@ describe('calcFacing — tie and threshold edge cases', () => {
 // ─── calculatePath — additional zone coverage ────────────────────────
 describe('calculatePath — additional zone coverage', () => {
   it('same zone lounge → lounge (no desk check) → direct [to]', () => {
-    const from = { x: 100, y: 470 }
-    const to   = { x: 380, y: 520 }
+    const from = { x: 100, y: 535 }
+    const to   = { x: 380, y: 535 }
     const path = calculatePath(from, to)
     assertPathInvariants(path, to)
     expect(path).toHaveLength(1)
   })
 
   it('same zone meetingRoom crossing the table → detours around table', () => {
-    const from = { x: 650, y: 100 }
-    const to   = { x: 750, y: 380 }
+    const from = { x: 590, y: 385 }
+    const to   = { x: 735, y: 385 }
     const path = calculatePath(from, to)
     assertPathInvariants(path, to)
     expect(path.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('same zone mainOffice corridor-to-corridor crossing whiteboard → detours', () => {
+  it('same zone mainOffice corridor-to-corridor crossing desk → detours', () => {
     // y=290 sits between desk rows but crosses the whiteboard obstacle on the right.
-    const from = { x: 300, y: 290 }
-    const to   = { x: 550, y: 290 }
+    const from = { x: 340, y: 170 }
+    const to   = { x: 450, y: 170 }
     const path = calculatePath(from, to)
     assertPathInvariants(path, to)
     expect(path.length).toBeGreaterThanOrEqual(2)
@@ -293,7 +294,7 @@ describe('calculatePath — additional zone coverage', () => {
     }
   })
 
-  it('cross-zone mainOffice → research routes through door', () => {
+  it('cross-zone mainOffice → meetingRoom routes through door', () => {
     const from = { x: 300, y: 280 }
     const to   = { x: 620, y: 490 }
     for (let i = 0; i < 10; i++) {
@@ -303,7 +304,7 @@ describe('calculatePath — additional zone coverage', () => {
     }
   })
 
-  it('multi-zone research → meetingRoom has ≥ 3 waypoints', () => {
+  it('multi-zone meetingRoom → president has ≥ 3 waypoints', () => {
     const from = { x: 620, y: 490 } // research
     const to   = { x: 700, y: 200 } // meetingRoom
     for (let i = 0; i < 10; i++) {
@@ -316,11 +317,10 @@ describe('calculatePath — additional zone coverage', () => {
   it('all cross-zone pairs produce valid paths', () => {
     // Spot-check representative point in each zone
     const zones = {
-      entrance:    { x: 150, y: 60  },
+      entrance:    { x: 550, y: 60  },
       mainOffice:  { x: 300, y: 280 },
-      meetingRoom: { x: 700, y: 200 },
+      meetingRoom: { x: 700, y: 300 },
       lounge:      { x: 180, y: 490 },
-      research:    { x: 620, y: 490 },
     }
     for (const [fromName, from] of Object.entries(zones)) {
       for (const [toName, to] of Object.entries(zones)) {
@@ -431,20 +431,6 @@ describe('HOME_POSITIONS and OVERFLOW_POSITIONS bounds', () => {
 // ─── Position constraint: obstacle avoidance invariant ───────────────
 // Mirror OBSTACLE_RECTS to guard clampToFloor regression.
 // If these diverge from movementSystem.js, tests will alert to recalibrate.
-const OBSTACLE_RECTS_MIRROR = [
-  { x1: 105, y1: 215, x2: 175, y2: 260 },  // PM desk
-  { x1: 225, y1: 215, x2: 295, y2: 260 },  // Arch desk
-  { x1: 365, y1: 195, x2: 435, y2: 240 },  // QA desk
-  { x1: 485, y1: 195, x2: 555, y2: 240 },  // Res desk
-  { x1: 305, y1: 315, x2: 375, y2: 360 },  // Dev desk
-  { x1: 425, y1: 315, x2: 495, y2: 360 },  // Ops desk
-  { x1: 105, y1: 335, x2: 175, y2: 370 },  // Designer desk
-  { x1: 650, y1: 128, x2: 760, y2: 195 },  // Meeting table
-  { x1: 525, y1: 278, x2: 590, y2: 342 },  // Whiteboard area
-  { x1: 338, y1: 443, x2: 422, y2: 502 },  // WC area
-  { x1: 278, y1: 438, x2: 412, y2: 458 },  // Bookshelves
-  { x1: 15,  y1: 438, x2: 70,  y2: 465 },  // Coffee machine area
-]
 
 function isOnAnyObstacle(x, y) {
   return OBSTACLE_RECTS_MIRROR.some(r => x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2)
@@ -494,17 +480,6 @@ describe('getTargetForBehavior — obstacle avoidance invariant', () => {
 
 // ─── Floor zone membership for key destinations ──────────────────────
 // Mirror FLOOR_ZONES to verify positions land in the correct room.
-const FLOOR_ZONES_MIRROR = [
-  { id: 'entrance',      x1: 15,  y1: 15,  x2: 593, y2: 133 },
-  { id: 'mainOffice',    x1: 15,  y1: 168, x2: 593, y2: 394 },
-  { id: 'meetingRoom',   x1: 628, y1: 15,  x2: 785, y2: 413 },
-  { id: 'lounge',        x1: 15,  y1: 424, x2: 451, y2: 545 },
-  { id: 'research',      x1: 469, y1: 424, x2: 785, y2: 545 },
-  { id: 'door-entrance', x1: 90,  y1: 133, x2: 138, y2: 168 },
-  { id: 'door-lounge',   x1: 215, y1: 394, x2: 266, y2: 424 },
-  { id: 'door-research', x1: 510, y1: 394, x2: 561, y2: 424 },
-  { id: 'door-meeting',  x1: 593, y1: 187, x2: 628, y2: 233 },
-]
 
 function isOnWalkableFloor(x, y) {
   return FLOOR_ZONES_MIRROR.some(z => x >= z.x1 && x <= z.x2 && y >= z.y1 && y <= z.y2)

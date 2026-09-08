@@ -97,7 +97,7 @@ describe('door crossings are jittered per transit (no single shared pixel)', () 
     for (let i = 0; i < 100; i++) {
       const path = calculatePath({ x: 400, y: 220 }, { x: 180, y: 490 })
       // The crossing pair is the consecutive points straddling the lounge wall band.
-      const crossing = path.filter(p => p.y >= 380 && p.y <= 438 && Math.abs(p.x - anchor.x) <= 12)
+      const crossing = path.filter(p => p.y >= 330 && p.y <= 380 && Math.abs(p.x - anchor.x) <= 12)
       expect(crossing.length, 'path must cross through the lounge door band').toBeGreaterThanOrEqual(1)
       for (const p of crossing) {
         expect(isOnFloor(p.x, p.y), `(${p.x},${p.y}) on floor`).toBe(true)
@@ -114,9 +114,11 @@ describe('door crossings are jittered per transit (no single shared pixel)', () 
   it('both sides of one crossing share the same lateral offset (segment stays in the doorway)', () => {
     for (let i = 0; i < 100; i++) {
       const path = calculatePath({ x: 300, y: 250 }, { x: 180, y: 490 })
-      const south = path.find(p => p.y > 420 && p.y <= 438 && Math.abs(p.x - 240) <= 12)
-      const north = path.find(p => p.y >= 380 && p.y < 400 && Math.abs(p.x - 240) <= 12)
-      if (north && south) expect(Math.abs(north.x - south.x)).toBeLessThanOrEqual(0.001)
+      const south = path.find(p => p.y === DOOR_SIDES.mainToLounge.lounge.y && Math.abs(p.x - DOOR_SIDES.mainToLounge.lounge.x) <= 12)
+      const north = path.find(p => p.y === DOOR_SIDES.mainToLounge.mainOffice.y && Math.abs(p.x - DOOR_SIDES.mainToLounge.mainOffice.x) <= 12)
+      expect(north).toBeDefined()
+      expect(south).toBeDefined()
+      expect(Math.abs(north.x - south.x)).toBeLessThanOrEqual(0.001)
     }
   })
 })
@@ -124,12 +126,12 @@ describe('door crossings are jittered per transit (no single shared pixel)', () 
 // ── Research-zone routing (first soak-gate CI catch: designer resting inside shelf B) ──
 describe('research-zone paths never cross the bookshelves or printer', () => {
   const RESEARCH_POINTS = [
-    { x: 535, y: 432 },  // door (research side)
-    { x: 620, y: 490 },  // researchLib waypoint
-    { x: 600, y: 510 },  // printer waypoint (stand spot, below the printer body)
-    { x: 755, y: 480 },  // phone waypoint
+    { x: 252, y: 375 },  // door (research side)
+    { x: 380, y: 480 },  // researchLib waypoint
+    { x: 350, y: 435 },  // printer waypoint (stand spot, below the printer body)
+    { x: 460, y: 510 },  // phone waypoint
     { x: 480, y: 530 },  // SW corner
-    { x: 770, y: 440 },  // NE strip (right of shelf C)
+    { x: 480, y: 440 },  // NE strip (right of shelf C)
   ]
   it('every 2px sample of every leg is furniture-free (300 seeded pairs)', () => {
     for (let i = 0; i < 300; i++) {

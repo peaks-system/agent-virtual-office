@@ -1,3 +1,4 @@
+import { FLOOR_ZONES, OBSTACLE_RECTS, ROOMS } from './whiteLayoutFixture.js'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { calculatePath } from '../src/systems/movementSystem.js'
 
@@ -23,36 +24,6 @@ afterAll(() => { Math.random = __realRandom })
 // failure reproduces). The deep test only checks 22 hand-picked anchors; this probes the
 // gaps between them — especially destinations near furniture edges where findSafePolyline
 // can return null and the corridor fallback might emit a wall-crossing segment.
-const ROOMS = [
-  { id: 'entrance',    x1: 15,  y1: 15,  x2: 593, y2: 133 },
-  { id: 'mainOffice',  x1: 15,  y1: 168, x2: 593, y2: 394 },
-  { id: 'meetingRoom', x1: 628, y1: 15,  x2: 785, y2: 413 },
-  { id: 'lounge',      x1: 15,  y1: 424, x2: 451, y2: 545 },
-  { id: 'research',    x1: 469, y1: 424, x2: 785, y2: 545 },
-]
-
-const FLOOR_ZONES = [
-  ...ROOMS,
-  { id: 'door-entrance', x1: 90,  y1: 133, x2: 138, y2: 168 },
-  { id: 'door-lounge',   x1: 215, y1: 394, x2: 266, y2: 424 },
-  { id: 'door-research', x1: 510, y1: 394, x2: 561, y2: 424 },
-  { id: 'door-meeting',  x1: 593, y1: 187, x2: 628, y2: 233 },
-]
-
-const OBSTACLE_RECTS = [
-  { name: 'pmDesk',       x1: 105, y1: 215, x2: 175, y2: 260 },
-  { name: 'archDesk',     x1: 225, y1: 215, x2: 295, y2: 260 },
-  { name: 'qaDesk',       x1: 365, y1: 195, x2: 435, y2: 240 },
-  { name: 'resDesk',      x1: 485, y1: 195, x2: 555, y2: 240 },
-  { name: 'devDesk',      x1: 305, y1: 315, x2: 375, y2: 360 },
-  { name: 'opsDesk',      x1: 425, y1: 315, x2: 495, y2: 360 },
-  { name: 'designerDesk', x1: 105, y1: 335, x2: 175, y2: 370 },
-  { name: 'meetingTable', x1: 650, y1: 128, x2: 760, y2: 195 },
-  { name: 'whiteboard',   x1: 525, y1: 278, x2: 590, y2: 342 },
-  { name: 'wc',           x1: 338, y1: 443, x2: 422, y2: 502 },
-  { name: 'bookshelves',  x1: 278, y1: 438, x2: 412, y2: 458 },
-  { name: 'coffee',       x1: 15,  y1: 438, x2: 70,  y2: 465 },
-]
 
 // Real waypoints are clamped to stay OBSTACLE_PUSH_PX (6) off furniture, so we sample
 // clean points with a slightly larger margin — points wedged against furniture have no
@@ -99,6 +70,8 @@ function cleanPoint(rng) {
 
 function firstViolation(from, to, step = 4) {
   const path = calculatePath(from, to)
+  const last = path[path.length - 1]
+  if (!last || last.x !== to.x || last.y !== to.y) return { kind: 'unreachable destination', at: last || from, path }
   let cursor = from
   for (const waypoint of path) {
     const dist = Math.hypot(waypoint.x - cursor.x, waypoint.y - cursor.y)

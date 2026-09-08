@@ -1,3 +1,4 @@
+import { FLOOR_ZONES, OBSTACLE_RECTS, SAFE_ROUTE_POINTS } from './whiteLayoutFixture.js'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 // Deflake (2026-06-11): these suites exercise Math.random-dependent code (corridor/anti-stack
 // jitter in calculatePath; weighted behavior picks). Unseeded runs failed ~1/500 full-suite
@@ -21,58 +22,6 @@ import {
   MEETING_CHAIRS,
   WAYPOINTS,
 } from '../src/systems/movementSystem.js'
-
-const FLOOR_ZONES = [
-  { id: 'entrance',      x1: 15,  y1: 15,  x2: 593, y2: 133 },
-  { id: 'mainOffice',    x1: 15,  y1: 168, x2: 593, y2: 394 },
-  { id: 'meetingRoom',   x1: 628, y1: 15,  x2: 785, y2: 413 },
-  { id: 'lounge',        x1: 15,  y1: 424, x2: 451, y2: 545 },
-  { id: 'research',      x1: 469, y1: 424, x2: 785, y2: 545 },
-  { id: 'door-entrance', x1: 90,  y1: 133, x2: 138, y2: 168 },
-  { id: 'door-lounge',   x1: 215, y1: 394, x2: 266, y2: 424 },
-  { id: 'door-research', x1: 510, y1: 394, x2: 561, y2: 424 },
-  { id: 'door-meeting',  x1: 593, y1: 187, x2: 628, y2: 233 },
-]
-
-const OBSTACLE_RECTS = [
-  { name: 'pmDesk',       x1: 105, y1: 215, x2: 175, y2: 260 },
-  { name: 'archDesk',     x1: 225, y1: 215, x2: 295, y2: 260 },
-  { name: 'qaDesk',       x1: 365, y1: 195, x2: 435, y2: 240 },
-  { name: 'resDesk',      x1: 485, y1: 195, x2: 555, y2: 240 },
-  { name: 'devDesk',      x1: 305, y1: 315, x2: 375, y2: 360 },
-  { name: 'opsDesk',      x1: 425, y1: 315, x2: 495, y2: 360 },
-  { name: 'designerDesk', x1: 105, y1: 335, x2: 175, y2: 370 },
-  { name: 'meetingTable', x1: 650, y1: 128, x2: 760, y2: 195 },
-  { name: 'whiteboard',   x1: 525, y1: 278, x2: 590, y2: 342 },
-  { name: 'wc',           x1: 338, y1: 443, x2: 422, y2: 502 },
-  { name: 'bookshelves',  x1: 278, y1: 438, x2: 412, y2: 458 },
-  { name: 'coffee',       x1: 15,  y1: 438, x2: 70,  y2: 465 },
-]
-
-const SAFE_ROUTE_POINTS = [
-  ['entrance-door', { x: 115, y: 80 }],
-  ['entrance-mid', { x: 300, y: 80 }],
-  ['entrance-east', { x: 550, y: 80 }],
-  ['main-door-entrance', { x: 115, y: 176 }],
-  ['main-top-mid', { x: 300, y: 180 }],
-  ['main-top-east', { x: 550, y: 180 }],
-  ['main-left-aisle', { x: 80, y: 290 }],
-  ['main-mid-aisle', { x: 300, y: 290 }],
-  ['main-lounge-door', { x: 240, y: 386 }],
-  ['main-research-door', { x: 535, y: 386 }],
-  ['meeting-door', { x: 636, y: 210 }],
-  ['meeting-north', { x: 640, y: 60 }],
-  ['meeting-south', { x: 640, y: 350 }],
-  ['meeting-east', { x: 775, y: 390 }],
-  ['lounge-door', { x: 240, y: 432 }],
-  ['lounge-west', { x: 90, y: 520 }],
-  ['lounge-mid', { x: 240, y: 520 }],
-  ['lounge-east', { x: 440, y: 520 }],
-  ['research-door', { x: 535, y: 432 }],
-  ['research-west', { x: 600, y: 520 }],
-  ['research-mid', { x: 680, y: 470 }],
-  ['research-east', { x: 760, y: 520 }],
-]
 
 function onFloor(p) {
   return FLOOR_ZONES.some((z) => p.x >= z.x1 && p.x <= z.x2 && p.y >= z.y1 && p.y <= z.y2)

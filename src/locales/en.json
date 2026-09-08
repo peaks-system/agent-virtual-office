@@ -464,6 +464,7 @@
     "phone": "PHONE",
     "go": "GO",
     "cafe": "CAFE",
+    "overtime": "OVERTIME",
     "gate": "GATE",
     "desks": {
       "pm": "PM",

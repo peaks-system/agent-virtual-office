@@ -1,3 +1,4 @@
+import { FLOOR_ZONES, OBSTACLE_RECTS } from './whiteLayoutFixture.js'
 import { describe, it, expect } from 'vitest'
 import {
   MAIN_ROUTE_NODES,
@@ -11,32 +12,6 @@ import {
 // invariants fail loudly instead of the pathing silently dropping a now-unreachable node
 // (as happened when the whiteboard was added to the line-crossing obstacle set and the
 // right-aisle corridor ended up buried inside it).
-const FLOOR_ZONES = [
-  { id: 'entrance',      x1: 15,  y1: 15,  x2: 593, y2: 133 },
-  { id: 'mainOffice',    x1: 15,  y1: 168, x2: 593, y2: 394 },
-  { id: 'meetingRoom',   x1: 628, y1: 15,  x2: 785, y2: 413 },
-  { id: 'lounge',        x1: 15,  y1: 424, x2: 451, y2: 545 },
-  { id: 'research',      x1: 469, y1: 424, x2: 785, y2: 545 },
-  { id: 'door-entrance', x1: 90,  y1: 133, x2: 138, y2: 168 },
-  { id: 'door-lounge',   x1: 215, y1: 394, x2: 266, y2: 424 },
-  { id: 'door-research', x1: 510, y1: 394, x2: 561, y2: 424 },
-  { id: 'door-meeting',  x1: 593, y1: 187, x2: 628, y2: 233 },
-]
-
-const OBSTACLE_RECTS = [
-  { name: 'pmDesk',       x1: 105, y1: 215, x2: 175, y2: 260 },
-  { name: 'archDesk',     x1: 225, y1: 215, x2: 295, y2: 260 },
-  { name: 'qaDesk',       x1: 365, y1: 195, x2: 435, y2: 240 },
-  { name: 'resDesk',      x1: 485, y1: 195, x2: 555, y2: 240 },
-  { name: 'devDesk',      x1: 305, y1: 315, x2: 375, y2: 360 },
-  { name: 'opsDesk',      x1: 425, y1: 315, x2: 495, y2: 360 },
-  { name: 'designerDesk', x1: 105, y1: 335, x2: 175, y2: 370 },
-  { name: 'meetingTable', x1: 650, y1: 128, x2: 760, y2: 195 },
-  { name: 'whiteboard',   x1: 525, y1: 278, x2: 590, y2: 342 },
-  { name: 'wc',           x1: 338, y1: 443, x2: 422, y2: 502 },
-  { name: 'bookshelves',  x1: 278, y1: 438, x2: 412, y2: 458 },
-  { name: 'coffee',       x1: 15,  y1: 438, x2: 70,  y2: 465 },
-]
 
 function onFloor(p) {
   return FLOOR_ZONES.some((z) => p.x >= z.x1 && p.x <= z.x2 && p.y >= z.y1 && p.y <= z.y2)

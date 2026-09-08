@@ -12,6 +12,9 @@ import { juiceForEvent } from '../systems/eventJuice'
 import { gateWaiting, GATE_SHEET_CAP } from '../systems/reviewGate'
 import { themeOverlay, cappedThemeOpacity } from '../systems/theme'
 import { eventName, charName, t, useLocale } from '../i18n'
+import { DESKS } from '../systems/officeLayout'
+import WhiteOfficeScene from './WhiteOfficeScene'
+import { CharacterPixelSprite } from './BlockCharacterSprite'
 import AgentCharacter from './AgentCharacter'
 import PairLinkOverlay from './PairLink'
 import HelperHuddles from './HelperHuddle'
@@ -19,9 +22,7 @@ import OfficePet from './OfficePet'
 import NarrowRoster from './NarrowRoster'
 import AgentInspector from './AgentInspector'
 import {
-  Bookshelf, Plant, Couch, RoundTable, MeetingTable,
-  CoffeeMachine, WaterCooler, GateBooth, WallWindow, Whiteboard,
-  ServerRack, Clock, Printer, Rug, CoffeeCup, DeskLamp,
+  Clock, CoffeeCup, DeskLamp,
   moodToWeather,
 } from './TopDownFurniture'
 
@@ -193,7 +194,7 @@ function WhiteboardAnimation() {
 
   if (!isEureka || progress === 0) return null
 
-  const bx = 537, by = 282
+  const bx = 735, by = 250
   const line1Len = 40
   const line2Len = 35
   const line3Len = 25
@@ -205,7 +206,7 @@ function WhiteboardAnimation() {
   const circleDash = circleLen * Math.max(0, Math.min(1, (progress - 0.7) * 3.33))
 
   return (
-    <g pointerEvents="none" opacity={Math.min(1, progress * 3)}>
+    <g pointerEvents="none" opacity={Math.min(1, progress * 3)} transform="translate(735,250) scale(0.57,0.55) translate(-735,-250)">
       <line x1={bx + 3} y1={by + 8} x2={bx + 43} y2={by + 15}
         stroke="#378ADD" strokeWidth="1.2" strokeLinecap="round"
         strokeDasharray={line1Len}
@@ -262,8 +263,8 @@ function EventJuice() {
       </g>
     )
   }
-  // eureka: a small ✦ sparkle ring near the whiteboard (matches WhiteboardAnimation at 537,282).
-  const bx = 537, by = 282
+  // eureka: a small ✦ sparkle ring near the whiteboard (matches the meeting-room WhiteboardAnimation at 735,250).
+  const bx = 735, by = 250
   return (
     <g pointerEvents="none" aria-hidden="true">
       {Array.from({ length: juice.count }).map((_, i) => {
@@ -300,7 +301,7 @@ function GateWaitingTray() {
   }, [gateSig])
   React.useEffect(() => { if (count === 0 && open) setOpen(false) }, [count, open])
   if (count === 0) return null
-  const ax = 116, ay = 70   // near WAYPOINTS.gate {100,80}, offset clear of the Gatekeeper sprite
+  const ax = 90, ay = 60   // near WAYPOINTS.gate {70,90}, offset clear of the Gatekeeper sprite
   const sheets = Math.min(count, GATE_SHEET_CAP)
   const PHASE_GLYPH = { review: '🔍', ship: '🚀' }
   const label = t('chat.teamBlocked', 'Waiting on you')
@@ -349,20 +350,15 @@ function ClockWidget({ x, y, r }) {
 
 // ─── Boss character that walks through during boss-visit event ─────────
 function WalkingBoss() {
-  const [pos, setPos] = React.useState({ x: 100, y: 150 })
+  const [pos, setPos] = React.useState({ x: 195, y: 127 })
   const rafRef = React.useRef(null)
   const startRef = React.useRef(null)
   const DURATION = 9000
 
   // Boss walks: entrance → across main office → back out
   const PATH = [
-    { x: 100, y: 150 }, // entrance
-    { x: 200, y: 280 }, // main office left
-    { x: 400, y: 290 }, // center
-    { x: 550, y: 280 }, // right
-    { x: 400, y: 350 }, // loop back
-    { x: 200, y: 300 }, // heading out
-    { x: 100, y: 150 }, // exit
+    { x: 570, y: 127 }, { x: 460, y: 127 }, { x: 195, y: 127 },
+    { x: 195, y: 225 }, { x: 460, y: 225 }, { x: 460, y: 127 }, { x: 570, y: 127 },
   ]
 
   React.useEffect(() => {
@@ -388,41 +384,22 @@ function WalkingBoss() {
 
   return (
     <g transform={`translate(${pos.x}, ${pos.y}) scale(1.35)`}>
-      {/* Boss shadow */}
-      <ellipse cx={0} cy={12} rx={8} ry={3} fill="rgba(0,0,0,0.15)" />
-      {/* Boss body — suit */}
-      <rect x={-6} y={-4} width={12} height={14} rx={2} fill="#2C3E50" />
-      {/* Tie */}
-      <line x1={0} y1={-2} x2={0} y2={6} stroke="#C0392B" strokeWidth="1.5" />
-      {/* Head */}
-      <circle cx={0} cy={-10} r={6} fill="#F5D0A9" />
-      {/* Hair (slicked back) */}
-      <path d="M-6,-12 Q0,-18 6,-12" fill="#333" />
-      {/* Glasses */}
-      <line x1={-5} y1={-11} x2={5} y2={-11} stroke="#333" strokeWidth="0.8" />
-      <circle cx={-3} cy={-11} r={2.5} fill="none" stroke="#333" strokeWidth="0.8" />
-      <circle cx={3} cy={-11} r={2.5} fill="none" stroke="#333" strokeWidth="0.8" />
-      {/* Serious expression */}
-      <line x1={-2} y1={-8} x2={2} y2={-8} stroke="#8B6548" strokeWidth="0.8" />
-      {/* Clipboard */}
-      <rect x={6} y={-2} width={6} height={8} rx={1} fill="#C8A060" stroke="#A08040" strokeWidth="0.5" />
-      <line x1={7} y1={1} x2={11} y2={1} stroke="#666" strokeWidth="0.5" />
-      <line x1={7} y1={3} x2={10} y2={3} stroke="#666" strokeWidth="0.5" />
+      <CharacterPixelSprite charId="pm" facing="right" isMoving expression="normal" />
     </g>
   )
 }
 
 // ─── Dog that runs around during dog-visit event ──────────────────────
 function OfficeDog() {
-  const [pos, setPos] = React.useState({ x: 100, y: 150 })
+  const [pos, setPos] = React.useState({ x: 195, y: 127 })
   const rafRef = React.useRef(null)
   const startRef = React.useRef(null)
   const DURATION = 18000
 
   const PATH = [
-    { x: 100, y: 150 }, { x: 300, y: 290 }, { x: 500, y: 270 },
-    { x: 400, y: 380 }, { x: 175, y: 490 }, { x: 250, y: 470 },
-    { x: 175, y: 490 }, { x: 300, y: 350 }, { x: 100, y: 150 },
+    { x: 195, y: 127 }, { x: 195, y: 225 }, { x: 325, y: 225 },
+    { x: 325, y: 325 }, { x: 252, y: 325 }, { x: 252, y: 435 },
+    { x: 252, y: 325 }, { x: 195, y: 325 }, { x: 195, y: 127 },
   ]
 
   React.useEffect(() => {
@@ -503,7 +480,7 @@ function growthLevel(count) {
 // with useCallback in PixelOffice so its identity stays constant across renders.
 const PersonalDesk = React.memo(function PersonalDesk({ x, y, label, color, variant, coffeeCount = 0, stickyCount = 0, booksCount = 0, onDeployClick, labelScale = 1 }) {
   useLocale()
-  const W = 60, H = 38
+  const W = 70, H = 30
   return (
     <g>
       {/* Desk label (character name) — POINT 2: counter-scaled so "whose desk" stays legible
@@ -511,13 +488,13 @@ const PersonalDesk = React.memo(function PersonalDesk({ x, y, label, color, vari
       <ScaledText x={x} y={y - H / 2 - 4} scale={labelScale} textAnchor="middle" fontSize="6" fill={color} fontFamily="monospace" fontWeight="bold" opacity="0.7">{label}</ScaledText>
 
       {/* Chair */}
-      <rect x={x - 10} y={y + H / 2 + 2} width={20} height={14} rx={7} fill="#444" opacity="0.6" />
+      <rect x={x - 10} y={y + H / 2 + 2} width={20} height={14} rx={7} fill="#73818C" opacity="0.85" />
 
       {/* Desk surface */}
-      <rect x={x - W / 2} y={y - H / 2} width={W} height={H} rx={2} fill="#B8864E" />
-      <rect x={x - W / 2 + 2} y={y - H / 2 + 2} width={W - 4} height={H - 4} rx={1} fill="#C89860" />
+      <rect x={x - W / 2} y={y - H / 2} width={W} height={H} rx={2} fill="#D8DDE1" />
+      <rect x={x - W / 2 + 2} y={y - H / 2 + 2} width={W - 4} height={H - 4} rx={1} fill="#FDFDFB" />
       {/* Front edge */}
-      <rect x={x - W / 2} y={y + H / 2 - 3} width={W} height={3} rx={1} fill="#A07040" />
+      <rect x={x - W / 2} y={y + H / 2 - 3} width={W} height={3} rx={1} fill="#CBD3D8" />
 
       {/* Monitor */}
       <rect x={x - 13} y={y - H / 2 + 2} width={26} height={16} rx={2} fill="#1a2a3a" />
@@ -645,50 +622,11 @@ const PersonalDesk = React.memo(function PersonalDesk({ x, y, label, color, vari
   )
 })
 
-// ─── Night sky visible through windows ───────────────────────────────────────
-// React.memo: PixelOffice re-renders every minute (the `minute` clock tick). NightSky's
-// only prop is `hour` — its ~20-element SVG tree changes solely when `hour` crosses the
-// 6/19 day-night boundary. Memo skips the rebuild on the 59 of 60 minute-ticks per hour
-// where `hour` is unchanged.
-const NightSky = React.memo(function NightSky({ hour }) {
-  if (hour >= 6 && hour < 19) return null
-
-  return (
-    <g pointerEvents="none">
-      {/* (Removed: the moon + star fields that were clipped to the former NORTH-WALL windows at
-          y143 — those windows were on an interior partition and have been removed. The exterior
-          windows keep their own built-in WallWindow night stars.) */}
-
-      {/* Entrance windows stars */}
-      <clipPath id="window-clip-entrance">
-        <rect x={20} y={16} width={40} height={24} rx={1} />
-        <rect x={74} y={16} width={40} height={24} rx={1} />
-      </clipPath>
-      <g clipPath="url(#window-clip-entrance)">
-        <circle cx={35} cy={22} r={0.7} fill="#FFF" opacity="0.5">
-          <animate attributeName="opacity" values="0.5;0.2;0.5" dur="2.3s" repeatCount="indefinite" />
-        </circle>
-        <circle cx={50} cy={28} r={0.5} fill="#FFF" opacity="0.4">
-          <animate attributeName="opacity" values="0.4;0.1;0.4" dur="2.8s" repeatCount="indefinite" />
-        </circle>
-        <circle cx={88} cy={24} r={0.8} fill="#FFF" opacity="0.6">
-          <animate attributeName="opacity" values="0.6;0.2;0.6" dur="1.9s" repeatCount="indefinite" />
-        </circle>
-      </g>
-    </g>
-  )
-})
-
 // Static desk positions matching WAYPOINTS — defined outside component to avoid re-creation
-const DESK_DATA = [
-  { id: 'pm',   x: 140, y: 240, label: 'PM',     color: '#378ADD', variant: 'pm' },
-  { id: 'arch', x: 260, y: 240, label: 'Arch',    color: '#7F77DD', variant: 'arch' },
-  { id: 'qa',   x: 400, y: 220, label: 'QA',      color: '#BA7517', variant: 'qa' },
-  { id: 'res',  x: 520, y: 220, label: 'Research', color: '#5DCAA5', variant: 'res' },
-  { id: 'dev',      x: 340, y: 340, label: 'Dev',      color: '#1D9E75', variant: 'dev' },
-  { id: 'ops',      x: 460, y: 340, label: 'Ops',      color: '#D85A30', variant: 'ops' },
-  { id: 'designer', x: 140, y: 360, label: 'Design',   color: '#E8688A', variant: 'designer' },
-]
+const DESK_DATA = DESKS.map(d => ({
+  ...d, label: d.id === 'designer' ? 'Design' : d.id.toUpperCase(), variant: d.id,
+  color: { pm: '#378ADD', arch: '#7F77DD', qa: '#BA7517', res: '#338A70', dev: '#1D9E75', ops: '#D85A30', designer: '#CA5278' }[d.id],
+}))
 const DESK_IDS = DESK_DATA.map(({ id }) => id)
 
 // AVO-159: paint-order signature keys on the agent's CURRENT position.y (snaps at waypoint
@@ -744,16 +682,6 @@ function ScaledText({ x, y, scale, children, ...rest }) {
 }
 
 // Small wall-mounted framed picture — pure decor (Slice 2 hallway gallery). Zero status signal.
-function FramedArt({ x, y, w = 24, h = 16, hue = '#8888AA', o = 1 }) {
-  return (
-    <g pointerEvents="none" opacity={o}>
-      <rect x={x} y={y} width={w} height={h} rx={1} fill="#6B5335" />
-      <rect x={x + 2} y={y + 2} width={w - 4} height={h - 4} rx={0.5} fill={hue} opacity="0.75" />
-      <rect x={x + 2} y={y + 2} width={w - 4} height={3} fill="#fff" opacity="0.14" />
-    </g>
-  )
-}
-
 export default function PixelOffice({ animationQuality = 'full', mode = 'full' }) {
   // Only re-render PixelOffice when agent IDs change, not on every property update.
   // AgentCharacter subscribes to its own agent state independently.
@@ -866,7 +794,9 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
     }
     return { coffeeCountMap: coffee, stickyCountMap: sticky, booksCountMap: books }
   }, [deskItemCounts])
-  const lightOverlay = getLightingOverlay(hour)
+  const hourlyLight = getLightingOverlay(hour)
+  // Preserve the personal white palette even at night; the core clock curve is unchanged.
+  const lightOverlay = { ...hourlyLight, opacity: Math.min(0.12, hourlyLight.opacity) }
   // AVO-123: theme tint grade. Composes ON TOP of the lighting tint, beneath the agent/status layer.
   // cappedThemeOpacity enforces the per-theme cap + the summed (theme+lighting) budget so the scene
   // is never washed out. Default theme → opacity 0 → no rect.
@@ -885,7 +815,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
   const isPanel = mode === 'panel'
   const containerRef = useRef(null)
   const svgRef = useRef(null)
-  const [panelViewBox, setPanelViewBox] = useState('60 155 540 260')
+  const [panelViewBox, setPanelViewBox] = useState('0 0 800 560')
   // Office is the primary view at every size; the roster is an opt-in MANUAL toggle (not size-based).
   const rosterMode = useOfficeStore((s) => s.rosterMode)
   // POINT 2: publish the office's live `meet` scale so AgentCharacter can counter-scale labels.
@@ -907,12 +837,8 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
     if (!el) return
     const { clientWidth: w, clientHeight: h } = el
     if (w === 0 || h === 0) return
-    const ratio = w / h
-    // Panel (compact embed): its own intentional crops per container shape.
-    const M = 20  // margin to prevent edge clipping of agents
-    if (ratio < 1) setPanelViewBox(`${100 - M} ${130 - M} ${400 + M * 2} ${400 + M * 2}`)
-    else if (ratio < 1.6) setPanelViewBox(`${60 - M} ${140 - M} ${540 + M * 2} ${340 + M * 2}`)
-    else setPanelViewBox(`${60 - M} ${155 - M} ${540 + M * 2} ${260 + M * 2}`)
+    // Every role must remain reachable, including the president in the east wing.
+    setPanelViewBox('0 0 800 560')
   }, [isPanel])
 
   // Only PANEL mode adapts its viewBox to the embed shape. The default office does NOT measure or
@@ -1022,243 +948,29 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
         </radialGradient>
       </defs>
 
-      {/* ═══ BACKGROUND ═══ */}
-      <rect width="800" height="560" fill="#3a3028" />
-
-      {/* ═══ ZONE FLOORS ═══ */}
-      {/* Entrance + Hallway (top, one continuous space) */}
-      <rect x="10" y="10" width="588" height="128" fill="#D0C0A0" rx="2" />
-      {/* Main Office */}
-      <rect x="10" y="163" width="588" height="236" fill="#C8A878" />
-      {/* Meeting Room */}
-      <rect x="623" y="10" width="167" height="408" fill="#9898B0" />
-      {/* Lounge */}
-      <rect x="10" y="419" width="446" height="131" fill="#A8B898" />
-      {/* Research */}
-      <rect x="464" y="419" width="326" height="131" fill="#9898B0" />
-
-      {/* ═══ THICK WALLS (with depth for windows/clock) ═══ */}
-      {/* North wall (entrance/hallway ↔ main office, 25px thick) */}
-      <rect x="10" y="138" width="588" height="25" fill="#5a4a3a" />
-      <rect x="10" y="160" width="588" height="3" fill="#4a3a2a" opacity="0.5" />
-      {/* South wall (main office ↔ lounge/research, 20px thick) */}
-      <rect x="10" y="399" width="588" height="20" fill="#5a4a3a" />
-      <rect x="10" y="399" width="588" height="3" fill="#4a3a2a" opacity="0.5" />
-      {/* East wall (main office ↔ meeting room, 25px thick) */}
-      <rect x="598" y="10" width="25" height="408" fill="#5a4a3a" />
-      <rect x="598" y="10" width="3" height="408" fill="#4a3a2a" opacity="0.5" />
-      {/* Lounge ↔ Research divider */}
-      <rect x="456" y="419" width="8" height="131" fill="#5a4a3a" />
-
-      {/* ═══ NORTH WALL (interior partition: hallway ↔ main office) ═══ */}
-      {/* No sky-windows here — this is an INTERIOR wall (the hallway is on the other side, NOT the
-          outside), so the previous "night sky through the window" was architecturally wrong
-          (owner, 2026-06-27). Interior-wall decor instead: framed pictures + the wall clock. */}
-      {/* Dimmed (o=0.7): these sit inside the agents' working-room visual field, so the decor
-          whispers and never competes with status legibility (UX review). */}
-      <FramedArt x={228} y={142} w={26} h={17} hue="#AD927A" o={0.7} />
-      <FramedArt x={430} y={142} w={26} h={17} hue="#C9B07F" o={0.7} />
-      {/* Clock mounted on north wall — own subscription so the minute tick doesn't
-          re-render the whole office */}
-      <ClockWidget x={540} y={150} r={10} />
-
-      {/* ═══ DOOR OPENINGS (cut through thick walls) ═══ */}
-      {/* Entrance → Main Office (north wall) */}
-      <rect x="88" y="138" width="52" height="25" fill="#C8A878" />
-      <rect x="86" y="138" width="3" height="25" fill="#7a6a5a" />
-      <rect x="139" y="138" width="3" height="25" fill="#7a6a5a" />
-      {/* Main Office → Lounge (south wall, centered at x≈240) */}
-      <rect x="213" y="399" width="55" height="20" fill="#A8B898" />
-      <rect x="211" y="399" width="3" height="20" fill="#7a6a5a" />
-      <rect x="267" y="399" width="3" height="20" fill="#7a6a5a" />
-      {/* Main Office → Research (south wall, centered at x≈535) */}
-      <rect x="508" y="399" width="55" height="20" fill="#9898B0" />
-      <rect x="506" y="399" width="3" height="20" fill="#7a6a5a" />
-      <rect x="562" y="399" width="3" height="20" fill="#7a6a5a" />
-      {/* Main Office → Meeting Room (east wall) */}
-      <rect x="598" y="185" width="25" height="50" fill="#9898B0" />
-      <rect x="598" y="183" width="25" height="3" fill="#7a6a5a" />
-      <rect x="598" y="234" width="25" height="3" fill="#7a6a5a" />
-
-      {/* ═══ WALKING CORRIDORS ═══ */}
-      <g opacity="0.05">
-        <rect x="10" y="280" width="588" height="16" fill="#8a7a5a" />
-        <rect x="68" y="163" width="20" height="236" fill="#8a7a5a" />
-        <rect x="540" y="163" width="20" height="236" fill="#8a7a5a" />
-      </g>
-
-      {/* Floor grid (static, pre-built outside component) */}
-      <g opacity="0.03">
-        {GRID_LINES}
-      </g>
-
-      {/* Outer walls */}
-      <rect x="0" y="0" width="800" height="10" fill="#2a2018" />
-      <rect x="0" y="550" width="800" height="10" fill="#2a2018" />
-      <rect x="0" y="0" width="10" height="560" fill="#2a2018" />
-      <rect x="790" y="0" width="10" height="560" fill="#2a2018" />
-
-      {/* ═══ ENTRANCE ═══ */}
-      <WallWindow x={18} y={14} w={44} h={28} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      <WallWindow x={72} y={14} w={44} h={28} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      {/* Slice 2: fill the long windowless gap above the gate (owner: 窗戶位置) */}
-      <WallWindow x={158} y={14} w={40} h={28} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      <GateBooth x={100} y={90} />
-      <Plant x={170} y={50} />
-      <rect x={65} y={120} width={70} height={12} rx={2} fill="#9B8B6B" opacity="0.7" />
-      <text x={100} y={129} textAnchor="middle" fontSize="6.5" fill="#C8A878" fontFamily="monospace" opacity="0.85">{t('office.welcome', 'WELCOME')}</text>
-
-      {/* ═══ HALLWAY (connecting entrance to meeting room) ═══ */}
-      <WallWindow x={250} y={14} w={44} h={28} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      <WallWindow x={350} y={14} w={44} h={28} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      <WallWindow x={450} y={14} w={44} h={28} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      <WallWindow x={550} y={14} w={44} h={28} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      {/* Notice board */}
-      <rect x={220} y={55} width={50} height={35} rx={2} fill="#8B7355" stroke="#6B5335" strokeWidth="1" />
-      <rect x={223} y={58} width={10} height={7} fill="#FFE066" />
-      <rect x={236} y={58} width={10} height={7} fill="#FF9E9E" />
-      <rect x={223} y={68} width={10} height={7} fill="#A8E6CF" />
-      <rect x={236} y={68} width={10} height={7} fill="#87CEEB" />
-      <text x={245} y={87} textAnchor="middle" fontSize="6" fill="#8B7355" fontFamily="monospace" opacity="0.7">{t('office.notice', 'NOTICE')}</text>
-      {/* Coat rack */}
-      <line x1={400} y1={50} x2={400} y2={80} stroke="#6B5335" strokeWidth="2" />
-      <circle cx={400} cy={47} r={3} fill="#6B5335" />
-      <line x1={393} y1={55} x2={407} y2={55} stroke="#6B5335" strokeWidth="1.5" />
-      {/* Slice 2: hallway enrichment — a small framed-art gallery on the wall (high, above the
-          y50–80 overflow-agent band so it never sits behind a visiting agent), a balancing plant in
-          the top-right corner, and a reception water cooler tucked clear of OVERFLOW_POSITIONS
-          (max x≈540). All pure decor, zero status signal. */}
-      <FramedArt x={310} y={18} hue="#C08A6A" />
-      <FramedArt x={500} y={18} hue="#C98FA8" />
-      <Plant x={558} y={48} />
-      <WaterCooler x={582} y={50} />
-
-      {/* Night sky visible through windows */}
-      <NightSky hour={hour} />
-
-      {/* ═══ MAIN OFFICE ═══ */}
-      {/* SHIP IT poster on north wall interior */}
-      <rect x={15} y={170} width={50} height={28} rx={2} fill="#F5F0E0" stroke="#CCC" strokeWidth="0.8" />
-      <text x={40} y={184} textAnchor="middle" fontSize="7" fill="#7F77DD" fontFamily="monospace">{t('office.ship', 'SHIP IT')}</text>
-      <text x={40} y={194} textAnchor="middle" fontSize="6" fill="#888" fontFamily="monospace">{t('office.everyday', 'everyday')}</text>
-
-      {/* Sprint Kanban board on north wall, planning area (clear of door at x=88-140) */}
-      <SprintKanban x={160} y={165} doneCount={totalDoneToday} />
-
-      {/* Team area labels — faint opacity-0.4 BACKGROUND text that sits among the desks. Left at
-          native size (NOT counter-scaled): enlarging them collides with the desk nameplates in the
-          dense desk cluster (跑版). The desk nameplates below carry the readable "who sits here". */}
-      <text x={200} y={200} textAnchor="middle" fontSize="7" fill="#378ADD" fontFamily="monospace" opacity="0.4">{t('office.planning', 'PLANNING')}</text>
-      <text x={460} y={200} textAnchor="middle" fontSize="7" fill="#BA7517" fontFamily="monospace" opacity="0.4">{t('office.review', 'REVIEW')}</text>
-      <text x={400} y={310} textAnchor="middle" fontSize="7" fill="#1D9E75" fontFamily="monospace" opacity="0.4">{t('office.engineering', 'ENGINEERING')}</text>
-
-      {/* Personalized desks */}
-      {DESK_DATA.map((d) => (
-        <PersonalDesk
-          key={d.id}
-          x={d.x} y={d.y}
-          label={t(`office.desks.${d.id}`, d.label)}
-          color={d.color}
-          variant={d.variant}
-          coffeeCount={coffeeCountMap[d.id] || 0}
-          stickyCount={stickyCountMap[d.id] || 0}
-          booksCount={booksCountMap[d.id] || 0}
-          onDeployClick={d.id === 'ops' ? handleDeployClick : undefined}
-          labelScale={labelTextScale}
-        />
-      ))}
-
-      {/* Whiteboard (left of east wall) — clickable triggers eureka */}
-      <g style={{ cursor: 'pointer' }} onClick={() => triggerInteractiveEvent(useOfficeStore, 'eureka')}>
-        <Whiteboard x={535} y={300} w={55} h={40} />
-      </g>
-      <Plant x={575} y={385} />
-      <Plant x={22} y={290} />
-
-      {/* ═══ MEETING ROOM ═══ */}
-      <ScaledText x={705} y={26} scale={labelTextScale} textAnchor="middle" fontSize="8" fill="#7070A0" fontFamily="monospace" opacity="0.7">{t('office.meeting', 'MEETING')}</ScaledText>
-      <Rug x={634} y={70} w={150} h={120} color="#7070A0" />
-      <MeetingTable x={705} y={162} w={100} h={60} />
-      <Plant x={630} y={55} />
-      <WallWindow x={632} y={14} w={44} h={26} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      <WallWindow x={696} y={14} w={44} h={26} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      <WallWindow x={744} y={14} w={40} h={26} hour={hour} weather={weather} reducedMotion={weatherReduced} />
-      {/* Wall clock (a meeting room has one) — own minute subscription via ClockWidget, mounted IN
-          the solid east-divider wall below the door (like the north-wall clock), beside the nook. */}
-      <ClockWidget x={610} y={300} r={7} />
-      {/* Breakout nook — fills the previously-empty lower meeting room (owner: 更多物件) with an
-          informal corner: rug + couch + coffee table + plants. Pure decor (zero status signal →
-          honesty-safe). The lower meeting room is never a pathfinding target (agents enter only for
-          MEETING_CHAIRS up top), so no OBSTACLE_RECTS entry is needed (accepted-clipping policy). */}
-      <Rug x={634} y={300} w={150} h={104} color="#8C8398" />
-      <Couch x={646} y={316} width={74} color="#B97A4E" />
-      <RoundTable x={683} y={382} r={17} />
-      <Plant x={770} y={306} />
-      <Plant x={644} y={390} />
-
-      {/* ═══ RESEARCH ═══ */}
-      <ScaledText x={700} y={432} scale={labelTextScale} textAnchor="middle" fontSize="7" fill="#6060A0" fontFamily="monospace" opacity="0.7">{t('office.research', 'RESEARCH')}</ScaledText>
-      {/* Bookshelves along south outer wall, away from door */}
-      <Bookshelf x={470} y={440} width={65} rows={2} />
-      <Bookshelf x={625} y={440} width={65} rows={2} />
-      <Bookshelf x={700} y={440} width={65} rows={2} />
-      <ServerRack x={770} y={442} />
-      <Plant x={788} y={540} />
-
-      {/* ═══ LOUNGE ═══ */}
-      <ScaledText x={120} y={432} scale={labelTextScale} textAnchor="middle" fontSize="7" fill="#507050" fontFamily="monospace" opacity="0.7">{t('office.lounge', 'LOUNGE')}</ScaledText>
-      <Rug x={50} y={440} w={180} h={95} color="#507050" />
-      <Couch x={55} y={450} width={90} color="#B97A4E" />
-      <RoundTable x={175} y={490} r={22} />
-      <g style={{ cursor: 'pointer' }} onClick={() => triggerInteractiveEvent(useOfficeStore, 'tea-break')}>
-        <CoffeeMachine x={20} y={445} />
-      </g>
-      <WaterCooler x={48} y={448} />
-      {/* Bookshelf (single, away from WC and doors) */}
-      <Bookshelf x={280} y={520} width={60} rows={1} />
-      <Plant x={17} y={540} />
-      {/* Vending machine */}
-      <rect x={22} y={505} width={18} height={22} rx={2} fill="#888" stroke="#666" strokeWidth="0.8" />
-      <rect x={24} y={507} width={14} height={18} rx={1} fill="#AAA" />
-      <circle cx={36} cy={516} r={1.5} fill="#444" />
-      {/* Toilet / WC (bigger) */}
-      <g>
-        <rect x={340} y={445} width={80} height={55} rx={4} fill="#C8D8C0" stroke="#8A9A7A" strokeWidth="1" />
-        <text x={380} y={458} textAnchor="middle" fontSize="7" fill="#5A6A4A" fontFamily="monospace" fontWeight="bold" opacity="0.8">{t('office.restroom', 'WC')}</text>
-        {/* Toilet stalls */}
-        <rect x={348} y={465} width={18} height={14} rx={2} fill="#E8E0D0" stroke="#BBB" strokeWidth="0.5" />
-        <rect x={370} y={465} width={18} height={14} rx={2} fill="#E8E0D0" stroke="#BBB" strokeWidth="0.5" />
-        {/* Sink */}
-        <rect x={395} y={465} width={18} height={10} rx={2} fill="#DDE8F0" stroke="#AAC" strokeWidth="0.5" />
-        <circle cx={404} cy={470} r={2} fill="#88AACC" />
-        {/* Mirror */}
-        <rect x={396} y={460} width={16} height={4} rx={1} fill="#B0D0E8" stroke="#8AB" strokeWidth="0.3" />
-        {/* Door line */}
-        <line x1={340} y1={485} x2={420} y2={485} stroke="#8A9A7A" strokeWidth="0.5" opacity="0.5" />
-        <text x={380} y={495} textAnchor="middle" fontSize="4" fill="#7A8A6A" fontFamily="monospace" opacity="0.6">🚻</text>
-      </g>
-      {/* Phone booth */}
-      <g>
-        <rect x={735} y={455} width={45} height={45} rx={4} fill="#8888AA" stroke="#6666AA" strokeWidth="1" />
-        <text x={758} y={470} textAnchor="middle" fontSize="6" fill="#BBBBDD" fontFamily="monospace" fontWeight="bold" opacity="0.9">{t('office.phone', 'PHONE')}</text>
-        {/* Phone on wall */}
-        <rect x={745} y={478} width={14} height={16} rx={2} fill="#666688" />
-        <circle cx={752} cy={485} r={4} fill="#555577" />
-        <rect x={749} y={482} width={6} height={2} rx={1} fill="#7777AA" />
-        {/* Receiver */}
-        <line x1={748} y1={478} x2={756} y2={478} stroke="#AAAACC" strokeWidth="1.2" strokeLinecap="round" />
-      </g>
-      <Printer x={600} y={495} />
+      <WhiteOfficeScene hour={hour} weather={weather} reducedMotion={weatherReduced}
+        onCoffee={() => triggerInteractiveEvent(useOfficeStore, 'tea-break')}
+        onWhiteboard={() => triggerInteractiveEvent(useOfficeStore, 'eureka')}>
+        <ClockWidget x={475} y={66} r={10} />
+        <SprintKanban x={150} y={64} doneCount={totalDoneToday} />
+        {DESK_DATA.map((d) => (
+          <PersonalDesk key={d.id} x={d.x} y={d.y}
+            label={t(`office.desks.${d.id}`, d.label)} color={d.color} variant={d.variant}
+            coffeeCount={coffeeCountMap[d.id] || 0} stickyCount={stickyCountMap[d.id] || 0}
+            booksCount={booksCountMap[d.id] || 0}
+            onDeployClick={d.id === 'ops' ? handleDeployClick : undefined} labelScale={labelTextScale} />
+        ))}
+      </WhiteOfficeScene>
 
       {/* ═══ CONNECTION HINT (shown until first external status is received) ═══ */}
       {!hasEverReceivedStatus && (
         <g className={reducedMotion ? '' : 'animate-pulse'} pointerEvents="none">
-          <rect x="240" y="14" width="320" height="40" rx="9" fill="#241d15" opacity="0.68" />
+          <rect x="240" y="14" width="320" height="40" rx="9" fill="#435560" opacity="0.68" />
           <rect x="241" y="15" width="318" height="38" rx="8" fill="none" stroke="#f3ead0" strokeOpacity="0.28" />
-          <text x="400" y="30" textAnchor="middle" fontSize="9.5" fill="#fff6dc" fontFamily="monospace" fontWeight="bold">
+          <text x="400" y="30" textAnchor="middle" fontSize="9.5" fill="#FFFFFF" fontFamily="monospace" fontWeight="bold">
             {t('hint.noConnection')}
           </text>
-          <text x="400" y="43" textAnchor="middle" fontSize="8" fill="#ead9a6" fontFamily="monospace">
+          <text x="400" y="43" textAnchor="middle" fontSize="8" fill="#E4EEF2" fontFamily="monospace">
             {t('hint.noConnectionCommand', 'npx agent-virtual-office setup')}
           </text>
         </g>
@@ -1315,11 +1027,11 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
             <DeskLamp key={`lamp-${d.id}`} x={d.x + 22} y={d.y - 14} on />
           ))}
           {/* Meeting room ceiling light */}
-          <ellipse cx={705} cy={162} rx={60} ry={45} fill="url(#mtg-light)" />
+          <ellipse cx={660} cy={385} rx={60} ry={45} fill="url(#mtg-light)" />
           {/* Breakout-nook ceiling light — lights the lower meeting room at night too */}
-          <ellipse cx={705} cy={350} rx={55} ry={42} fill="url(#mtg-light)" />
+          <ellipse cx={650} cy={135} rx={55} ry={42} fill="url(#mtg-light)" />
           {/* Lounge ambient warm light */}
-          <ellipse cx={120} cy={480} rx={80} ry={50} fill="url(#lounge-light)" />
+          <ellipse cx={195} cy={480} rx={80} ry={50} fill="url(#lounge-light)" />
           {/* Late-night OVERTIME indicator (office clock hour ≥ 22). Declutter/calm-tech: a persistent
               CONDITION (it's late) gets a STEADY, muted chip — NOT the old infinite red pulse, which
               read as an alarm that re-fired the eye every 2s. The night lighting already signals late;
@@ -1328,7 +1040,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
             <g opacity="0.6">
               <rect x={485} y={142} width={45} height={14} rx={7} fill="#6B5335" />
               <text x={507} y={149} textAnchor="middle" dominantBaseline="middle" fontSize="6.5" fill="#E8D8B0" fontFamily="monospace" fontWeight="bold">
-                OVERTIME
+                {t('office.overtime', 'OVERTIME')}
               </text>
             </g>
           )}

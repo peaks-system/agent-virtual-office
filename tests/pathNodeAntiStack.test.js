@@ -26,8 +26,8 @@ afterEach(() => { Math.random = realRandom })
 
 // A route that traverses the main-office aisle graph (forces findSafePolyline):
 // gate's corner (top-left) to research desk area (right) crosses desk rows.
-const FROM = { x: 100, y: 80 }
-const TO = { x: 520, y: 244 }
+const FROM = { x: 70, y: 90 }
+const TO = { x: 390, y: 310 }
 
 function sampleWalkable(a, b, stepPx = 4) {
   const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / stepPx))
@@ -47,14 +47,14 @@ describe('shared path nodes are de-stacked', () => {
       // Collect the intermediate point nearest the known shared aisle node (300,180).
       let nearest = null, best = Infinity
       for (const p of path.slice(0, -1)) {  // exclude the destination
-        const d = Math.hypot(p.x - 300, p.y - 180)
+        const d = Math.min(...MAIN_ROUTE_NODES.map(n => Math.hypot(p.x - n.x, p.y - n.y)))
         if (d < best) { best = d; nearest = p }
       }
       if (nearest && best < 40) nodeSamples.push(nearest)
     }
     expect(nodeSamples.length).toBeGreaterThan(10)  // the route really uses that aisle
     // Most samples must NOT be the exact shared pixel...
-    const exact = nodeSamples.filter((p) => p.x === 300 && p.y === 180).length
+    const exact = nodeSamples.filter((p) => MAIN_ROUTE_NODES.some(n => p.x === n.x && p.y === n.y)).length
     expect(exact).toBeLessThan(nodeSamples.length / 2)
     // ...and the samples must genuinely spread (not all identical to each other).
     const distinct = new Set(nodeSamples.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`))
@@ -73,9 +73,9 @@ describe('shared path nodes are de-stacked', () => {
   it('jittered paths remain fully walkable segment-by-segment (200 seeded routes)', () => {
     const cases = [
       [FROM, TO],
-      [{ x: 240, y: 386 }, { x: 550, y: 180 }],   // dev desk → top right
-      [{ x: 80, y: 290 }, { x: 520, y: 244 }],    // left aisle → research desk
-      [{ x: 300, y: 385 }, { x: 100, y: 80 }],    // bottom aisle → gate corner
+      [{ x: 252, y: 335 }, { x: 450, y: 100 }],   // dev desk → top right
+      [{ x: 80, y: 290 }, { x: 390, y: 310 }],    // left aisle → research desk
+      [{ x: 300, y: 330 }, { x: 70, y: 90 }],    // bottom aisle → gate corner
     ]
     for (let run = 0; run < 50; run++) {
       for (const [from, to] of cases) {

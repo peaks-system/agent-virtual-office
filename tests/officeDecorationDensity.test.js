@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DESKS } from '../src/systems/officeLayout'
 
 // VR-1 (2026-06-20 visual-reduction audit): the scene had 12 decorative <Plant> instances —
 // scattered green specks at every edge/corner plus four redundant *stacked* pairs that read as
@@ -10,7 +11,7 @@ import { join } from 'node:path'
 // This guard locks the reduction: plants carry ZERO status signal (Plant({x,y}) — pure
 // decoration), so re-inflating the count is always pure noise, never information. It also pins
 // the legibility intent: no plant may sit inside the central desk/agent zone.
-const src = readFileSync(join(process.cwd(), 'src', 'components', 'PixelOffice.jsx'), 'utf-8')
+const src = readFileSync(join(process.cwd(), 'src', 'components', 'WhiteOfficeScene.jsx'), 'utf-8')
 
 function plantCoords() {
   return [...src.matchAll(/<Plant\s+x=\{(\d+)\}\s+y=\{(\d+)\}\s*\/>/g)]
@@ -33,7 +34,7 @@ describe('VR-1 office decoration density', () => {
   it('places NO plant inside the central engineering desk zone (legibility)', () => {
     // The agent desks/labels live in roughly x∈[120,560], y∈[210,370]. Decoration here would
     // crowd the agents — the exact thing the reduction removed (the old 430,430 + 500,55/105).
-    const inDeskZone = plants.filter((p) => p.x >= 120 && p.x <= 560 && p.y >= 210 && p.y <= 370)
+    const inDeskZone = plants.filter((p) => DESKS.some(d => Math.abs(p.x - d.x) < 55 && p.y >= d.y - 45 && p.y <= d.y + 45))
     expect(inDeskZone, `plants crowding the desk zone: ${JSON.stringify(inDeskZone)}`).toHaveLength(0)
   })
 

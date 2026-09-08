@@ -1,3 +1,4 @@
+import { LAYOUT_VERSION } from './officeLayout.js'
 import { create } from 'zustand'
 import characters from '../config/characters.json'
 import { HOME_POSITIONS, OVERFLOW_POSITIONS, OVERFLOW_SLOT_BY_XY, clampToFloor, avoidOverlap, visuallyOverlapping } from './movementSystem.js'
@@ -129,6 +130,7 @@ function buildDoneEventKey(update, meta) {
 export function createPersistedState(state) {
   const data = {
     _savedAt: Date.now(),
+    layoutVersion: LAYOUT_VERSION,
     agents: {},
     // Don't persist transient state (mood, externalStatus, statusSource, activeWorkflow)
     dailyDoneLedger: ensureCurrentDailyDoneLedger(state.dailyDoneLedger),
@@ -460,8 +462,8 @@ const initAgents = (mode) => {
       status: 'idle',  // always start idle — external hooks drive status
       returnHomeOnIdle: false,
       deskItemCount: saved?.deskItemCount || { coffee: 0, sticky: 0, books: 0 },
-      position: saved?.position || { ...home },
-      targetPosition: saved?.position || { ...home },
+      position: _persisted?.layoutVersion === LAYOUT_VERSION && saved?.position ? clampToFloor(saved.position) : { ...home },
+      targetPosition: _persisted?.layoutVersion === LAYOUT_VERSION && saved?.position ? clampToFloor(saved.position) : { ...home },
       isMoving: false,
       facing: saved?.facing || 'down',
       inGroupEvent: false,

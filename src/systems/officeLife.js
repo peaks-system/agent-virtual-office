@@ -1,5 +1,6 @@
 import eventsData from '../config/officeEvents.json'
 import { WAYPOINTS, MEETING_CHAIRS, HOME_POSITIONS } from './movementSystem.js'
+import { STANDUP_SPOTS, COFFEE_SPOTS } from './officeLayout.js'
 import { eventBubble } from '../i18n'
 import { DAILY_EVENT_INTERVAL, RARE_EVENT_INTERVAL, TIME_CHECK_INTERVAL, WORK_CLAIM_SIGNAL_WINDOW, LIVE_FLOOR_FIRE_CHANCE, SEED_COOLDOWN_MS, PAIR_HUDDLE_WINDOW } from './constants.js'
 import { findSharedFilePair, fileBasename } from './pairHuddle.js'
@@ -179,9 +180,7 @@ function fireWithCast(store, event, state, cancelled) {
 const EVENT_HANDLERS = {
   'tea-break': (store, participants) => {
     // 2-3 people walk to coffee area and chat
-    const coffeeSpots = [
-      { x: 80, y: 475 }, { x: 110, y: 485 }, { x: 140, y: 470 },
-    ]
+    const coffeeSpots = COFFEE_SPOTS
     store.getState().setMultipleAgentGroupEvents(
       participants.map((id, i) => ({
         id,
@@ -194,15 +193,9 @@ const EVENT_HANDLERS = {
   },
 
   'standup': (store, participants, cancelled) => {
-    // Everyone gathers in front of the whiteboard — 8 SPACED spots (was a 40×30 pile that made the
-    // whole team visually overlap; spread ~90×55 in two rows so each agent reads as distinct).
-    // 8 spots IN FRONT OF the whiteboard, all verified on the mainOffice floor (x15-593, y168-394)
-    // and clear of the whiteboard (x525-590,y278-342) + desks (y≤360): row1 right of opsDesk just
-    // below the board, row2 below the desk row. (Earlier spread put 4 spots in walls/furniture.)
-    const whiteboardSpots = [
-      { x: 500, y: 350 }, { x: 525, y: 348 }, { x: 550, y: 350 }, { x: 578, y: 354 },
-      { x: 445, y: 382 }, { x: 490, y: 384 }, { x: 535, y: 382 }, { x: 578, y: 380 },
-    ]
+    // The whiteboard now belongs to the meeting room. Shared seats stay aligned
+    // with the rendered table and collision geometry when the layout changes.
+    const whiteboardSpots = STANDUP_SPOTS
     store.getState().setMultipleAgentGroupEvents(
       participants.map((id, i) => ({
         id,
@@ -228,7 +221,7 @@ const EVENT_HANDLERS = {
       behavior: 'pass-document',
       expression: 'happy',
       bubble: eventBubble('food-delivery'),
-      groupTarget: { x: 300, y: 290 },
+      groupTarget: { ...WAYPOINTS.lounge },
     })
     setTimeout(() => {
       if (cancelled?.value) return
@@ -364,7 +357,7 @@ const EVENT_HANDLERS = {
     if (!participants.includes('dev') || !participants.includes('arch')) return
     const s = store.getState()
     if (!s.agents['dev'] || !s.agents['arch']) return
-    const meetPoint = { x: 300, y: 305 }
+    const meetPoint = { x: (HOME_POSITIONS.dev.x + HOME_POSITIONS.arch.x) / 2, y: HOME_POSITIONS.dev.y }
     s.setAgentGroupEvent('dev', {
       behavior: 'chat', expression: 'confused',
       bubble: eventBubble('dev-arch-dis-1'),
@@ -495,7 +488,7 @@ const EVENT_HANDLERS = {
             behavior: 'chat',
             expression: 'happy',
             bubble: eventBubble('dog-woof'),
-            groupTarget: jitter({ x: 175, y: 490 }, 30),
+            groupTarget: jitter(WAYPOINTS.lounge, 30),
           })
         }
       })
