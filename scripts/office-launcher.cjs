@@ -4,14 +4,31 @@ const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
 const { pathToFileURL } = require('node:url')
-const { spawn } = require('node:child_process')
+const { spawn, execFileSync } = require('node:child_process')
 const fs = require('node:fs')
 
 const ROOT = path.resolve(__dirname, '..')
 const PROTOCOL = 'avo-local-launcher-v1'
 
-function controlAddress(root, port, platform = process.platform) {
-  const identity = `${process.env.USERPROFILE || os.homedir()}|${path.resolve(root)}|${port}`
+function windowsUserSid(run = execFileSync) {
+  try {
+    const executable = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe')
+    const output = run(executable, ['/user', '/fo', 'csv', '/nh'], {
+      encoding: 'utf8', windowsHide: true, timeout: 5000, maxBuffer: 16384,
+    })
+    const match = output.trim().match(/^"[^"]*","(S-\d+(?:-\d+)+)"$/)
+    if (!match) throw new Error('Invalid Windows identity')
+    return match[1]
+  } catch {
+    throw new Error('Windowsの実行ユーザーを確認できません。通常のエクスプローラーから起動し直してください。')
+  }
+}
+
+function controlAddress(root, port, platform = process.platform, principal) {
+  // A sandbox can inherit USERPROFILE from another user. Pipe ACLs follow the
+  // actual process token, so namespace by its SID rather than that environment.
+  const user = principal ?? (process.platform === 'win32' ? windowsUserSid() : process.getuid())
+  const identity = `${user}|${path.resolve(root)}|${port}`
   const suffix = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 24)
   return platform === 'win32' ? `\\\\.\\pipe\\avo-${suffix}` : path.join(os.tmpdir(), `avo-${suffix}.sock`)
 }
@@ -138,9 +155,11 @@ async function run(options) {
 
 if (require.main === module) {
   Promise.resolve().then(() => run(parseArgs(process.argv.slice(2)))).catch(error => {
-    console.error(`エラー: ${error.message}`)
+    console.error(`エラー: ${error.code === 'EPERM' || error.code === 'EACCES'
+      ? '起動管理への接続が拒否されました。別の権限で起動したオフィスがある場合は、その起動画面で Ctrl+C を押し、通常のエクスプローラーから開き直してください。'
+      : error.message}`)
     process.exitCode = 1
   })
 }
 
-module.exports = { controlAddress, parseArgs, requestControl, createControlServer, PROTOCOL, ROOT }
+module.exports = { controlAddress, windowsUserSid, parseArgs, requestControl, createControlServer, PROTOCOL, ROOT }

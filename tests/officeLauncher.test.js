@@ -2,9 +2,22 @@ import { describe, it, expect } from 'vitest'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 const require = createRequire(import.meta.url)
-const { controlAddress, parseArgs, requestControl, createControlServer } = require('../scripts/office-launcher.cjs')
+const { controlAddress, windowsUserSid, parseArgs, requestControl, createControlServer } = require('../scripts/office-launcher.cjs')
 
 describe('Windows office launcher', () => {
+  it('isolates Windows process users even when they inherit the same profile directory', () => {
+    const normalSid = windowsUserSid(() => '"PC\\normal","S-1-5-21-1001"\r\n')
+    const sandboxSid = windowsUserSid(() => '"PC\\sandbox","S-1-5-21-1003"\r\n')
+    expect(controlAddress('/same-project', 5173, 'win32', normalSid))
+      .not.toBe(controlAddress('/same-project', 5173, 'win32', sandboxSid))
+    expect(controlAddress('/same-project', 5173, 'win32', normalSid))
+      .toBe(controlAddress('/same-project', 5173, 'win32', normalSid))
+  })
+
+  it('fails closed if Windows cannot supply a valid process SID', () => {
+    expect(() => windowsUserSid(() => 'unexpected output')).toThrow('実行ユーザー')
+    expect(() => windowsUserSid(() => { throw new Error('denied') })).toThrow('実行ユーザー')
+  })
   it.skipIf(process.platform !== 'win32')('keeps Japanese batch wrappers as UTF-8 without BOM and CRLF', () => {
     for (const name of ['Start-Office.cmd', 'Stop-Office.cmd']) {
       const text = readFileSync(new URL(`../${name}`, import.meta.url), 'utf8')
