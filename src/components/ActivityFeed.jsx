@@ -11,7 +11,7 @@ const typeIcons = {
   behavior: '📝',
 }
 
-export default function ActivityFeed({ mode = 'full' }) {
+export default function ActivityFeed({ mode = 'full', embedded = false }) {
   useLocale()
   const [collapsed, setCollapsed] = useState(true)
   // AVO-141: source the REAL-events eventFeed (FEED_ORIGINS = hook/event/inferred), NOT the all-origins
@@ -38,7 +38,7 @@ export default function ActivityFeed({ mode = 'full' }) {
   const unreadCount = entries.filter(e => Date.now() - e.timestamp < 30000).length
 
   return (
-    <div className={`fixed top-3 right-3 z-50 select-none transition-all duration-200 ${collapsed ? 'w-10' : 'w-72 max-w-[calc(100vw-1.5rem)]'}`}>
+    <div className={`${embedded ? 'relative self-end m-2' : 'fixed top-3 right-3'} z-50 select-none transition-all duration-200 ${collapsed ? 'w-10' : 'w-72 max-w-[calc(100vw-1.5rem)]'}`}>
       {/* Toggle button */}
       <button
         onClick={() => setCollapsed(!collapsed)}

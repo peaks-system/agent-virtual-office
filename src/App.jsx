@@ -2,6 +2,7 @@ import React, { useMemo, useEffect } from 'react'
 import PixelOffice from './components/PixelOffice'
 import ControlPanel from './components/ControlPanel'
 import ActivityFeed from './components/ActivityFeed'
+import CorporationDashboard from './components/CorporationDashboard'
 import ErrorBoundary from './components/ErrorBoundary'
 import { detectPlatform, getPlatformConfig } from './systems/platformDetect'
 import { useOfficeStore } from './systems/store'
@@ -21,7 +22,7 @@ export default function App() {
   // Global keyboard shortcuts: Space = pause, L = switch language
   useEffect(() => {
     const handler = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      if (e.target.closest?.('input, textarea, select, button, [contenteditable="true"]')) return
       if (e.key === ' ') {
         e.preventDefault()
         useOfficeStore.getState().togglePause()
@@ -57,11 +58,11 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="w-screen h-screen bg-[#F5F2EB] dark:bg-[#1a1814] flex flex-col items-center justify-center overflow-hidden">
+      <CorporationDashboard>
         <PixelOffice animationQuality={config.animationQuality} />
-        {config.showControlPanel && <ControlPanel platform={platform} />}
-        <ActivityFeed mode={mode} />
-      </div>
+        {config.showControlPanel && <ControlPanel platform={platform} embedded />}
+        <ActivityFeed mode={mode} embedded />
+      </CorporationDashboard>
     </ErrorBoundary>
   )
 }

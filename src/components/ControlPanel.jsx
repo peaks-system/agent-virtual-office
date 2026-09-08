@@ -59,7 +59,7 @@ function HealthDot({ dot, reducedMotion }) {
   )
 }
 
-export default function ControlPanel({ platform = 'browser', mode = 'full' }) {
+export default function ControlPanel({ platform = 'browser', mode = 'full', embedded = false }) {
   // Return full agent objects so useShallow can compare by reference. Mapping to
   // new projected objects {id,color,behavior,status} on every call means the inner
   // objects are never Object.is-equal, which breaks React 19's useSyncExternalStore
@@ -251,7 +251,7 @@ export default function ControlPanel({ platform = 'browser', mode = 'full' }) {
 
   // ─── Full mode: standard control panel ───
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-gray-900/90 backdrop-blur border-t border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs select-none z-50">
+    <div className={`${embedded ? 'relative shrink-0 w-full' : 'fixed bottom-0 left-0 right-0'} bg-white/90 dark:bg-gray-900/90 backdrop-blur border-t border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs select-none z-50`}>
       {/* Onboarding popover */}
       {showInfo && (
         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3 text-xs z-50">
