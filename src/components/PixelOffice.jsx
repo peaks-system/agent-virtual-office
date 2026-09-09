@@ -485,7 +485,7 @@ const PersonalDesk = React.memo(function PersonalDesk({ x, y, label, color, vari
     <g>
       {/* Desk label (character name) — POINT 2: counter-scaled so "whose desk" stays legible
           when shrunk (esp. at idle, when the floating name tag is hidden). */}
-      <ScaledText x={x} y={y - H / 2 - 4} scale={labelScale} textAnchor="middle" fontSize="6" fill={color} fontFamily="monospace" fontWeight="bold" opacity="0.7">{label}</ScaledText>
+      <ScaledText x={x} y={y - H / 2 - 4} scale={labelScale} textAnchor="middle" fontSize={Math.min(6, 70 / Math.max(1, label.length) / Math.max(1, labelScale))} fill={color} fontFamily="monospace" fontWeight="bold" opacity="0.7">{label}</ScaledText>
 
       {/* Chair */}
       <rect x={x - 10} y={y + H / 2 + 2} width={20} height={14} rx={7} fill="#73818C" opacity="0.85" />
@@ -682,7 +682,7 @@ function ScaledText({ x, y, scale, children, ...rest }) {
 }
 
 // Small wall-mounted framed picture — pure decor (Slice 2 hallway gallery). Zero status signal.
-export default function PixelOffice({ animationQuality = 'full', mode = 'full' }) {
+export default function PixelOffice({ animationQuality = 'full', mode = 'full', showConnectionHint = true }) {
   // Only re-render PixelOffice when agent IDs change, not on every property update.
   // AgentCharacter subscribes to its own agent state independently.
   const agentOrderSignature = useOfficeStore(useShallow((s) => getAgentOrderSignature(s.agents)))
@@ -955,7 +955,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
         <SprintKanban x={150} y={64} doneCount={totalDoneToday} />
         {DESK_DATA.map((d) => (
           <PersonalDesk key={d.id} x={d.x} y={d.y}
-            label={t(`office.desks.${d.id}`, d.label)} color={d.color} variant={d.variant}
+            label={charName(d.id)} color={d.color} variant={d.variant}
             coffeeCount={coffeeCountMap[d.id] || 0} stickyCount={stickyCountMap[d.id] || 0}
             booksCount={booksCountMap[d.id] || 0}
             onDeployClick={d.id === 'ops' ? handleDeployClick : undefined} labelScale={labelTextScale} />
@@ -963,7 +963,7 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full' }
       </WhiteOfficeScene>
 
       {/* ═══ CONNECTION HINT (shown until first external status is received) ═══ */}
-      {!hasEverReceivedStatus && (
+      {showConnectionHint && !hasEverReceivedStatus && (
         <g className={reducedMotion ? '' : 'animate-pulse'} pointerEvents="none">
           <rect x="240" y="14" width="320" height="40" rx="9" fill="#435560" opacity="0.68" />
           <rect x="241" y="15" width="318" height="38" rx="8" fill="none" stroke="#f3ead0" strokeOpacity="0.28" />

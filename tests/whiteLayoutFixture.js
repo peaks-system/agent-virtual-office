@@ -10,7 +10,8 @@ export const FLOOR_ZONES = [
 ]
 
 export const OBSTACLE_RECTS = [
-  {"x1":615,"y1":86,"x2":685,"y2":126,"name":"pmDesk"},
+  {"x1":315,"y1":41,"x2":385,"y2":81,"name":"pmDesk"},
+  {"x1":615,"y1":86,"x2":685,"y2":126,"name":"presidentDesk"},
   {"x1":95,"y1":146,"x2":165,"y2":186,"name":"archDesk"},
   {"x1":225,"y1":146,"x2":295,"y2":186,"name":"devDesk"},
   {"x1":355,"y1":146,"x2":425,"y2":186,"name":"qaDesk"},
@@ -41,7 +42,7 @@ export const ROOMS = [
 ]
 
 export const SAFE_ROUTE_POINTS = [
-  ["pm",{"x":650,"y":135}],
+  ["pm",{"x":350,"y":90}],
   ["arch",{"x":130,"y":195}],
   ["dev",{"x":260,"y":195}],
   ["qa",{"x":390,"y":195}],
@@ -61,7 +62,7 @@ export const SAFE_ROUTE_POINTS = [
   ["phone",{"x":460,"y":510}],
   ["toilet",{"x":290,"y":515}],
   ["printer",{"x":350,"y":435}],
-  ["window",{"x":340,"y":70}],
+  ["window",{"x":280,"y":70}],
   ["snackArea",{"x":40,"y":510}],
   ["entranceToMain-mainOffice",{"x":490,"y":127}],
   ["entranceToMain-entrance",{"x":530,"y":127}],

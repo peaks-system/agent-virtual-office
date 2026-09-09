@@ -59,7 +59,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <CorporationDashboard>
-        <PixelOffice animationQuality={config.animationQuality} />
+        <PixelOffice animationQuality={config.animationQuality} showConnectionHint={false} />
         {config.showControlPanel && <ControlPanel platform={platform} embedded />}
         <ActivityFeed mode={mode} embedded />
       </CorporationDashboard>

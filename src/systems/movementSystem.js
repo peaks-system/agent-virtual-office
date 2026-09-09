@@ -73,7 +73,7 @@ export function clampToFloor(pos) {
 // Agents from other sessions appear here — feels like a "visiting team"
 export const OVERFLOW_POSITIONS = [
   { x: 200, y: 80 },
-  { x: 370, y: 80 },
+  { x: 425, y: 90 },
   { x: 490, y: 80 },
   { x: 150, y: 55 },
   { x: 540, y: 60 },

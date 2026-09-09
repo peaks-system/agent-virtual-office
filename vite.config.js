@@ -7,6 +7,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { normalizePost, VALID_ROLES, VALID_STATUSES } from './src/utils/normalizePost.js'
 import { scanAndMerge, getSessionStats, resolveProjectRoot } from './src/server/scanSessions.mjs'
+import staffApiModule from './scripts/staff-api.cjs'
 
 // Middleware: Universal status API
 //   GET  /api/status → read current status (browser polls this)
@@ -180,6 +181,9 @@ function officeStatusPlugin() {
   return {
     name: 'office-status-api',
     configureServer(server) {
+      const staffApi = staffApiModule.createStaffApi({ root: server.config.root, authorize: req => isAuthorizedOfficeRequest(req, apiConfig) })
+      server.middlewares.use('/api/staff', staffApi.handler)
+      server.httpServer?.once('close', () => { Promise.resolve(staffApi.close()).catch(() => console.error('スタッフ実行の終了処理に失敗しました。')) })
       server.middlewares.use('/api/status', (req, res, next) => {
         // Pass sub-paths (e.g. /stream) to their own handlers registered below.
         // Gate on pathname only — connect strips the mount prefix so /api/status?t=1

@@ -129,3 +129,6 @@ office-hook-capture.jsonl
 
 # End Agentic OS Template - Downstream Ignore Defaults
 
+# Private per-staff AI workspace, histories and memory
+.office-work/
+

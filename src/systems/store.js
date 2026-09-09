@@ -1,4 +1,4 @@
-import { LAYOUT_VERSION } from './officeLayout.js'
+import { LAYOUT_VERSION, canRestoreLayoutPosition } from './officeLayout.js'
 import { create } from 'zustand'
 import characters from '../config/characters.json'
 import { HOME_POSITIONS, OVERFLOW_POSITIONS, OVERFLOW_SLOT_BY_XY, clampToFloor, avoidOverlap, visuallyOverlapping } from './movementSystem.js'
@@ -462,8 +462,8 @@ const initAgents = (mode) => {
       status: 'idle',  // always start idle — external hooks drive status
       returnHomeOnIdle: false,
       deskItemCount: saved?.deskItemCount || { coffee: 0, sticky: 0, books: 0 },
-      position: _persisted?.layoutVersion === LAYOUT_VERSION && saved?.position ? clampToFloor(saved.position) : { ...home },
-      targetPosition: _persisted?.layoutVersion === LAYOUT_VERSION && saved?.position ? clampToFloor(saved.position) : { ...home },
+      position: canRestoreLayoutPosition(_persisted?.layoutVersion, c.id, saved?.position) && saved?.position ? clampToFloor(saved.position) : { ...home },
+      targetPosition: canRestoreLayoutPosition(_persisted?.layoutVersion, c.id, saved?.position) && saved?.position ? clampToFloor(saved.position) : { ...home },
       isMoving: false,
       facing: saved?.facing || 'down',
       inGroupEvent: false,

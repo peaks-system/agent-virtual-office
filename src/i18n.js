@@ -10,6 +10,7 @@ import en from './locales/en.json'
 import zhTW from './locales/zh-TW.json'
 import ja from './locales/ja.json'
 import { rng } from './systems/rng.js'
+import { staffDisplayName } from './systems/staffRegistry.js'
 
 const LOCALES = { en, 'zh-TW': zhTW, ja }
 
@@ -98,7 +99,7 @@ export function charName(charId) {
   }
   // Strip session prefix: "feat-x~dev" → look up "dev", return "開發者"
   const baseRole = charId.includes('~') ? charId.split('~').pop() : charId
-  return t(`characters.${baseRole}.name`, baseRole)
+  return staffDisplayName(baseRole) || t(`characters.${baseRole}.name`, baseRole)
 }
 
 // Convenience: get event display name

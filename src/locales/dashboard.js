@@ -1,6 +1,7 @@
 import { locale } from '../i18n'
 
 const messages = {
+  displayOnly: ['表示専用', 'Display only'],
   help: ['起動・終了の使い方', 'Starting and stopping'],
   startHelp: ['Start-Office.cmd をダブルクリックすると起動します。', 'Double-click Start-Office.cmd to start.'],
   stopHelp: ['終了は Stop-Office.cmd、または起動画面で Ctrl+C。ブラウザを閉じるだけでは終了しません。', 'Use Stop-Office.cmd or Ctrl+C in the launcher to stop. Closing the browser does not stop the server.'],

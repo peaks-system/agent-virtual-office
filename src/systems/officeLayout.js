@@ -4,8 +4,10 @@ export const ROOM_RECTS = {
   meetingRoom: { x1: 520, y1: 235, x2: 790, y2: 550 },
   lounge: { x1: 10, y1: 365, x2: 500, y2: 550 },
 }
+export const PRESIDENT_POSITION = { x: 650, y: 135 }
+export const PRESIDENT_DESK = { x: 650, y: 111 }
 export const DESKS = [
-  { id: 'pm', x: 650, y: 111 },
+  { id: 'pm', x: 350, y: 66 },
   { id: 'arch', x: 130, y: 171 }, { id: 'dev', x: 260, y: 171 }, { id: 'qa', x: 390, y: 171 },
   { id: 'res', x: 130, y: 286 }, { id: 'ops', x: 260, y: 286 }, { id: 'designer', x: 390, y: 286 },
 ]
@@ -14,7 +16,7 @@ export const WAYPOINTS = {
   gate: { x: 70, y: 90 }, coffeeArea: { x: 80, y: 435 }, waterCooler: { x: 130, y: 435 },
   whiteboard: { x: 750, y: 290 }, lounge: { x: 180, y: 480 }, researchLib: { x: 380, y: 480 },
   phone: { x: 460, y: 510 }, toilet: { x: 290, y: 515 }, printer: { x: 350, y: 435 },
-  window: { x: 340, y: 70 }, snackArea: { x: 40, y: 510 },
+  window: { x: 280, y: 70 }, snackArea: { x: 40, y: 510 },
 }
 export const HOME_POSITIONS = {
   ...Object.fromEntries(DESKS.map(d => [d.id, { x: d.x, y: d.y + 24 }])), gate: WAYPOINTS.gate,
@@ -26,6 +28,7 @@ export const MEETING_CHAIRS = [
   { x: 595, y: 385 }, { x: 725, y: 385 },
 ]
 export const OBSTACLE_RECTS = [
+  { x1: 615, y1: 86, x2: 685, y2: 126 }, // static president desk
   ...DESKS.map(d => ({ x1: d.x - 35, y1: d.y - 25, x2: d.x + 35, y2: d.y + 15 })),
   { x1: 605, y1: 350, x2: 715, y2: 420 }, // meeting table
   { x1: 735, y1: 250, x2: 775, y2: 275 }, // whiteboard
@@ -58,4 +61,10 @@ export const FLOOR_ZONES = [
 
 export const STANDUP_SPOTS = MEETING_CHAIRS
 export const COFFEE_SPOTS = [40, 85, 130].map(x => ({ x, y: 435 }))
-export const LAYOUT_VERSION = 2
+export const LAYOUT_VERSION = 3
+
+// Version 3 changes only the PM workstation; preserve unrelated saved positions.
+export function canRestoreLayoutPosition(version, id, position) {
+  const blockedByNewDesk = position && position.x >= 315 && position.x <= 385 && position.y >= 41 && position.y <= 81
+  return version === LAYOUT_VERSION || (version === 2 && id !== 'pm' && !blockedByNewDesk)
+}

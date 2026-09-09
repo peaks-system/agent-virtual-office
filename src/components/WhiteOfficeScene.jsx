@@ -1,6 +1,7 @@
 import React from 'react'
-import { ROOM_RECTS, MEETING_CHAIRS } from '../systems/officeLayout'
-import { t } from '../i18n'
+import { ROOM_RECTS, MEETING_CHAIRS, PRESIDENT_POSITION, PRESIDENT_DESK } from '../systems/officeLayout'
+import { t, charName } from '../i18n'
+import { CharacterPixelSprite } from './BlockCharacterSprite'
 import { Plant, Couch, RoundTable, CoffeeMachine, WaterCooler, Bookshelf, Printer, Whiteboard, WallWindow } from './TopDownFurniture'
 
 // Original four-room architecture. All navigable room bounds use the movement contract.
@@ -33,7 +34,7 @@ export default function WhiteOfficeScene({ hour, weather, reducedMotion, onCoffe
     <WallWindow x={585} y={50} w={140} h={20} hour={hour} weather={weather} reducedMotion={reducedMotion} />
     <rect x={36} y={52} width={68} height={20} rx={5} fill="#D8DEE3" />
     <rect x={36} y={50} width={68} height={18} rx={5} fill="#FFFFFF" stroke="#CFD7DC" />
-    <text x={70} y={62} textAnchor="middle" fontSize="6" fill="#53636F">{t('office.gate', 'GATE')}</text>
+    <text x={70} y={62} textAnchor="middle" fontSize="6" fill="#53636F">{charName('gate')}</text>
     <Plant x={28} y={110} /><Plant x={475} y={325} /><Plant x={760} y={90} />
     <Couch x={710} y={165} width={56} />
     <rect x={565} y={321} width={188} height={137} rx={24} fill="#DCE4E7" opacity="0.6" />
@@ -69,6 +70,16 @@ export default function WhiteOfficeScene({ hour, weather, reducedMotion, onCoffe
       <text x={460} y={483}>{t('office.phone', 'PHONE')}</text>
       <text x={290} y={482}>{t('office.restroom', 'WC')}</text>
     </g>
+    <g transform={`translate(${PRESIDENT_DESK.x},${PRESIDENT_DESK.y})`}>
+      <rect x={-35} y={-15} width={70} height={30} rx={3} fill="#D8DDE1" />
+      <rect x={-33} y={-13} width={66} height={26} rx={2} fill="#FDFDFB" />
+      <rect x={-12} y={-12} width={24} height={14} rx={2} fill="#536A73" />
+      <rect x={-9} y={-10} width={18} height={10} rx={1} fill="#B8D0D5" />
+    </g>
     {children}
+    <g data-staff-id="president" aria-label={charName('president')} transform={`translate(${PRESIDENT_POSITION.x},${PRESIDENT_POSITION.y})`}>
+      <CharacterPixelSprite charId="pm" />
+      <text x={0} y={17} textAnchor="middle" fontSize={7} fill="#53636F">{charName('president')}</text>
+    </g>
   </g>
 }

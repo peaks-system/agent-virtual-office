@@ -4,6 +4,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import en from '../src/locales/en.json'
 import ja from '../src/locales/ja.json'
+import staffConfig from '../config/staff.json'
 
 function compareTree(base, translated, path = '') {
   expect(typeof translated, path).toBe(typeof base)
@@ -69,7 +70,7 @@ describe('Japanese localization', () => {
     expect(fetch).toHaveBeenCalledWith('/api/lang', expect.objectContaining({ method: 'POST', body: 'ja' }))
     expect(listener).toHaveBeenCalledWith('ja')
     expect(i18n.behaviorLabel('typing')).toBe(ja.behaviorLabels.typing)
-    expect(i18n.charName('session~dev')).toBe(ja.characters.dev.name)
+    expect(i18n.charName('session~dev')).toBe(staffConfig.staff.find(staff => staff.id === 'dev').displayName)
     expect(i18n.t('missing.key', 'fallback')).toBe('fallback')
     i18n.setLocale('unknown')
     expect(i18n.locale()).toBe('ja')
