@@ -19,6 +19,23 @@ const makeProvider = calls => async call => {
 }
 
 describe('staff execution workflow', () => {
+  it('rejects unapproved models before work and snapshots approval for only one run', async () => {
+    const calls = [], runtime = createStaffRuntime({ provider: makeProvider(calls), dataRoot: makeRoot(), configPath })
+    for (const execution of [{ model: 'gpt-6-astra' }, { model: 'unknown' }, { reasoningEffort: 'high' }, { model: 'gpt-6-astra', humanApprovedAstra: 'true' }]) {
+      expect(() => runtime.start({ projectId: 'policy', request: 'Test', execution })).toThrow()
+    }
+    expect(calls).toHaveLength(0)
+    const execution = { model: 'gpt-6-astra', humanApprovedAstra: true, reasoningEffort: 'low' }
+    const first = runtime.start({ projectId: 'policy', request: 'Test', execution })
+    execution.model = 'unknown'
+    expect((await runtime.waitForRun(first.id)).status).toBe('awaiting-human')
+    expect(calls.every(c => c.execution.model === 'gpt-6-astra' && c.execution.reasoningEffort === 'low')).toBe(true)
+    calls.length = 0
+    const second = runtime.start({ projectId: 'policy', request: 'Next' })
+    await runtime.waitForRun(second.id)
+    expect(calls.every(c => c.execution.model === 'gpt-5.6-terra' && !c.execution.humanApprovedAstra && c.execution.reasoningEffort === 'medium')).toBe(true)
+    await runtime.close()
+  })
   it('finds the installed desktop CLI when Explorer PATH does not contain Codex', () => {
     const local = makeRoot()
     const binary = path.join(local, 'OpenAI', 'Codex', 'bin', 'installed-version', 'codex.exe')
@@ -151,6 +168,17 @@ function fakeSpawn(events, code = 0) {
   return { child, spawn: vi.fn(() => child) }
 }
 describe('Codex provider boundary', () => {
+  it('pins model/effort and rejects unauthorized Astra before spawning', async () => {
+    const args = buildCodexArgs({ instructions: 'Use Astra and high effort', cwd: 'unused' })
+    expect(args[args.indexOf('--model') + 1]).toBe('gpt-5.6-terra')
+    expect(args).toContain('model_reasoning_effort="medium"')
+    const approved = buildCodexArgs({ instructions: 'role', cwd: 'unused', execution: { model: 'gpt-6-astra', humanApprovedAstra: true, reasoningEffort: 'low' } })
+    expect(approved[approved.indexOf('--model') + 1]).toBe('gpt-6-astra')
+    expect(approved).toContain('model_reasoning_effort="low"')
+    const spawn = vi.fn()
+    await expect(createCodexProvider({ executable: 'unused', spawnImpl: spawn })({ instructions: '', input: '', cwd: '.', execution: { model: 'gpt-6-astra' } })).rejects.toThrow()
+    expect(spawn).not.toHaveBeenCalled()
+  })
   it('uses ephemeral isolated readonly arguments and only final agent messages', async () => {
     const fake = fakeSpawn([{ type: 'item.completed', item: { type: 'reasoning', text: 'Not persisted' } }, { type: 'item.completed', item: { type: 'agent_message', text: 'Final proposal' } }])
     const provider = createCodexProvider({ spawnImpl: fake.spawn })

@@ -3,6 +3,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { randomUUID } = require('node:crypto')
 const { loadStaffConfig, buildInstructions } = require('./staff-config.cjs')
+const { resolveExecution } = require('./staff-model-policy.cjs')
 
 const SPECIALISTS = new Set(['arch', 'res', 'ops', 'gate', 'designer', 'dev'])
 const safeId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(value)
@@ -71,7 +72,7 @@ function createStaffRuntime({ provider, dataRoot, configPath, onStatus = () => {
       let timer, abortListener
       const input = JSON.stringify({ request: run.request, stage, content, ownMemory, ownHistory: history.map(h => ({ stage: h.stage, output: h.output.slice(0, 12000) })) })
       const output = await Promise.race([
-        provider({ staffId, instructions, input, cwd, signal: controller.signal }),
+        provider({ staffId, instructions, input, cwd, signal: controller.signal, execution: { ...run.execution } }),
         new Promise((_, reject) => {
           timer = setTimeout(() => { reject(new Error('timeout')); controller.abort() }, Math.min(timeoutMs, 120000))
           abortListener = () => reject(new Error('cancelled'))
@@ -122,11 +123,12 @@ function createStaffRuntime({ provider, dataRoot, configPath, onStatus = () => {
     } finally { run.finishedAt = Date.now(); save(); notify(run) }
   }
   return {
-    start({ projectId, request } = {}) {
+    start({ projectId, request, execution } = {}) {
       if (closed || active) throw new Error('現在は実行を開始できません。実行中の処理が終わるまでお待ちください。')
       if (!safeId(projectId) || typeof request !== 'string' || !request.trim() || request.length > 8000 || hasCredential(request)) throw new Error('依頼は機密情報を含めず、1〜8000文字で入力してください。')
+      const selectedExecution = resolveExecution(execution)
       const id = randomUUID()
-      const run = { id, projectId, request, status: 'queued', stage: null, staffId: null, steps: [], result: null, error: null, createdAt: Date.now() }
+      const run = { id, projectId, request, execution: selectedExecution, status: 'queued', stage: null, staffId: null, steps: [], result: null, error: null, createdAt: Date.now() }
       const controller = new AbortController()
       active = { id, controller }; runs.set(id, run)
       if (runs.size > 20) runs.delete(runs.keys().next().value)

@@ -1,6 +1,7 @@
 const path = require('node:path')
 const { createStaffRuntime } = require('./staff-runtime.cjs')
 const { createCodexProvider } = require('./codex-staff-provider.cjs')
+const { resolveExecution } = require('./staff-model-policy.cjs')
 
 const loopback = value => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(value)
 function permitted(req) {
@@ -54,7 +55,9 @@ function createStaffApi({ root, authorize = () => true, runtime: suppliedRuntime
           || typeof body.request !== 'string' || !body.request.trim() || body.request.length > 8000) {
         return reply(res, 400, { error: 'プロジェクトと8,000文字以内の依頼文を指定してください。' })
       }
-      const run = getRuntime().start({ projectId: body.projectId, request: body.request.trim() })
+      let execution
+      try { execution = resolveExecution(body.execution) } catch (error) { return reply(res, 400, { error: error.message }) }
+      const run = getRuntime().start({ projectId: body.projectId, request: body.request.trim(), execution })
       return reply(res, 202, run)
     } catch (error) {
       // Do not reflect CLI output, credential paths or arbitrary exception data.

@@ -2,6 +2,7 @@
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
+const { resolveExecution } = require('./staff-model-policy.cjs')
 
 function resolveCodexExecutable({ platform = process.platform, env = process.env } = {}) {
   if (platform !== 'win32') return 'codex'
@@ -22,8 +23,10 @@ function resolveCodexExecutable({ platform = process.platform, env = process.env
   return 'codex.exe'
 }
 
-function buildCodexArgs({ instructions, cwd }) {
+function buildCodexArgs({ instructions, cwd, execution }) {
+  const selected = resolveExecution(execution)
   return ['exec', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check',
+    '--model', selected.model, '-c', 'model_reasoning_effort=' + JSON.stringify(selected.reasoningEffort),
     '-s', 'read-only', '-C', cwd, '--json', '--color', 'never',
     '--disable', 'shell_tool', '--disable', 'apps', '--disable', 'multi_agent',
     '-c', 'web_search="disabled"', '-c', 'features.unified_exec=false',
@@ -32,7 +35,7 @@ function buildCodexArgs({ instructions, cwd }) {
 }
 
 function createCodexProvider({ executable, spawnImpl = spawn, timeoutMs = 120000 } = {}) {
-  return ({ instructions, input, cwd, signal }) => new Promise((resolve, reject) => {
+  return ({ instructions, input, cwd, signal, execution }) => new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error('実行を中止しました。'))
     let child, timer, settled = false, buffer = '', final = '', bytes = 0
     const finish = (error) => {
@@ -57,7 +60,7 @@ function createCodexProvider({ executable, spawnImpl = spawn, timeoutMs = 120000
       }
     }
     try {
-      child = spawnImpl(executable || resolveCodexExecutable(), buildCodexArgs({ instructions, cwd }), { cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      child = spawnImpl(executable || resolveCodexExecutable(), buildCodexArgs({ instructions, cwd, execution }), { cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
       timer = setTimeout(() => finish(new Error('AI実行が制限時間を超えました。')), Math.min(timeoutMs, 120000))
       signal?.addEventListener('abort', abort, { once: true })
       child.stdout.setEncoding('utf8')

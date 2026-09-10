@@ -37,6 +37,12 @@ To change staff behavior, edit the relevant role paragraphs rather than duplicat
 
 ## Start a request
 
+### Model and reasoning policy
+
+The default is GPT-5.6 Terra with medium reasoning. The request form permits only low or medium. `config/model-policy.json` holds the default; restart the office after changing its reasoning default. Every CLI call explicitly passes `--model` and `model_reasoning_effort`; model failure stops the run without automatic fallback.
+
+To request GPT-6 Astra, a human must check the explicit approval box for the current request before submitting. Approval covers all stages of that one collaboration run, including PM and QA. It is cleared when submitting, editing the request, changing effort or switching project, and is never saved as a preference. Saved run records show the selected model, reasoning and approval. Prompts and AI-generated plans cannot select the model. External-action restrictions remain unchanged. This setting affects AI OFFICE executions, not the model of the Codex app conversation used to edit this project.
+
 Open `Start-Office.cmd`, select a project, and enter a request in the right-hand AI request panel. The installed Codex CLI uses the existing normal Windows user's login and consumes that account's usage allowance. No setup rerun is required. `Stop-Office.cmd` stops the office; active staff execution is cancelled on server shutdown.
 
 Private output is stored under `.office-work/staff/<project ID>/<staff ID>/`: `history.json` contains the latest four outputs, `memory.md` holds the latest bounded output and is loaded into that employee's next request, and `workspace` holds stage artifacts. Runs are also saved under the project's `runs` directory. These files are excluded from Git. After a server restart, inspect these saved files; the current UI does not reload old runs from disk.
