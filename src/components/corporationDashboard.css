@@ -6,3 +6,6 @@
 @media(min-width:1600px){.corp-layout{grid-template-columns:270px minmax(420px,1fr) 330px}}
 @media(max-width:1099px){.corp-layout{grid-template-columns:1fr 1fr;padding:16px;gap:14px}.corp-office{grid-column:1/-1;grid-row:1;min-height:640px}.corp-left,.corp-right{grid-row:2}.corp-header{padding:16px;gap:15px}.corp-metrics{gap:18px}.corp-brand h1{font-size:17px}}
 @media(max-width:620px){.corp-header{flex-wrap:wrap}.corp-brand{flex-basis:100%}.corp-metrics{flex:1;gap:24px}.corp-clock{padding-left:15px}.corp-layout{display:flex;flex-direction:column;padding:10px}.corp-card{width:100%}.corp-office{min-height:430px;padding:5px;order:0}.corp-office>div:first-child{min-height:235px}.corp-left{order:1}.corp-right{order:2}.corp-left,.corp-right{padding:18px}.corp-staff{display:grid;grid-template-columns:1fr 1fr}.corp-brand h1{font-size:19px}}
+/* Keep the detailed project panel readable at normal browser zoom. */
+.corp-right{max-height:calc(100vh - 120px);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+@media(max-width:620px){.corp-right{max-height:none;overflow:visible}}
