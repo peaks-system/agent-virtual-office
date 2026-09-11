@@ -1,14 +1,36 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 
 const require = createRequire(import.meta.url)
-const { createSearchConsole } = require('../scripts/search-console.cjs')
+const { createSearchConsole, externalBrowser } = require('../scripts/search-console.cjs')
 
 const client = { installed: { client_id: 'mock-client-id', client_secret: 'mock-client-secret', token_uri: 'https://oauth2.googleapis.com/token' } }
 const tokens = { access_token: 'mock-access-token', refresh_token: 'mock-refresh-token', expires_at: Date.now() + 60_000 }
 const response = body => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
 describe('Google Search Console boundary', () => {
+  it('waits for OS browser dispatch and keeps the OAuth URL out of Windows command arguments', async () => {
+    for (const exitCode of [0, 1]) {
+      const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), kill: vi.fn() })
+      const spawnImpl = vi.fn(() => child)
+      const url = 'https://accounts.google.com/o/oauth2/v2/auth?state=harmless-marker'
+      const opened = externalBrowser(url, { platform: 'win32', spawnImpl })
+      expect(JSON.stringify(spawnImpl.mock.calls)).not.toContain(url)
+      expect(child.stdin.read().toString()).toBe(url)
+      child.emit('close', exitCode)
+      if (exitCode) await expect(opened).rejects.toThrow('browser')
+      else await expect(opened).resolves.toBeUndefined()
+    }
+  })
+
+  it('clears the pending callback when the system browser cannot open', async () => {
+    const search = createSearchConsole({ vault: { read: async () => ({ client: client.installed }), write: async () => {} }, openBrowser: async () => { throw new Error('raw URL must not escape') } })
+    await expect(search.connect()).rejects.toMatchObject({ code: 'SEO_BROWSER_OPEN' })
+    expect((await search.status()).pending).toBe(false)
+    await search.close()
+  })
   it('does not report a configuration saved when encrypted persistence fails', async () => {
     const search = createSearchConsole({ vault: { read: async () => ({}), write: async () => { throw new Error('not for display') } } })
     await expect(search.configure(client)).rejects.toMatchObject({ code: 'SEO_CLIENT_STORAGE' })

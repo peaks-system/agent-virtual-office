@@ -23,14 +23,27 @@ const pacificDay = (days, clock) => {
 }
 const numberOrNull = value => Number.isFinite(value) ? value : null
 
-function externalBrowser(url) {
-  const command = process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open'
+function externalBrowser(url, { platform = process.platform, spawnImpl = spawn } = {}) {
+  const windows = platform === 'win32'
+  const command = windows ? 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' : platform === 'darwin' ? 'open' : 'xdg-open'
+  const args = windows ? ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop';$officeAuthUrl=[Console]::In.ReadToEnd();Start-Process -FilePath $officeAuthUrl -ErrorAction Stop"] : [url]
   return new Promise((resolve, reject) => {
-    let child
-    try { child = spawn(command, [url], { detached: true, windowsHide: true, stdio: 'ignore', shell: false }) } catch { reject(new Error('browser')); return }
-    child.once('error', () => reject(new Error('browser')))
-    child.unref()
-    setImmediate(resolve)
+    let child, timer, settled = false
+    const finish = failed => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      failed ? reject(new Error('browser')) : resolve()
+    }
+    try { child = spawnImpl(command, args, { windowsHide: true, stdio: windows ? ['pipe', 'ignore', 'ignore'] : 'ignore', shell: false }) } catch { finish(true); return }
+    timer = setTimeout(() => { child.kill(); finish(true) }, 10000)
+    child.once('error', () => finish(true))
+    child.once('close', code => finish(code !== 0))
+    if (windows) {
+      child.stdin.once('error', () => finish(true))
+      // Keep the OAuth URL out of command text and helper process arguments.
+      child.stdin.end(url)
+    }
   })
 }
 
@@ -230,7 +243,7 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
       pending.timer = setTimeout(() => { if (pending && pending.server === server) { pending = null; server.close() } }, CALLBACK_TTL_MS)
       const auth = new URL(AUTH_ENDPOINT)
       auth.search = new URLSearchParams({ client_id: stored.client.client_id, redirect_uri: `http://127.0.0.1:${address.port}/oauth2/callback`, response_type: 'code', scope: SCOPE, state: nonce, code_challenge: challenge, code_challenge_method: 'S256', access_type: 'offline', prompt: 'consent' }).toString()
-      try { await openBrowser(auth.toString()) } catch { cancelPending(); return state('システムブラウザーを開けませんでした。') }
+      try { await openBrowser(auth.toString()) } catch { cancelPending(); throw Object.assign(new Error('browser'), { code: 'SEO_BROWSER_OPEN' }) }
       return state()
     },
     async sites() {
@@ -262,4 +275,4 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
   }
 }
 
-module.exports = { createSearchConsole, SCOPE }
+module.exports = { createSearchConsole, SCOPE, externalBrowser }
