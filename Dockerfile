@@ -17,6 +17,8 @@ COPY src ./src
 COPY public ./public
 COPY index.html .
 COPY vite.config.js .
+COPY scripts ./scripts
+COPY config ./config
 RUN npm run build
 
 # server.mjs is copied last (it is not a Vite input) so the runner
@@ -37,6 +39,8 @@ WORKDIR /app
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/server.mjs ./server.mjs
 COPY --chown=node:node --from=builder /app/package.json ./package.json
+COPY --chown=node:node --from=builder /app/scripts ./scripts
+COPY --chown=node:node --from=builder /app/config ./config
 
 # Drop root for the runtime process.
 USER node

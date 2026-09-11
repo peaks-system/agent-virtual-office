@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
 import { scanAndMerge, getSessionStats, resolveProjectRoot } from './src/server/scanSessions.mjs'
 import staffApiModule from './scripts/staff-api.cjs'
+import seoApiModule from './scripts/seo-api.cjs'
 // AVO-146: replaced inline normalizePost copy with the canonical src module.
 // This also fixes the #52 divergence: the old inline copy dropped agents with
 // invalid status; the canonical src module coerces them to 'idle' instead.
@@ -450,6 +451,7 @@ function serveStatic(req, res) {
 // ─── HTTP server ──────────────────────────────────────────────────────────────
 const SERVER_START = Date.now()
 const staffApi = staffApiModule.createStaffApi({ root: __dirname, authorize: isAuthorized })
+const seoApi = seoApiModule.createSeoApi({ root: __dirname, authorize: isAuthorized })
 
 const server = http.createServer((req, res) => {
   // Swallow client-abort / ECONNRESET so they don't crash the process.
@@ -458,6 +460,7 @@ const server = http.createServer((req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff')
   const url = new URL(req.url, 'http://x')
   if (url.pathname.startsWith('/api/staff/')) return staffApi.handler(req, res)
+  if (url.pathname.startsWith('/api/seo/')) return seoApi.handler(req, res)
   if (url.pathname === '/api/status') return handleStatus(req, res)
   if (url.pathname === '/api/status/stream') {
     setCors(res, req.headers.origin, 'GET, OPTIONS')
@@ -504,6 +507,7 @@ server.keepAliveTimeout = 10000
 server.maxHeadersCount = 100
 
 server.once('close', () => { Promise.resolve(staffApi.close()).catch(() => console.error('スタッフ実行の終了処理に失敗しました。')) })
+server.once('close', () => { Promise.resolve(seoApi.close()).catch(() => console.error('SEO診断の終了処理に失敗しました。')) })
 server.listen(port, bindHost, () => {
   const displayHost = bindHost === '0.0.0.0' ? 'localhost' : bindHost
   const url = `http://${displayHost}:${port}${lang ? `?lang=${lang}` : ''}`

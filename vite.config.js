@@ -8,6 +8,7 @@ import os from 'node:os'
 import { normalizePost, VALID_ROLES, VALID_STATUSES } from './src/utils/normalizePost.js'
 import { scanAndMerge, getSessionStats, resolveProjectRoot } from './src/server/scanSessions.mjs'
 import staffApiModule from './scripts/staff-api.cjs'
+import seoApiModule from './scripts/seo-api.cjs'
 
 // Middleware: Universal status API
 //   GET  /api/status → read current status (browser polls this)
@@ -183,6 +184,9 @@ function officeStatusPlugin() {
     configureServer(server) {
       const staffApi = staffApiModule.createStaffApi({ root: server.config.root, authorize: req => isAuthorizedOfficeRequest(req, apiConfig) })
       server.middlewares.use('/api/staff', staffApi.handler)
+      const seoApi = seoApiModule.createSeoApi({ root: server.config.root, authorize: req => isAuthorizedOfficeRequest(req, apiConfig) })
+      server.middlewares.use('/api/seo', seoApi.handler)
+      server.httpServer?.once('close', () => { Promise.resolve(seoApi.close()).catch(() => console.error('SEO診断の終了処理に失敗しました。')) })
       server.httpServer?.once('close', () => { Promise.resolve(staffApi.close()).catch(() => console.error('スタッフ実行の終了処理に失敗しました。')) })
       server.middlewares.use('/api/status', (req, res, next) => {
         // Pass sub-paths (e.g. /stream) to their own handlers registered below.

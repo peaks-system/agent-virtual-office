@@ -54,6 +54,8 @@
   },
   "type": "commonjs",
   "files": [
+    "scripts/",
+    "config/",
     "bin/",
     "public/",
     "src/",
