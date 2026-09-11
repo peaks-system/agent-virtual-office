@@ -2,6 +2,7 @@ const crypto = require('node:crypto')
 const http = require('node:http')
 const { spawn } = require('node:child_process')
 const { createSeoVault } = require('./seo-vault.cjs')
+const { createGoogleFetch } = require('./google-transport.cjs')
 
 const SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly'
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
@@ -117,7 +118,7 @@ function inspectionFacts(inspection, siteUrl) {
   return { facts, unknowns }
 }
 
-function createSearchConsole({ vault = createSeoVault(), openBrowser = externalBrowser, fetchImpl = fetch, httpImpl = http, now = () => Date.now() } = {}) {
+function createSearchConsole({ vault = createSeoVault(), openBrowser = externalBrowser, fetchImpl = createGoogleFetch(), httpImpl = http, now = () => Date.now() } = {}) {
   let stored = { client: null, tokens: null }
   let loaded = false
   let loadPromise = null
@@ -230,10 +231,20 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
         try {
           const body = new URLSearchParams({ client_id: stored.client.client_id, client_secret: stored.client.client_secret, code, code_verifier: verifier, redirect_uri: `http://127.0.0.1:${attempt.port}/oauth2/callback`, grant_type: 'authorization_code' })
           const response = await request(TOKEN_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body })
-          if (closed || pending !== attempt || typeof response.access_token !== 'string' || typeof response.refresh_token !== 'string' || response.scope !== SCOPE) throw new Error('Unauthorized scope')
+          if (closed || pending !== attempt || typeof response.access_token !== 'string' || typeof response.refresh_token !== 'string' || response.scope !== SCOPE) throw Object.assign(new Error('Unauthorized scope'), { code: 'SEO_GOOGLE_SCOPE' })
           stored.tokens = { access_token: response.access_token, refresh_token: response.refresh_token, expires_at: now() + Math.max(60, Math.min(Number(response.expires_in) || 3600, 7200)) * 1000 }
-          await persist(); if (closed || pending !== attempt) throw new Error('cancelled'); cancelPending(); finish(200, '認可が完了しました。このウィンドウは閉じてかまいません。')
-        } catch { if (pending === attempt) cancelPending(); finish(400, '認可を完了できませんでした。') }
+          try { await persist() } catch { throw Object.assign(new Error('storage'), { code: 'SEO_GOOGLE_STORAGE' }) }
+          if (closed || pending !== attempt) throw new Error('cancelled'); cancelPending(); finish(200, '認可が完了しました。このウィンドウは閉じてかまいません。')
+        } catch (error) {
+          if (pending === attempt) cancelPending()
+          const code = error?.cause?.code || error?.code
+          const message = ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN', 'CERT_HAS_EXPIRED', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'].includes(code)
+            ? 'Googleとの通信で証明書を確認できませんでした。AI OFFICEのチャットにこの文をお知らせください。'
+            : code === 'SEO_GOOGLE_SCOPE' ? 'Googleから必要な読み取り専用の認可情報を取得できませんでした。選択したアカウントと許可した権限を確認してください。'
+              : code === 'SEO_GOOGLE_STORAGE' ? 'Googleの認可情報をWindowsで暗号化保存できませんでした。AI OFFICEのチャットにこの文をお知らせください。'
+                : 'Googleとの認可情報の交換を完了できませんでした。AI OFFICEから接続をやり直してください。'
+          finish(400, message)
+        }
       })
       try { await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) }) } catch { if (pending === starting) pending = null; return state('認可を開始できませんでした。') }
       if (closed || pending !== starting) { server.close(); return state() }
