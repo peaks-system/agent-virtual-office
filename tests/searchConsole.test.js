@@ -9,6 +9,35 @@ const tokens = { access_token: 'mock-access-token', refresh_token: 'mock-refresh
 const response = body => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
 describe('Google Search Console boundary', () => {
+  it('does not report a configuration saved when encrypted persistence fails', async () => {
+    const search = createSearchConsole({ vault: { read: async () => ({}), write: async () => { throw new Error('not for display') } } })
+    await expect(search.configure(client)).rejects.toMatchObject({ code: 'SEO_CLIENT_STORAGE' })
+    expect((await search.status()).configured).toBe(false)
+    await search.close()
+  })
+  it('accepts Google downloaded desktop JSON endpoint variants but uses fixed current endpoints', async () => {
+    for (const tokenUri of ['https://oauth2.googleapis.com/token', 'https://accounts.google.com/o/oauth2/token']) {
+      const vault = { read: async () => ({}), write: vi.fn(async () => {}) }
+      const opened = vi.fn(async () => {})
+      const search = createSearchConsole({ vault, openBrowser: opened })
+      const downloaded = { installed: { ...client.installed, auth_uri: 'https://accounts.google.com/o/oauth2/auth', token_uri: tokenUri, redirect_uris: ['http://localhost'] } }
+      try {
+        expect((await search.configure(downloaded)).configured).toBe(true)
+        expect(vault.write.mock.calls[0][0].client.token_uri).toBe('https://oauth2.googleapis.com/token')
+        await search.connect()
+        expect(new URL(opened.mock.calls[0][0]).pathname).toBe('/o/oauth2/v2/auth')
+      } finally { await search.close() }
+    }
+  })
+
+  it('rejects foreign endpoints and wrong client types without replacing saved configuration', async () => {
+    const vault = { read: async () => ({}), write: vi.fn(async () => {}) }
+    const search = createSearchConsole({ vault })
+    await expect(search.configure({ web: client.installed })).rejects.toMatchObject({ code: 'SEO_CLIENT_FORMAT' })
+    await expect(search.configure({ installed: { ...client.installed, auth_uri: 'https://evil.test/auth' } })).rejects.toMatchObject({ code: 'SEO_CLIENT_FORMAT' })
+    expect(vault.write).not.toHaveBeenCalled()
+    await search.close()
+  })
   it('never exposes client material and starts desktop OAuth in an external browser', async () => {
     const vault = { read: vi.fn(async () => ({})), write: vi.fn(async () => {}) }
     const opened = vi.fn(async () => {})

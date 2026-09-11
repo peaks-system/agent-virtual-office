@@ -121,6 +121,8 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
       return reply(res, 202, run)
     } catch (error) {
       // Never include arbitrary upstream exceptions, OAuth responses or request data.
+      if (!res.headersSent && error?.code === 'SEO_CLIENT_FORMAT') return reply(res, 400, { error: '認証用JSONの形式が合いません。Google Cloudで作成した「デスクトップアプリ」のJSONを選んでください。ファイルの中身を貼り付ける必要はありません。' })
+      if (!res.headersSent && error?.code === 'SEO_CLIENT_STORAGE') return reply(res, 409, { error: 'JSONの形式は確認できましたが、Windowsの暗号化保存に失敗しました。このメッセージをチャットでお知らせください。' })
       if (!res.headersSent) reply(res, error instanceof SyntaxError ? 400 : 409, { error: '処理を完了できませんでした。URL・接続設定・実行中の処理を確認してください。認証情報は表示しません。' })
     }
   }

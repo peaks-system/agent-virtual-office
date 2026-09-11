@@ -35,12 +35,15 @@ function externalBrowser(url) {
 }
 
 function parseInstalled(value) {
+  const invalid = () => Object.assign(new Error('Invalid installed application configuration'), { code: 'SEO_CLIENT_FORMAT' })
   let json
-  try { json = typeof value === 'string' ? JSON.parse(value) : value } catch { throw new Error('Invalid installed application configuration') }
+  try { json = typeof value === 'string' ? JSON.parse(value) : value } catch { throw invalid() }
   const client = json && json.installed
-  if (!client || typeof client.client_id !== 'string' || !client.client_id || typeof client.client_secret !== 'string') throw new Error('Invalid installed application configuration')
-  if (client.token_uri && client.token_uri !== TOKEN_ENDPOINT) throw new Error('Invalid installed application configuration')
-  if (client.auth_uri && client.auth_uri !== AUTH_ENDPOINT) throw new Error('Invalid installed application configuration')
+  if (!client || typeof client.client_id !== 'string' || !client.client_id || typeof client.client_secret !== 'string' || !client.client_secret) throw invalid()
+  // Downloaded desktop credentials can contain Google's older endpoint spelling.
+  // Accept only official variants; all outgoing requests still use our constants.
+  if (client.token_uri && ![TOKEN_ENDPOINT, 'https://accounts.google.com/o/oauth2/token'].includes(client.token_uri)) throw invalid()
+  if (client.auth_uri && ![AUTH_ENDPOINT, 'https://accounts.google.com/o/oauth2/auth'].includes(client.auth_uri)) throw invalid()
   return { client_id: client.client_id, client_secret: client.client_secret, token_uri: TOKEN_ENDPOINT }
 }
 
@@ -182,10 +185,14 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
     async status() { await load(); return state() },
     async configure(installedClientJson) {
       await load()
+      const next = { client: parseInstalled(installedClientJson), tokens: null }
       cancelPending()
       authGeneration += 1
-      stored = { client: parseInstalled(installedClientJson), tokens: null }
-      await persist()
+      try {
+        if (storageError) throw new Error('storage')
+        await vault.write(next)
+      } catch { throw Object.assign(new Error('Encrypted storage failed'), { code: 'SEO_CLIENT_STORAGE' }) }
+      stored = next
       return state('Google Search Console は設定済みです。')
     },
     async connect() {
