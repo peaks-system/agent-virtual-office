@@ -44,8 +44,8 @@ function dpapi(script, input, spawnImpl = spawn) {
 
 function windowsProtector(spawnImpl) {
   if (process.platform !== 'win32') return null
-  const protectScript = "$v=[Console]::In.ReadToEnd().Trim();$b=[Convert]::FromBase64String($v);[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))"
-  const unprotectScript = "$v=[Console]::In.ReadToEnd().Trim();$b=[Convert]::FromBase64String($v);[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))"
+  const protectScript = "Add-Type -AssemblyName System.Security -ErrorAction Stop;$v=[Console]::In.ReadToEnd().Trim();$b=[Convert]::FromBase64String($v);[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))"
+  const unprotectScript = "Add-Type -AssemblyName System.Security -ErrorAction Stop;$v=[Console]::In.ReadToEnd().Trim();$b=[Convert]::FromBase64String($v);[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))"
   return {
     protect: value => dpapi(protectScript, Buffer.from(value, 'utf8').toString('base64'), spawnImpl),
     unprotect: value => dpapi(unprotectScript, value, spawnImpl).then(encoded => Buffer.from(encoded, 'base64').toString('utf8'))
