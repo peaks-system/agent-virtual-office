@@ -1,0 +1,7 @@
+.wp-panel{margin-top:24px;padding-top:20px;border-top:1px solid #dfe8e3;overflow-wrap:anywhere}
+.wp-panel p{line-height:1.65;font-size:13px}.wp-panel details{margin:14px 0}.wp-panel summary{cursor:pointer}
+.wp-panel .wp-consent{display:flex;flex-direction:row;align-items:flex-start;gap:8px;font-size:13px}
+.wp-panel .wp-consent input{width:auto;flex:0 0 auto;margin-top:4px}
+.wp-proposal{margin-top:16px;padding:12px;border:1px solid #dfe8e3;border-radius:8px;background:#fafcfb}
+.wp-proposal pre{white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;font-size:13px;max-height:260px;overflow:auto;background:white;padding:10px;border:1px solid #e3e9e6}
+.wp-proposal h4{font-size:13px;margin-bottom:6px}.wp-proposal button{width:100%}.wp-slug{display:block;margin-top:10px}

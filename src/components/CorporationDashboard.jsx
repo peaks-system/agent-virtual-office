@@ -9,6 +9,7 @@ import { d } from '../locales/dashboard'
 import './corporationDashboard.css'
 import StaffWorkPanel from './StaffWorkPanel'
 import SeoPanel from './SeoPanel'
+import WordPressPanel from './WordPressPanel'
 
 export function receivedStatus(externalStatus, now) {
   return Object.entries(externalStatus).filter(([,value]) => value && (!value.expiresAt || value.expiresAt > now))
@@ -131,6 +132,7 @@ export default function CorporationDashboard({ children }) {
         <p className="corp-eyebrow">{d('manual')}</p><h2>{d('overview')}</h2>
         {selected ? <ProjectEditor key={selected.id} project={selected} board={board} /> : <div className="corp-empty"><p>{d('emptyHelp')}</p><button onClick={() => setAdding(true)}>{d('addProject')}</button></div>}
         {selected && <SeoPanel key={`seo-${selected.id}`} project={selected} />}
+        {selected && <WordPressPanel key={`wordpress-${selected.id}`} project={selected} />}
         <StaffWorkPanel project={selected} />
         <section className="corp-real-work"><h2>{d('realWork')}</h2><p className="corp-eyebrow">{d('online')}</p>
           {!actual.length ? <p className="corp-muted">{d('noWork')}</p> : actual.map(([id,status]) => <article key={id}><strong>{charName(id)}</strong><span>{t(`statusLabels.${status.status}`, status.status)}</span><p>{status.task || status.label || d('noTask')}</p></article>)}

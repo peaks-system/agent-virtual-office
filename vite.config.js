@@ -9,6 +9,7 @@ import { normalizePost, VALID_ROLES, VALID_STATUSES } from './src/utils/normaliz
 import { scanAndMerge, getSessionStats, resolveProjectRoot } from './src/server/scanSessions.mjs'
 import staffApiModule from './scripts/staff-api.cjs'
 import seoApiModule from './scripts/seo-api.cjs'
+import wordpressApiModule from './scripts/wordpress-api.cjs'
 
 // Middleware: Universal status API
 //   GET  /api/status → read current status (browser polls this)
@@ -186,6 +187,9 @@ function officeStatusPlugin() {
       server.middlewares.use('/api/staff', staffApi.handler)
       const seoApi = seoApiModule.createSeoApi({ root: server.config.root, authorize: req => isAuthorizedOfficeRequest(req, apiConfig) })
       server.middlewares.use('/api/seo', seoApi.handler)
+      const wordpressApi = wordpressApiModule.createWordPressApi({ root: server.config.root, authorize: req => isAuthorizedOfficeRequest(req, apiConfig) })
+      server.middlewares.use('/api/wordpress', wordpressApi.handler)
+      server.httpServer?.once('close', () => wordpressApi.close())
       server.httpServer?.once('close', () => { Promise.resolve(seoApi.close()).catch(() => console.error('SEO診断の終了処理に失敗しました。')) })
       server.httpServer?.once('close', () => { Promise.resolve(staffApi.close()).catch(() => console.error('スタッフ実行の終了処理に失敗しました。')) })
       server.middlewares.use('/api/status', (req, res, next) => {
