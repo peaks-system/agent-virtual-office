@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import modelPolicy from '../../config/model-policy.json'
 import { charName } from '../i18n'
 import { useStaffRunState } from '../systems/staffRunState'
+import maintenancePolicy from '../../config/maintenance-workflow.json'
 
 async function api(route, body) {
   const response = await fetch(`/api/seo${route}`, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -62,6 +63,8 @@ export default function SeoPanel({ project }) {
     })
   }
   const report = state?.public, gsc = state?.google, run = state?.proposal
+  let maintenance = false
+  try { maintenance = maintenancePolicy.restrictedHosts.includes(new URL(state?.siteUrl).hostname.toLowerCase()) } catch {}
   return <section className="corp-real-work" aria-label="SEO診断モード" style={{ overflowWrap: 'anywhere' }}>
     <h2>SEO診断モード</h2>
     <p className="corp-muted">公開ページを読み取り専用で調査します。サイトの編集・公開・削除やインデックス申請は行いません。</p>
@@ -117,20 +120,23 @@ export default function SeoPanel({ project }) {
       <details><summary>登録済みサイトマップ</summary><ul>{gsc.sitemaps?.map((item, index) => <li key={index}>{item.path || item.url}</li>)}</ul></details>
     </>}
     <p className="corp-muted">順位上昇やインデックス登録を保証しません。未取得ページ・JavaScript実行後の画面・Google内部の判断は推測と区別します。</p>
-    <h3>AIスタッフの改善案</h3>
-    <p className="corp-muted">市場調査 → マーケティング戦略 → Webエンジニア → 品質管理 → PMの順に検討します。診断情報・検索実績を既存のCodex接続へ送信します。認証情報は送りません。</p>
-    <label>SEO診断の思考レベル<select value={effort} disabled={active} onChange={event => setEffort(event.target.value)}><option value="low">低</option><option value="medium">中（標準）</option></select></label>
-    <label><input type="checkbox" checked={astra} disabled={active} onChange={event => setAstra(event.target.checked)} />今回のSEO検討の全工程だけAstraを使うことを承認する</label>
+    <h3>{maintenance ? 'AIチームの技術保守' : 'AIスタッフの改善案'}</h3>
+    <p className="corp-muted">{maintenance ? 'このサイトは技術保守のみです。PMの整理 → 技術担当と品質管理の独立した初案 → 技術担当の修正 → 品質管理の再点検 → PMの最終報告まで自動で進みます。HTTP応答・リダイレクト回数・見出し数だけを送信します。本文・検索語・検索実績は送りません。公開・書き込みは行わず、最終確認待ちで止まります。' : '市場調査 → マーケティング戦略 → Webエンジニア → 品質管理 → PMの順に検討します。診断情報・検索実績を既存のCodex接続へ送信します。認証情報は送りません。'}</p>
+    <label>{maintenance ? '技術保守の思考レベル' : 'SEO診断の思考レベル'}<select value={effort} disabled={active} onChange={event => setEffort(event.target.value)}><option value="low">低</option><option value="medium">中（標準）</option></select></label>
+    <label><input type="checkbox" checked={astra} disabled={active} onChange={event => setAstra(event.target.checked)} />{maintenance ? '今回の技術保守の全工程だけAstraを使うことを承認する' : '今回のSEO検討の全工程だけAstraを使うことを承認する'}</label>
     <p className="corp-muted">標準は5.6 Terraです。AI実行は利用枠を消費します。</p>
     <button className="corp-primary" disabled={active || !report} onClick={() => {
       const execution = { model: astra ? modelPolicy.approvalRequiredModel : modelPolicy.defaultModel, reasoningEffort: effort, humanApprovedAstra: astra }
       setAstra(false)
       action(() => api(`${base}/proposals`, { execution }))
-    }}>AIスタッフに改善案を依頼</button>
-    {run && <div aria-live="polite">
-      <p>{['queued', 'running'].includes(run.status) ? `${charName(run.staffId || 'res')}：検討中` : run.status === 'awaiting-human' ? '人間の最終確認待ち' : '実行を完了できませんでした'}</p>
+    }}>{maintenance ? 'AIチームに技術保守を依頼' : 'AIスタッフに改善案を依頼'}</button>
+    {maintenance && <p className="corp-muted">継続監視ではなく、押すたびに1回の検討です。情報不足なら追加確認を求めます。下書きの変更は別途「WordPress保守」で内容を確認して承認してください。</p>}
+    {maintenance && run && run.mode !== 'maintenance' && <p>以前のSEO検討は今回の技術保守の結果ではありません。上のボタンから技術保守を依頼してください。</p>}
+    {run && (!maintenance || run.mode === 'maintenance') && <div aria-live="polite">
+      <p>{['queued', 'running'].includes(run.status) ? `${charName(run.staffId || (maintenance ? 'pm' : 'res'))}：検討中` : run.status === 'awaiting-human' ? '人間の最終確認待ち' : '実行を完了できませんでした'}</p>
       {run.error && <p role="alert">{run.error}</p>}
-      {run.steps?.map((step, index) => <details key={index}><summary>{charName(step.staffId)}：{stageName[step.staffId]}（{step.status === 'complete' ? '完了' : '処理中'}）</summary><pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{step.output}</pre></details>)}
+      {run.steps?.map((step, index) => <details key={index}><summary>{charName(step.staffId)}：{maintenance ? ['依頼整理', '技術初案', '独立した品質点検', '技術案の修正', '品質再確認', '最終報告'][index] : stageName[step.staffId]}（{step.status === 'complete' ? '完了' : '処理中'}）</summary><pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{step.output}</pre></details>)}
+      {maintenance && <p className="corp-muted">報告の diagnostic-page:1 は「確認したページ情報」の1番目を指します。ページ名や本文はAIへ送信していません。</p>}
       {run.result && <><h4>改善案と人間が行う操作</h4><pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{run.result}</pre></>}
     </div>}
   </section>

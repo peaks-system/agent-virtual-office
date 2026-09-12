@@ -1,0 +1,13 @@
+# Scoped technical maintenance team
+
+Status: implemented and verified. User approved technical-only autonomous collaboration for the designated site on 2026-09-12. A single button starts bounded work; no scheduled/background monitoring is implied.
+
+Server-enforced host policy selects maintenance automatically, ignoring client mode claims. Existing SEO runtime is reused with a separate config and memory/workspace root. Extract at most 10 anonymous page references, HTTP status, redirect count and heading counts from existing diagnostic records. Never send page prose, URLs/paths, titles, queries, analytics, index data or free-form findings. No new crawling needed.
+
+Fixed minimal team: PM plan; developer independent draft; QA independent draft without developer output; developer revision with QA feedback; QA final review; PM final integration. Initial QA receives neither current developer draft nor prior-run memory/history. Per-run isolation for maintenance prevents old SEO context contamination and independent-review leakage. All steps use existing readonly provider and model policy (Terra low/medium, Astra only explicit approval). No WordPress credentials or mutation interface are available to the team. Output stops awaiting human. Existing draft flow is separate and still requires exact per-proposal approval; no automatic publication or write.
+
+UI distinguishes maintenance from SEO, explains the reduced evidence and six stages, maps anonymous page numbers to existing local report URLs for the human, and does not portray previous SEO output as a maintenance result. Prompts remain in config/maintenance-workflow.json. Rollback: revert this feature commit; ignored local run history remains intact. Existing WordPress draft 37 successfully saved/read back and preview approved by user before this work.
+
+Acceptance: protected host cannot run SEO strategy; no marketing/president roles; QA initial input excludes developer answer; isolated workspaces/history; restricted text/Google data absent; no changes to draft approval or readonly credentials; bounded automatic progression to awaiting-human. Unit/mock tests, build, local UI verification. Live AI execution may be tested with neutral synthetic technical observations only and clearly identified as a smoke test.
+
+Verification: 2475 tests / 141 files pass; build passes; real Terra low executes all six stages to awaiting-human on synthetic observations. Local browser confirms technical-only labeling. No additional live WordPress write, crawl or credential configuration performed. Original scope remains limited: this feature reviews stored mechanical observations; it does not autonomously browse, continuously monitor or generate unsupported source edits.

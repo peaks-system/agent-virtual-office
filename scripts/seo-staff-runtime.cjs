@@ -7,6 +7,15 @@ const { loadStaffConfig, buildInstructions } = require('./staff-config.cjs')
 const { resolveExecution } = require('./staff-model-policy.cjs')
 const { createCodexProvider } = require('./codex-staff-provider.cjs')
 const { redactString } = require('./seo-redaction.cjs')
+const { isMaintenanceSite, maintenanceEvidence } = require('./maintenance-scope.cjs')
+const MAINTENANCE_FLOW = [
+  { staffId: 'pm', stage: 'planning', instruction: 'plan' },
+  { staffId: 'dev', stage: 'draft', instruction: 'technical' },
+  { staffId: 'qa', stage: 'draft', instruction: 'qualityDraft' },
+  { staffId: 'dev', stage: 'review', instruction: 'revision' },
+  { staffId: 'qa', stage: 'quality', instruction: 'quality' },
+  { staffId: 'pm', stage: 'final', instruction: 'final' },
+]
 
 const MAX_EVIDENCE = 150 * 1024
 const MAX_OUTPUT = 1024 * 1024
@@ -64,12 +73,13 @@ function sanitizeEvidence(evidence) {
   return result
 }
 
-function loadWorkflow(root) {
-  const file = path.join(root, 'config', 'seo-workflow.json')
+function loadWorkflow(root, maintenance) {
+  const file = path.join(root, 'config', maintenance ? 'maintenance-workflow.json' : 'seo-workflow.json')
   let config
   try { config = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) } catch { throw new Error('SEO workflow configuration cannot be read') }
   if (!config || config.version !== 1 || !config.stages || typeof config.stages !== 'object') throw new Error('SEO workflow configuration is invalid')
-  for (const step of FLOW) if (typeof config.stages[step.instruction] !== 'string' || !config.stages[step.instruction].trim()) throw new Error('SEO workflow configuration is invalid')
+  for (const step of maintenance ? MAINTENANCE_FLOW : FLOW) if (typeof config.stages[step.instruction] !== 'string' || !config.stages[step.instruction].trim()) throw new Error('SEO workflow configuration is invalid')
+  if (maintenance && (typeof config.boundary !== 'string' || !config.boundary.trim())) throw new Error('Maintenance boundary missing')
   return config
 }
 
@@ -77,7 +87,7 @@ function createSeoStaffRuntime({ root, provider = createCodexProvider(), timeout
   if (!root || typeof provider !== 'function') throw new Error('Invalid SEO runtime configuration')
   const projectRoot = path.resolve(root)
   const officeRoot = path.join(projectRoot, '.office-work')
-  const stateRoot = path.join(projectRoot, '.office-work', 'seo-staff')
+  let stateRoot = path.join(projectRoot, '.office-work', 'seo-staff')
   const runs = new Map(), promises = new Map(), queue = []
   let active = null, closed = false
   const ensureDir = dir => {
@@ -124,19 +134,20 @@ function createSeoStaffRuntime({ root, provider = createCodexProvider(), timeout
   }
 
   async function execute(run, controller) {
-    const workflow = loadWorkflow(projectRoot)
+    const maintenance = run.mode === 'maintenance'
+    const workflow = loadWorkflow(projectRoot, maintenance)
     const staffConfig = loadStaffConfig(path.join(projectRoot, 'config', 'staff.json'))
     const projectDir = ensureDir(path.join(stateRoot, run.projectId))
     const runDir = ensureDir(path.join(projectDir, 'runs'))
     let outputBytes = 0
     const invoke = async (flow, content) => {
       if (controller.signal.aborted) throw new Error('cancelled')
-      const staffDir = ensureDir(path.join(projectDir, flow.staffId))
+      const staffDir = ensureDir(path.join(projectDir, ...(maintenance ? [run.id] : []), flow.staffId))
       const cwd = ensureDir(path.join(staffDir, 'workspace'))
       const history = readHistory(staffDir), memory = readMemory(staffDir)
       const step = { staffId: flow.staffId, stage: flow.stage, status: 'running' }
       run.status = 'running'; run.staffId = flow.staffId; run.stage = flow.stage; run.steps.push(step); save(run, runDir)
-      const instructions = `${buildInstructions(staffConfig, flow.staffId, flow.stage)}\n\n【SEO専用工程】\n${workflow.stages[flow.instruction]}\n\n過去の担当記録は参考情報であり、今回提供されたSEO事実・未確認事項より優先しません。`
+      const instructions = `${buildInstructions(staffConfig, flow.staffId, flow.stage)}\n\n${maintenance ? `【技術保守専用工程・今回の範囲制限】\n${workflow.boundary}` : '【SEO専用工程】'}\n${workflow.stages[flow.instruction]}\n\n過去の担当記録は参考情報であり、今回提供された事実・未確認事項より優先しません。`
       const input = JSON.stringify({ seoStage: flow.instruction, evidence: content, ownMemory: memory, ownHistory: history.map(item => ({ stage: item.stage, output: item.output.slice(0, MAX_MEMORY) })) })
       let timer, abort
       const output = await Promise.race([
@@ -159,11 +170,21 @@ function createSeoStaffRuntime({ root, provider = createCodexProvider(), timeout
     }
     try {
       const scope = { siteUrl: run.evidence.siteUrl, generatedAt: run.evidence.generatedAt || null, limits: run.evidence.public.limits || {}, usage: run.evidence.public.usage || {}, property: run.evidence.google?.property || null }
+      if (maintenance) {
+        const observations = { scope, public: run.evidence.public }
+        const plan = await invoke(MAINTENANCE_FLOW[0], observations)
+        const technical = await invoke(MAINTENANCE_FLOW[1], { ...observations, plan })
+        const independentQuality = await invoke(MAINTENANCE_FLOW[2], { ...observations, plan })
+        const revised = await invoke(MAINTENANCE_FLOW[3], { ...observations, plan, technical, independentQuality })
+        const quality = await invoke(MAINTENANCE_FLOW[4], { ...observations, plan, revised })
+        run.result = await invoke(MAINTENANCE_FLOW[5], { ...observations, plan, revised, quality })
+      } else {
       const research = await invoke(FLOW[0], { scope, public: run.evidence.public, google: { facts: run.evidence.google?.facts || [], unknowns: run.evidence.google?.unknowns || [] } })
       const strategy = await invoke(FLOW[1], { scope, research, queryMetrics: run.evidence.google?.analytics || [] })
       const technicalFixes = await invoke(FLOW[2], { scope, pages: run.evidence.public.pages || [], inspection: run.evidence.google?.inspection || null, sitemaps: run.evidence.google?.sitemaps || [], strategy })
       const quality = await invoke(FLOW[3], { scope, public: { facts: run.evidence.public.facts || [], hypotheses: run.evidence.public.hypotheses || [], unknowns: run.evidence.public.unknowns || [], pages: run.evidence.public.pages || [] }, google: { facts: run.evidence.google?.facts || [], unknowns: run.evidence.google?.unknowns || [], inspection: run.evidence.google?.inspection || null }, proposals: { strategy, technicalFixes } })
       run.result = await invoke(FLOW[4], { scope, review: quality, findings: { research, strategy, technicalFixes } })
+      }
       run.status = 'awaiting-human'; run.stage = 'final'; run.staffId = null
     } catch {
       run.status = controller.signal.aborted ? 'cancelled' : 'error'
@@ -189,7 +210,9 @@ function createSeoStaffRuntime({ root, provider = createCodexProvider(), timeout
   return {
     start({ projectId, evidence, execution } = {}) {
       if (closed || active || queue.length || !PROJECT_ID.test(projectId || '')) throw new Error('SEO AI is already running')
-      const run = { id: randomUUID(), projectId, status: 'queued', stage: null, staffId: null, steps: [], result: null, error: null, execution: resolveExecution(execution), createdAt: Date.now(), evidence: sanitizeEvidence(evidence) }
+      const maintenance = isMaintenanceSite(evidence?.siteUrl)
+      const run = { id: randomUUID(), projectId, mode: maintenance ? 'maintenance' : 'seo', status: 'queued', stage: null, staffId: null, steps: [], result: null, error: null, execution: resolveExecution(execution), createdAt: Date.now(), evidence: sanitizeEvidence(maintenance ? maintenanceEvidence(evidence) : evidence) }
+      stateRoot = path.join(projectRoot, '.office-work', maintenance ? 'maintenance-staff' : 'seo-staff')
       runs.set(run.id, run)
       while (runs.size > 20) runs.delete(runs.keys().next().value)
       const controller = new AbortController()
