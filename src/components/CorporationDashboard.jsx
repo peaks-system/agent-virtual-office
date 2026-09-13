@@ -75,6 +75,7 @@ export default function CorporationDashboard({ children }) {
   const [adding, setAdding] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [exportError, setExportError] = useState('')
+  const [workspace, setWorkspace] = useState('diagnosis')
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
   const actual = executableReceivedStatus({ ...externalStatus, ...runStatuses }, now)
   const live = rosterStatusByRole(actual)
@@ -127,13 +128,22 @@ export default function CorporationDashboard({ children }) {
           </button>
         })}</div>
       </aside>
-      <main className="corp-office corp-card" aria-label={d('office')}>{children}</main>
+      <main className="corp-center">
+        <section className="corp-office corp-card" aria-label={d('office')}>{children}</section>
+        <section className="corp-workspace corp-card" aria-label="プロジェクトの作業スペース">
+          <h2>作業スペース</h2>
+          <p className="corp-muted">{selected ? selected.title : '左側でプロジェクトを追加・選択してください。'}</p>
+          <nav className="corp-workspace-nav" aria-label="作業内容の切り替え">
+            {[['diagnosis', '診断結果'], ['wordpress', 'WordPress保守'], ['request', 'AIへの依頼']].map(([id, label]) => <button key={id} aria-pressed={workspace === id} aria-controls={`workspace-${id}`} onClick={() => setWorkspace(id)}>{label}</button>)}
+          </nav>
+          <div id="workspace-diagnosis" hidden={workspace !== 'diagnosis'}>{selected && <SeoPanel key={`seo-${selected.id}`} project={selected} />}</div>
+          <div id="workspace-wordpress" hidden={workspace !== 'wordpress'}>{selected && <WordPressPanel key={`wordpress-${selected.id}`} project={selected} />}</div>
+          <div id="workspace-request" hidden={workspace !== 'request'}><StaffWorkPanel project={selected} /></div>
+        </section>
+      </main>
       <aside className="corp-right corp-card">
         <p className="corp-eyebrow">{d('manual')}</p><h2>{d('overview')}</h2>
         {selected ? <ProjectEditor key={selected.id} project={selected} board={board} /> : <div className="corp-empty"><p>{d('emptyHelp')}</p><button onClick={() => setAdding(true)}>{d('addProject')}</button></div>}
-        {selected && <SeoPanel key={`seo-${selected.id}`} project={selected} />}
-        {selected && <WordPressPanel key={`wordpress-${selected.id}`} project={selected} />}
-        <StaffWorkPanel project={selected} />
         <section className="corp-real-work"><h2>{d('realWork')}</h2><p className="corp-eyebrow">{d('online')}</p>
           {!actual.length ? <p className="corp-muted">{d('noWork')}</p> : actual.map(([id,status]) => <article key={id}><strong>{charName(id)}</strong><span>{t(`statusLabels.${status.status}`, status.status)}</span><p>{status.task || status.label || d('noTask')}</p></article>)}
         </section>

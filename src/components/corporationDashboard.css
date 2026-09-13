@@ -9,3 +9,22 @@
 /* Keep the detailed project panel readable at normal browser zoom. */
 .corp-right{max-height:calc(100vh - 120px);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
 @media(max-width:620px){.corp-right{max-height:none;overflow:visible}}
+/* The header stays outside the only page-level scroll area. */
+.corp-dashboard{height:100vh;height:100dvh;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.corp-header{flex:0 0 auto;flex-wrap:wrap;position:relative;z-index:10}
+.corp-layout{flex:1;min-height:0;width:100%;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;align-content:start}
+.corp-center{min-width:0;display:flex;flex-direction:column;gap:18px}
+.corp-center .corp-office{height:clamp(460px,65vh,780px);min-height:0}
+.corp-center .corp-office>div:first-child{min-height:0}
+.corp-workspace{padding:22px;overflow-wrap:anywhere}
+.corp-workspace-nav{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}
+.corp-workspace-nav button[aria-pressed=true]{background:#437b5c;color:#fff;border-color:#437b5c}
+.corp-workspace [hidden]{display:none!important}
+.corp-workspace .corp-real-work{margin-top:0;border-top:0}
+.corp-workspace .corp-muted{font-size:12px;color:#687b70}
+.corp-workspace label{font-size:13px}
+.corp-workspace .corp-real-work article p{font-size:13px}
+.corp-workspace h3{margin-top:14px}
+.corp-right{max-height:none;overflow:visible;scrollbar-gutter:auto}
+@media(max-width:1099px){.corp-center{grid-column:1/-1;grid-row:1}.corp-center .corp-office{grid-row:auto;grid-column:auto}.corp-left,.corp-right{grid-row:2}}
+@media(max-width:620px){.corp-center{width:100%;order:0}.corp-center .corp-office{height:380px;min-height:0}.corp-workspace{padding:16px}.corp-header{gap:10px;padding:12px}.corp-brand h1{white-space:normal;font-size:18px}.corp-metrics{gap:12px}.corp-clock{padding-left:10px}.corp-monogram{flex-shrink:0}}
