@@ -152,7 +152,7 @@ async function auditSite(siteUrl, options = {}) {
     try {
       const r = await fetchSafe(url); const headers = r.headers || {}; const contentType = String(headers['content-type'] || ''); const html = contentType.includes('html') ? r.body.toString('utf8') : ''
       const signal = pageSignals(html, r.url); const noindex = signal.noindex || /\bnoindex\b/i.test(String(headers['x-robots-tag'] || ''))
-      const page = { url: r.url, status: r.status, redirects: r.redirects, title: signal.title, description: signal.description, canonical: signal.canonical, noindex, headings: signal.headings }
+      const page = { url: r.url, status: r.status, contentType: contentType.split(';')[0].slice(0, 100), redirects: r.redirects, title: signal.title, description: signal.description, canonical: signal.canonical, noindex, headings: signal.headings }
       pages.push(page); usage.pages = pages.length
       facts.push({ message: `ページを取得しました（HTTP ${r.status}）。`, url: r.url, evidence: r.redirects.length ? `リダイレクト ${r.redirects.length} 回` : undefined })
       if (noindex) facts.push({ message: 'noindex 指示を検出しました。', url: r.url, evidence: signal.noindex ? 'meta robots' : 'X-Robots-Tag' })

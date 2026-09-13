@@ -8,8 +8,10 @@ const { createSearchConsole } = require('./search-console.cjs')
 const { createSeoStaffRuntime } = require('./seo-staff-runtime.cjs')
 const { resolveExecution } = require('./staff-model-policy.cjs')
 const { redactDiagnostics } = require('./seo-redaction.cjs')
+const { isMaintenanceSite } = require('./maintenance-scope.cjs')
+const { createMaintenanceProbe } = require('./maintenance-probe.cjs')
 
-function createSeoApi({ root, authorize = () => true, crawler = auditSite, google, staff } = {}) {
+function createSeoApi({ root, authorize = () => true, crawler = auditSite, google, staff, probe = createMaintenanceProbe() } = {}) {
   const directory = path.join(root, '.office-work', 'seo')
   const jobs = new Map()
   let active = false, closed = false, crawlController = null
@@ -47,7 +49,7 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
     if (closed) return reply(res, 503, { error: 'オフィスを終了しています。' })
     try {
       const pathname = new URL(req.url, 'http://local').pathname.replace(/^\/api\/seo(?=\/|$)/, '')
-      const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals))?$/)
+      const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals|checks))?$/)
       const id = match?.[1], action = match?.[2]
       if (req.method === 'GET') {
         if (pathname === '/google/status') return reply(res, 200, await gsc().status())
@@ -99,7 +101,7 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
         jobs.clear()
         jobs.set(id, { status: 'running', startedAt: Date.now() })
         Promise.resolve().then(() => crawler(value.siteUrl, { signal: crawlController.signal })).then(report => {
-          if (!closed) { save(id, { ...read(id), public: report, proposal: null }); jobs.set(id, { status: 'complete' }) }
+          if (!closed) { save(id, { ...read(id), public: report, proposal: null, maintenanceChecks: {} }); jobs.set(id, { status: 'complete' }) }
         }).catch(() => { jobs.set(id, { status: 'error', error: '公開サイトの診断を完了できませんでした。公開URL・接続状況・安全制限を確認してください。' }) })
           .finally(() => { active = false; crawlController = null })
         return reply(res, 202, { status: 'running' })
@@ -115,7 +117,19 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
         } finally { active = false }
       }
       if (!value.public) return reply(res, 400, { error: 'まず公開サイトを診断してください。' })
-      const evidence = { siteUrl: value.siteUrl, generatedAt: value.public.generatedAt, public: value.public, google: value.google }
+      if (action === 'checks') {
+        if (active || !isMaintenanceSite(value.siteUrl) || !Number.isInteger(body.pageIndex) || body.pageIndex < 0 || body.pageIndex >= Math.min(value.public.pages?.length || 0, 10)
+          || body.generatedAt !== value.public.generatedAt) return reply(res, 409, { error: '再確認する診断記録を読み直してください。' })
+        active = true
+        try {
+          const checked = await probe(value.public.pages[body.pageIndex].url, value.siteUrl)
+          const checks = { ...(value.maintenanceChecks || {}), [body.pageIndex]: checked }
+          save(id, { ...value, maintenanceChecks: checks })
+          return reply(res, 200, checked)
+        } finally { active = false }
+      }
+      const publicEvidence = isMaintenanceSite(value.siteUrl) ? { ...value.public, pages: (value.public.pages || []).map((page, index) => ({ ...page, headCheck: value.maintenanceChecks?.[index] || null })) } : value.public
+      const evidence = { siteUrl: value.siteUrl, generatedAt: value.public.generatedAt, public: publicEvidence, google: value.google }
       const run = ai().start({ projectId: id, evidence, execution: resolveExecution(body.execution) })
       save(id, { ...value, proposal: run })
       return reply(res, 202, run)

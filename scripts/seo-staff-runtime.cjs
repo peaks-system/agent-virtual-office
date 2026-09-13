@@ -30,6 +30,7 @@ const TOP_LEVEL = new Set(['siteUrl', 'generatedAt', 'public', 'google'])
 const PUBLIC = new Set(['facts', 'hypotheses', 'unknowns', 'pages', 'limits', 'usage'])
 const GOOGLE = new Set(['analytics', 'sitemaps', 'inspection', 'facts', 'unknowns', 'property', 'siteUrl', 'generatedAt'])
 const SAFE_KEYS = new Set(['message', 'url', 'evidence', 'scope', 'source', 'type', 'value', 'status', 'count', 'title', 'description', 'headings', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'canonical', 'noindex', 'robots', 'sitemap', 'redirects', 'from', 'to', 'brokenLinks', 'renderingObstacles', 'thinDuplicateCandidates', 'httpStatus', 'requests', 'pages', 'bytes', 'duration', 'durationMs', 'requestMs', 'responseBytes', 'totalBytes', 'clicks', 'impressions', 'ctr', 'position', 'query', 'page', 'device', 'country', 'date', 'property', 'inspection', 'indexStatus', 'coverage', 'lastCrawl', 'submitted', 'discovered', 'errors', 'warnings', 'path', 'lastSubmitted', 'lastDownloaded', 'isPending', 'verdict', 'coverageState', 'robotsTxtState', 'indexingState', 'lastCrawlTime', 'pageFetchState', 'googleCanonical', 'userCanonical'])
+for (const key of ['headCheck', 'checkedAt', 'method']) SAFE_KEYS.add(key)
 const FLOW = [
   { staffId: 'res', stage: 'draft', instruction: 'research' },
   { staffId: 'arch', stage: 'review', instruction: 'strategy' },
@@ -148,10 +149,11 @@ function createSeoStaffRuntime({ root, provider = createCodexProvider(), timeout
       const step = { staffId: flow.staffId, stage: flow.stage, status: 'running' }
       run.status = 'running'; run.staffId = flow.staffId; run.stage = flow.stage; run.steps.push(step); save(run, runDir)
       const instructions = `${buildInstructions(staffConfig, flow.staffId, flow.stage)}\n\n${maintenance ? `【技術保守専用工程・今回の範囲制限】\n${workflow.boundary}` : '【SEO専用工程】'}\n${workflow.stages[flow.instruction]}\n\n過去の担当記録は参考情報であり、今回提供された事実・未確認事項より優先しません。`
+      const scopedInstructions = maintenance ? `${instructions}\n\n${workflow.resultRules || ''}` : instructions
       const input = JSON.stringify({ seoStage: flow.instruction, evidence: content, ownMemory: memory, ownHistory: history.map(item => ({ stage: item.stage, output: item.output.slice(0, MAX_MEMORY) })) })
       let timer, abort
       const output = await Promise.race([
-        provider({ staffId: flow.staffId, instructions, input, cwd, signal: controller.signal, execution: { ...run.execution } }),
+        provider({ staffId: flow.staffId, instructions: scopedInstructions, input, cwd, signal: controller.signal, execution: { ...run.execution } }),
         new Promise((_, reject) => {
           timer = setTimeout(() => { controller.abort(); reject(new Error('timeout')) }, Math.min(timeoutMs, 120000))
           abort = () => reject(new Error('cancelled'))
@@ -185,7 +187,7 @@ function createSeoStaffRuntime({ root, provider = createCodexProvider(), timeout
       const quality = await invoke(FLOW[3], { scope, public: { facts: run.evidence.public.facts || [], hypotheses: run.evidence.public.hypotheses || [], unknowns: run.evidence.public.unknowns || [], pages: run.evidence.public.pages || [] }, google: { facts: run.evidence.google?.facts || [], unknowns: run.evidence.google?.unknowns || [], inspection: run.evidence.google?.inspection || null }, proposals: { strategy, technicalFixes } })
       run.result = await invoke(FLOW[4], { scope, review: quality, findings: { research, strategy, technicalFixes } })
       }
-      run.status = 'awaiting-human'; run.stage = 'final'; run.staffId = null
+      run.status = maintenance ? 'review-complete' : 'awaiting-human'; run.stage = 'final'; run.staffId = null
     } catch {
       run.status = controller.signal.aborted ? 'cancelled' : 'error'
       run.error = run.status === 'cancelled' ? 'SEO AI実行を中止しました。時間制限に達した場合も停止します。' : 'SEO AI実行を完了できませんでした。保存済みの診断結果と設定を確認してください。'
