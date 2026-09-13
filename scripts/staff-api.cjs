@@ -1,4 +1,5 @@
 const path = require('node:path')
+const { createSitePolicy } = require('./site-policy.cjs')
 const { createStaffRuntime } = require('./staff-runtime.cjs')
 const { createCodexProvider } = require('./codex-staff-provider.cjs')
 const { resolveExecution } = require('./staff-model-policy.cjs')
@@ -15,6 +16,7 @@ function permitted(req) {
 }
 
 function createStaffApi({ root, authorize = () => true, runtime: suppliedRuntime } = {}) {
+  const policies = createSitePolicy(root)
   let runtime = suppliedRuntime
   const getRuntime = () => runtime ||= createStaffRuntime({
     provider: createCodexProvider(),
@@ -55,11 +57,15 @@ function createStaffApi({ root, authorize = () => true, runtime: suppliedRuntime
           || typeof body.request !== 'string' || !body.request.trim() || body.request.length > 8000) {
         return reply(res, 400, { error: 'プロジェクトと8,000文字以内の依頼文を指定してください。' })
       }
+      const profile = policies.requirePermission(body.projectId, 'ai')
+      if (profile.category !== 'general') return reply(res, 403, { error: '通常のAI依頼は一般サイト専用です。制限対象サイトは診断結果の技術保守を利用してください。' })
+      if (body.execution?.model === 'gpt-6-astra' && (typeof body.astraReason !== 'string' || body.astraReason.trim().length < 5)) return reply(res, 400, { error: 'Astraが必要な理由と今回の承認を指定してください。' })
       let execution
-      try { execution = resolveExecution(body.execution) } catch (error) { return reply(res, 400, { error: error.message }) }
+      try { execution = resolveExecution(body.execution || { model: profile.model, reasoningEffort: profile.reasoningEffort }) } catch (error) { return reply(res, 400, { error: error.message }) }
       const run = getRuntime().start({ projectId: body.projectId, request: body.request.trim(), execution })
       return reply(res, 202, run)
     } catch (error) {
+      if (error?.code === 'SITE_POLICY') return reply(res, 403, { error: error.message })
       // Do not reflect CLI output, credential paths or arbitrary exception data.
       if (!res.headersSent) reply(res, error instanceof SyntaxError ? 400 : 409, {
         error: error instanceof SyntaxError ? '送信データを読み取れませんでした。' : '実行を開始できませんでした。実行中の依頼やスタッフ設定を確認してください。',

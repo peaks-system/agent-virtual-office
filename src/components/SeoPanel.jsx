@@ -22,12 +22,14 @@ function Findings({ title, items }) {
   </details>
 }
 const stageName = { res: '根拠整理', arch: '検索意図・優先度', dev: '技術的な改善案', qa: '誤診・危険・要件漏れの点検', pm: '最終取りまとめ' }
-export default function SeoPanel({ project }) {
+export default function SeoPanel({ project, settings }) {
   const base = `/projects/${encodeURIComponent(project.id)}`
   const [state, setState] = useState(null), [url, setUrl] = useState(''), [connection, setConnection] = useState(null)
   const [sites, setSites] = useState([]), [property, setProperty] = useState(''), [error, setError] = useState('')
   const [busy, setBusy] = useState(false), [effort, setEffort] = useState(modelPolicy.defaultReasoningEffort), [astra, setAstra] = useState(false)
+  const [astraReason, setAstraReason] = useState('')
   const fileInput = useRef(null)
+  useEffect(() => { if (settings) { setEffort(settings.reasoningEffort); setProperty(settings.property || ''); setAstra(false) } }, [settings?.revision, settings?.projectId])
   const active = busy || state?.audit?.status === 'running' || ['queued', 'running'].includes(state?.proposal?.status)
   useEffect(() => { setAstra(false) }, [url, effort, state?.public?.generatedAt, state?.google?.generatedAt])
   useEffect(() => {
@@ -65,16 +67,16 @@ export default function SeoPanel({ project }) {
     })
   }
   const report = state?.public, gsc = state?.google, run = state?.proposal
-  let maintenance = false
-  try { maintenance = maintenancePolicy.restrictedHosts.includes(new URL(state?.siteUrl).hostname.toLowerCase()) } catch {}
+  let maintenance = state?.settings?.category === 'restricted'
+  try { maintenance = maintenance || maintenancePolicy.restrictedHosts.includes(new URL(state?.siteUrl).hostname.toLowerCase()) } catch {}
   const requestReview = () => {
     const execution = { model: astra ? modelPolicy.approvalRequiredModel : modelPolicy.defaultModel, reasoningEffort: effort, humanApprovedAstra: astra }
     setAstra(false)
-    action(() => api(`${base}/proposals`, { execution }))
+    action(() => api(`${base}/proposals`, { execution, astraReason }))
   }
   return <section className="corp-real-work" aria-label="SEO診断モード" style={{ overflowWrap: 'anywhere' }}>
     <h2>SEO診断モード</h2>
-    {maintenance && <MaintenanceActionSummary result={state?.maintenanceAction} history={state?.maintenanceActionHistory} busy={active} onCheck={() => action(() => api(`${base}/maintenance-actions`, {}))} />}
+    {state?.siteUrl === 'https://school-jk-style.com/' && <MaintenanceActionSummary result={state?.maintenanceAction} history={state?.maintenanceActionHistory} busy={active} onCheck={() => action(() => api(`${base}/maintenance-actions`, {}))} />}
     {error && <p role="alert" className="corp-error">{error}</p>}
     <details open={!maintenance}><summary>{maintenance ? '診断の詳細・接続設定・AIの検討記録' : '診断と接続設定'}</summary>
     <p className="corp-muted">公開ページを読み取り専用で調査します。サイトの編集・公開・削除やインデックス申請は行いません。</p>
@@ -132,9 +134,10 @@ export default function SeoPanel({ project }) {
     <h3>{maintenance ? 'AIチームの技術保守' : 'AIスタッフの改善案'}</h3>
     <p className="corp-muted">{maintenance ? 'このサイトは技術保守のみです。PMの整理 → 技術担当と品質管理の独立した初案 → 技術担当の修正 → 品質管理の再点検 → PMの最終報告まで自動で進みます。HTTP応答・リダイレクト回数・見出し数だけを送信します。本文・検索語・検索実績は送りません。公開・書き込みは行わず、調査報告で完了します。' : '市場調査 → マーケティング戦略 → Webエンジニア → 品質管理 → PMの順に検討します。診断情報・検索実績を既存のCodex接続へ送信します。認証情報は送りません。'}</p>
     <label>{maintenance ? '技術保守の思考レベル' : 'SEO診断の思考レベル'}<select value={effort} disabled={active} onChange={event => setEffort(event.target.value)}><option value="low">低</option><option value="medium">中（標準）</option></select></label>
+    <label>Astraを使う必要性と期待する効果<input value={astraReason} maxLength={500} onChange={e => { setAstraReason(e.target.value); setAstra(false) }} /></label>
     <label><input type="checkbox" checked={astra} disabled={active} onChange={event => setAstra(event.target.checked)} />{maintenance ? '今回の技術保守の全工程だけAstraを使うことを承認する' : '今回のSEO検討の全工程だけAstraを使うことを承認する'}</label>
     <p className="corp-muted">標準は5.6 Terraです。AI実行は利用枠を消費します。</p>
-    <button className="corp-primary" disabled={active || !report} onClick={requestReview}>{maintenance ? 'AIチームに技術保守を依頼' : 'AIスタッフに改善案を依頼'}</button>
+    <button className="corp-primary" disabled={active || !report || !state?.settings?.permissions?.ai || (astra && astraReason.trim().length < 5)} onClick={requestReview}>{maintenance ? 'AIチームに技術保守を依頼' : 'AIスタッフに改善案を依頼'}</button>
     {maintenance && <p className="corp-muted">継続監視ではなく、押すたびに1回の検討です。情報不足なら追加確認を求めます。下書きの変更は別途「WordPress保守」で内容を確認して承認してください。</p>}
     {maintenance && run && run.mode !== 'maintenance' && <p>以前のSEO検討は今回の技術保守の結果ではありません。上のボタンから技術保守を依頼してください。</p>}
     {run && (!maintenance || run.mode === 'maintenance') && <div aria-live="polite">

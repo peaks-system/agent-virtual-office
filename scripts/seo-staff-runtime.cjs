@@ -210,9 +210,9 @@ function createSeoStaffRuntime({ root, provider = createCodexProvider(), timeout
     queueMicrotask(() => { void drain() })
   }
   return {
-    start({ projectId, evidence, execution } = {}) {
+    start({ projectId, evidence, execution, maintenance: restricted = false } = {}) {
       if (closed || active || queue.length || !PROJECT_ID.test(projectId || '')) throw new Error('SEO AI is already running')
-      const maintenance = isMaintenanceSite(evidence?.siteUrl)
+      const maintenance = restricted || isMaintenanceSite(evidence?.siteUrl)
       const run = { id: randomUUID(), projectId, mode: maintenance ? 'maintenance' : 'seo', status: 'queued', stage: null, staffId: null, steps: [], result: null, error: null, execution: resolveExecution(execution), createdAt: Date.now(), evidence: sanitizeEvidence(maintenance ? maintenanceEvidence(evidence) : evidence) }
       stateRoot = path.join(projectRoot, '.office-work', maintenance ? 'maintenance-staff' : 'seo-staff')
       runs.set(run.id, run)

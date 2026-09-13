@@ -8,11 +8,13 @@ const { createSearchConsole } = require('./search-console.cjs')
 const { createSeoStaffRuntime } = require('./seo-staff-runtime.cjs')
 const { resolveExecution } = require('./staff-model-policy.cjs')
 const { redactDiagnostics } = require('./seo-redaction.cjs')
+const { createSitePolicy } = require('./site-policy.cjs')
 const { isMaintenanceSite } = require('./maintenance-scope.cjs')
 const { createMaintenanceProbe } = require('./maintenance-probe.cjs')
 const { createMaintenanceActions } = require('./maintenance-actions.cjs')
 
 function createSeoApi({ root, authorize = () => true, crawler = auditSite, google, staff, probe = createMaintenanceProbe(), maintenanceActions = createMaintenanceActions() } = {}) {
+  const policies = createSitePolicy(root)
   const directory = path.join(root, '.office-work', 'seo')
   const jobs = new Map()
   let active = false, closed = false, crawlController = null
@@ -50,7 +52,7 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
     if (closed) return reply(res, 503, { error: 'オフィスを終了しています。' })
     try {
       const pathname = new URL(req.url, 'http://local').pathname.replace(/^\/api\/seo(?=\/|$)/, '')
-      const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals|checks|maintenance-actions))?$/)
+      const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals|checks|maintenance-actions|settings))?$/)
       const id = match?.[1], action = match?.[2]
       if (req.method === 'GET') {
         if (pathname === '/google/status') return reply(res, 200, await gsc().status())
@@ -65,7 +67,7 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
           } else if (value.proposal && ['queued', 'running'].includes(value.proposal.status)) {
             value.proposal = { ...value.proposal, status: 'cancelled', error: '再起動で実行は終了しました。必要に応じてもう一度依頼してください。' }
           }
-          return reply(res, 200, { ...value, audit: jobs.get(id) || null })
+          return reply(res, 200, { ...value, settings: policies.read(id), audit: jobs.get(id) || null })
         }
         return reply(res, 404, { error: '操作が見つかりません。' })
       }
@@ -87,14 +89,22 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
       if (!id || !action) return reply(res, 404, { error: '操作が見つかりません。' })
       const value = read(id)
       if (value.proposal?.id && ['queued', 'running'].includes(staff?.getRun(value.proposal.id)?.status)) return reply(res, 409, { error: 'AIによる検討の終了までお待ちください。' })
+      if (action === 'settings') {
+        if (active) return reply(res, 409, { error: '診断の終了をお待ちください。' })
+        const profile = policies.update(id, body)
+        save(id, { ...value, siteUrl: profile.siteUrl + '/' })
+        return reply(res, 200, profile)
+      }
       if (action === 'site') {
         if (active || (value.proposal?.id && ['queued', 'running'].includes(staff?.getRun(value.proposal.id)?.status))) return reply(res, 409, { error: '診断・AI実行の終了後にURLを変更してください。' })
         let siteUrl
         try { siteUrl = normalizeSiteUrl(body.siteUrl) } catch { return reply(res, 400, { error: '公開サイトのHTTP(S) URLを指定してください。内部アドレス・認証情報・特殊なポートは利用できません。' }) }
+        if (value.siteUrl && new URL(siteUrl).origin !== new URL(value.siteUrl).origin) return reply(res, 409, { error: '別サイトは新しいプロジェクトに登録してください。' })
         if (siteUrl !== value.siteUrl) save(id, { siteUrl, public: null, google: null, proposal: null })
         return reply(res, 200, read(id))
       }
       if (!value.siteUrl) return reply(res, 400, { error: '先に公開サイトURLを保存してください。' })
+      const profile = policies.requirePermission(id, 'diagnosis')
       if (action === 'maintenance-actions') {
         if (active) return reply(res, 409, { error: '確認の終了までお待ちください。' })
         active = true
@@ -130,7 +140,7 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
       }
       if (!value.public) return reply(res, 400, { error: 'まず公開サイトを診断してください。' })
       if (action === 'checks') {
-        if (active || !isMaintenanceSite(value.siteUrl) || !Number.isInteger(body.pageIndex) || body.pageIndex < 0 || body.pageIndex >= Math.min(value.public.pages?.length || 0, 10)
+        if (active || !Number.isInteger(body.pageIndex) || body.pageIndex < 0 || body.pageIndex >= Math.min(value.public.pages?.length || 0, 10)
           || body.generatedAt !== value.public.generatedAt) return reply(res, 409, { error: '再確認する診断記録を読み直してください。' })
         active = true
         try {
@@ -140,12 +150,16 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
           return reply(res, 200, checked)
         } finally { active = false }
       }
-      const publicEvidence = isMaintenanceSite(value.siteUrl) ? { ...value.public, pages: (value.public.pages || []).map((page, index) => ({ ...page, headCheck: value.maintenanceChecks?.[index] || null })) } : value.public
+      const publicEvidence = profile.category === 'restricted' ? { ...value.public, pages: (value.public.pages || []).map((page, index) => ({ ...page, headCheck: value.maintenanceChecks?.[index] || null })) } : value.public
       const evidence = { siteUrl: value.siteUrl, generatedAt: value.public.generatedAt, public: publicEvidence, google: value.google, maintenanceAction: value.maintenanceAction }
-      const run = ai().start({ projectId: id, evidence, execution: resolveExecution(body.execution) })
+      policies.requirePermission(id, 'ai')
+      const selection = body.execution || { model: profile.model, reasoningEffort: profile.reasoningEffort }
+      if (selection.model === 'gpt-6-astra' && (typeof body.astraReason !== 'string' || body.astraReason.trim().length < 5)) return reply(res, 400, { error: 'Astraが必要な理由を入力し、今回の使用を承認してください。' })
+      const run = ai().start({ projectId: id, evidence, maintenance: profile.category === 'restricted', execution: resolveExecution(selection) })
       save(id, { ...value, proposal: run })
       return reply(res, 202, run)
     } catch (error) {
+      if (!res.headersSent && error?.code === 'SITE_POLICY') return reply(res, 403, { error: error.message })
       // Never include arbitrary upstream exceptions, OAuth responses or request data.
       if (!res.headersSent && error?.code === 'SEO_BROWSER_OPEN') return reply(res, 409, { error: 'Google承認画面をブラウザーで開けませんでした。Windowsの既定のブラウザーを確認してから、もう一度接続してください。' })
       if (!res.headersSent && error?.code === 'SEO_CLIENT_FORMAT') return reply(res, 400, { error: '認証用JSONの形式が合いません。Google Cloudで作成した「デスクトップアプリ」のJSONを選んでください。ファイルの中身を貼り付ける必要はありません。' })

@@ -1,12 +1,14 @@
 'use strict'
 const https = require('node:https')
 const tls = require('node:tls')
-const { vettedAddresses } = require('./seo-crawler.cjs')
+const { normalizeSiteUrl, vettedAddresses } = require('./seo-crawler.cjs')
 const SITE = 'https://school-jk-style.com'
 const FIELDS = '?context=edit&_fields=id,title,content,status,modified_gmt'
 
 function createWordPressTransport({ request = https.request, resolve = vettedAddresses } = {}) {
-  return async function call(method, pageId, payload, credentials) {
+  return async function call(method, pageId, payload, credentials, target = { site: SITE, kind: 'pages' }) {
+    const origin = new URL(normalizeSiteUrl(target.site))
+    if (origin.protocol !== 'https:' || origin.origin !== target.site || !['pages', 'posts'].includes(target.kind)) throw new Error('WP_TARGET')
     if (!credentials || !['GET', 'POST'].includes(method)
       || (method === 'GET' && (!Number.isSafeInteger(pageId) || pageId < 1))
       || (method === 'POST' && (pageId !== null || payload?.status !== 'draft'
@@ -14,11 +16,11 @@ function createWordPressTransport({ request = https.request, resolve = vettedAdd
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 10000)
     try {
-      const addresses = await resolve('school-jk-style.com', undefined, { signal: controller.signal, deadline: Date.now() + 10000 })
+      const addresses = await resolve(origin.hostname, undefined, { signal: controller.signal, deadline: Date.now() + 10000 })
       if (controller.signal.aborted || !addresses.length) throw new Error('WP_NETWORK')
       const address = addresses[0]
       return await new Promise((accept, reject) => {
-        const req = request(`${SITE}/wp-json/wp/v2/pages${method === 'GET' ? '/' + pageId : ''}${FIELDS}`, {
+        const req = request(`${origin.origin}/wp-json/wp/v2/${target.kind}${method === 'GET' ? '/' + pageId : ''}${FIELDS}`, {
           method, agent: false, signal: controller.signal, rejectUnauthorized: true,
           ca: [...tls.getCACertificates('default'), ...tls.getCACertificates('system')],
           lookup: (_host, options, cb) => options?.all ? cb(null, [address]) : cb(null, address.address, address.family),

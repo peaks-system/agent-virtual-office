@@ -5,9 +5,12 @@ import modelPolicy from '../../config/model-policy.json'
 
 const stages = { planning: '依頼の整理・割り振り', draft: '独立した初案', review: '相互レビュー', revise: '修正', quality: '品質確認', final: '取りまとめ' }
 const statuses = { queued: '開始待ち', running: '実行中', 'awaiting-human': '人間の最終確認待ち', error: '実行できませんでした', cancelled: '中止しました' }
-const ACTIVE_KEY = 'office-staff-active-run'
+const ACTIVE_PREFIX = 'office-staff-active-run:'
 
-export default function StaffWorkPanel({ project }) {
+export default function StaffWorkPanel({ project, settings }) {
+  const ACTIVE_KEY = ACTIVE_PREFIX + (project?.id || 'empty')
+  const [astraReason, setAstraReason] = useState('')
+  useEffect(() => { if (settings) setEffort(settings.reasoningEffort) }, [settings?.revision])
   const [request, setRequest] = useState('')
   const [run, setRun] = useState(null)
   const [runId, setRunId] = useState(() => { try { return localStorage.getItem(ACTIVE_KEY) || null } catch { return null } })
@@ -43,7 +46,7 @@ export default function StaffWorkPanel({ project }) {
     const execution = { model: approveAstra ? modelPolicy.approvalRequiredModel : modelPolicy.defaultModel, reasoningEffort: effort, humanApprovedAstra: approveAstra }
     setApproveAstra(false)
     try {
-      const response = await fetch('/api/staff/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, request: request.trim(), execution }) })
+      const response = await fetch('/api/staff/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, request: request.trim(), execution, astraReason }) })
       const value = await response.json()
       if (!response.ok) throw new Error(value.error || '開始できませんでした。')
       setRun(value); setRunId(value.id)
@@ -62,13 +65,15 @@ export default function StaffWorkPanel({ project }) {
   return <section className="corp-real-work" aria-label="スタッフへのAI依頼">
     <h2>スタッフへのAI依頼</h2>
     <p className="corp-muted">既存のCodexログインで実行します。利用枠を消費します。社長への割り当てや、投稿・公開・購入・削除は行いません。</p>
+<p>{settings?.category === 'general' ? '記事案の検討結果から保存する文章を選び、WordPress保守で変更案を確認してください。' : '通常の文章作成は一般サイト専用です。制限対象は診断結果の技術保守、未分類は読み取り診断を利用してください。'}</p>
     <form className="corp-editor" onSubmit={start}>
       <label>人間からの依頼<textarea rows={4} maxLength={8000} value={request} onChange={e => setRequest(e.target.value)} placeholder="目的、対象、期限、条件、参考情報を入力" /></label>
       <p className="corp-muted">{project ? `対象：${project.title}` : '先にプロジェクトを追加・選択してください。'}</p>
       <p className="corp-muted">標準：5.6 Terra。自動でAstraへ切り替わることはありません。</p>
       <label>思考レベル<select value={effort} disabled={active} onChange={e => setEffort(e.target.value)}><option value="low">低（速度優先）</option><option value="medium">中（標準）</option></select></label>
+      <label>Astraを使う必要性と期待する効果<input value={astraReason} maxLength={500} onChange={e => { setAstraReason(e.target.value); setApproveAstra(false) }} /></label>
       <label><input type="checkbox" checked={approveAstra} disabled={active} onChange={e => setApproveAstra(e.target.checked)} />今回の共同作業の全工程にAstraを使うことを承認する（利用量が増える場合があります）</label>
-      <button className="corp-primary" disabled={!project || !request.trim() || active || (!run && !!runId && !error)}>{active ? '実行中…' : 'PMに依頼して共同作業を開始'}</button>
+      <button className="corp-primary" disabled={!project || settings?.category !== 'general' || !settings?.permissions?.ai || (approveAstra && astraReason.trim().length < 5) || !request.trim() || active || (!run && !!runId && !error)}>{active ? '実行中…' : 'PMに依頼して共同作業を開始'}</button>
     </form>
     {error && <><p role="alert" className="corp-error">{error}</p>{!active && <button type="button" onClick={() => {
       setRunId(null); setRun(null); setError(''); useStaffRunState.getState().applyRun(null)

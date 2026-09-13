@@ -12,6 +12,8 @@ const fake = { username: 'test-only', password: 'a'.repeat(24) }
 const page = (id, title, content) => ({ id, title: { raw: title }, content: { raw: content }, modified_gmt: '2026-09-11T00:00:00', status: 'draft' })
 async function fixture(run, behavior) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-maintenance-test-'))
+  fs.mkdirSync(path.join(root, '.office-work', 'seo'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.office-work', 'seo', 'p.json'), JSON.stringify({ siteUrl: 'https://school-jk-style.com/' }))
   const calls = []; let draft, api
   const call = async (method, id, payload) => {
     calls.push({ method, id, payload })
@@ -36,7 +38,7 @@ describe('WordPress approval and draft boundary', () => {
     const proposal = await propose()
     expect(calls).toHaveLength(0)
     expect((await approve(proposal)).status).toBe(409)
-    await post('/connection', fake)
+    await post('/projects/p/connection', fake)
     expect((await post('/projects/p/approvals', { id: proposal.id, hash: 'changed', approved: true })).status).toBe(409)
     expect((await post('/projects/p/approvals', { id: proposal.id, hash: proposal.hash })).status).toBe(409)
     expect(calls).toHaveLength(0)
@@ -53,7 +55,7 @@ describe('WordPress approval and draft boundary', () => {
     expect(disk).not.toContain(fake.username)
   }))
   it('denies foreign origins, raw markup, absent attestation, huge input and mutation verbs', () => fixture(async ({ post, propose, calls }) => {
-    expect((await post('/connection', fake, 'https://evil.test')).status).toBe(403)
+    expect((await post('/projects/p/connection', fake, 'https://evil.test')).status).toBe(403)
     for (const value of [{ ...input, neutral: false }, { ...input, content: '<script>alert(1)</script>' }, { ...input, content: '[shortcode]' }, { ...input, content: 'https://other.test/' }, { ...input, title: 'a'.repeat(33000) }]) {
       expect((await post('/projects/p/proposals', value)).status).toBeGreaterThanOrEqual(400)
     }
@@ -64,7 +66,7 @@ describe('WordPress approval and draft boundary', () => {
   it('snapshots only the selected source and refuses a stale approval', () => {
     let reads = 0
     return fixture(async ({ post, propose, approve, calls }) => {
-      await post('/connection', fake)
+      await post('/projects/p/connection', fake)
       const proposal = await propose({ ...input, sourceId: 7 })
       expect(proposal.source.id).toBe(7)
       expect((await approve(proposal)).status).toBe(409)
@@ -72,18 +74,18 @@ describe('WordPress approval and draft boundary', () => {
     }, (method, id) => method === 'GET' ? page(id, ++reads === 1 ? 'old' : 'new', '<p>neutral</p>') : undefined)
   })
   it('retains uncertain writes across restart and never retries them', () => fixture(async ({ post, propose, approve, get, restart, calls }) => {
-    await post('/connection', fake)
+    await post('/projects/p/connection', fake)
     const proposal = await propose()
     await approve(proposal)
     expect((await get()).records[0].status).toBe('uncertain')
     restart()
     expect((await get()).configured).toBe(false)
-    await post('/connection', fake)
+    await post('/projects/p/connection', fake)
     expect((await approve(proposal)).status).toBe(409)
     expect(calls.filter(c => c.method === 'POST')).toHaveLength(1)
   }, method => { if (method === 'POST') throw new Error('mock timeout') }))
   it('records a created ID even when quality verification fails', () => fixture(async ({ post, propose, approve, get, calls }) => {
-    await post('/connection', fake)
+    await post('/projects/p/connection', fake)
     const proposal = await propose(); await approve(proposal)
     const saved = (await get()).records[0]
     expect(saved.draftId).toBe(42); expect(saved.status).toBe('needs-review')
@@ -91,21 +93,21 @@ describe('WordPress approval and draft boundary', () => {
     expect(calls.filter(c => c.method === 'POST')).toHaveLength(1)
   }, (method, id) => { if (method === 'GET' && id === 42) throw new Error('mock read failure') }))
   it('serializes simultaneous approval requests', () => fixture(async ({ post, propose, approve, calls }) => {
-    await post('/connection', fake)
+    await post('/projects/p/connection', fake)
     const proposal = await propose()
     const replies = await Promise.all([approve(proposal), approve(proposal)])
     expect(replies.map(r => r.status).sort()).toEqual([200, 409])
     expect(calls.filter(c => c.method === 'POST')).toHaveLength(1)
   }))
   it('does not trust a modified saved proposal', () => fixture(async ({ post, propose, approve, calls, root }) => {
-    await post('/connection', fake)
+    await post('/projects/p/connection', fake)
     const proposal = await propose()
     const file = path.join(root, '.office-work/wordpress/p.json')
     const records = JSON.parse(fs.readFileSync(file, 'utf8')); records[0].after.title = 'tampered'; fs.writeFileSync(file, JSON.stringify(records))
     expect((await approve(proposal)).status).toBe(409); expect(calls).toHaveLength(0)
   }))
   it('creates a separate draft from one source and verifies that source remained unchanged', () => fixture(async ({ post, propose, approve, get, calls }) => {
-    await post('/connection', fake)
+    await post('/projects/p/connection', fake)
     const proposal = await propose({ ...input, sourceId: 7 }); await approve(proposal)
     const saved = (await get()).records[0]
     expect(saved.status).toBe('checked'); expect(saved.checks.sourceUnchanged).toBe(true)
@@ -113,7 +115,7 @@ describe('WordPress approval and draft boundary', () => {
     expect(saved.source.id).toBe(7); expect(saved.draftId).toBe(42)
   }))
   it('never presents the source ID as a disposable new draft', () => fixture(async ({ post, propose, approve, get }) => {
-    await post('/connection', fake)
+    await post('/projects/p/connection', fake)
     const proposal = await propose({ ...input, sourceId: 7 }); await approve(proposal)
     const saved = (await get()).records[0]
     expect(saved.status).toBe('uncertain'); expect(saved.draftId).toBeUndefined()

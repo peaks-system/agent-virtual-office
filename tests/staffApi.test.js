@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import http from 'node:http'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { createStaffApi, permitted } = require('../scripts/staff-api.cjs')
@@ -14,7 +17,10 @@ describe('staff HTTP boundary', () => {
   it('starts, polls and cancels only validated same-origin requests', async () => {
     const run = { id: 'run-1', status: 'queued' }
     const runtime = { start: vi.fn(() => run), getRun: vi.fn(id => id === run.id ? run : null), cancel: vi.fn(() => { run.status = 'cancelled' }), close: vi.fn() }
-    const api = createStaffApi({ runtime })
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'staff-policy-'))
+    const policies = require('../scripts/site-policy.cjs').createSitePolicy(root)
+    policies.update('project-1', { ...policies.read('project-1'), siteUrl: 'https://example.com', category: 'general', permissions: { diagnosis: true, ai: true, draft: true }, confirmed: true })
+    const api = createStaffApi({ root, runtime })
     const server = http.createServer(api.handler)
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
     const base = `http://127.0.0.1:${server.address().port}`
@@ -36,6 +42,7 @@ describe('staff HTTP boundary', () => {
     } finally {
       await api.close()
       await new Promise(resolve => server.close(resolve))
+      fs.rmSync(root, { recursive: true, force: true })
     }
   })
 })

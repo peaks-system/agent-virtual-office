@@ -1,12 +1,13 @@
 'use strict'
 const https = require('node:https')
 const tls = require('node:tls')
-const { vettedAddresses } = require('./seo-crawler.cjs')
+const { vettedAddresses, normalizeSiteUrl } = require('./seo-crawler.cjs')
 const { isMaintenanceSite, resourceKind } = require('./maintenance-scope.cjs')
 function createMaintenanceProbe({ request = https.request, resolve = vettedAddresses } = {}) {
   return async (value, site) => {
     const url = new URL(value), base = new URL(site)
-    if (!isMaintenanceSite(base.href) || url.origin !== base.origin || url.protocol !== 'https:' || url.username || url.password || url.port) throw new Error('Invalid maintenance URL')
+    normalizeSiteUrl(url.href)
+    if (url.origin !== base.origin || url.protocol !== 'https:' || url.username || url.password || url.port) throw new Error('Invalid maintenance URL')
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 10000)
     try {
       const rows = await resolve(url.hostname, undefined, { signal: controller.signal, deadline: Date.now() + 10000 })

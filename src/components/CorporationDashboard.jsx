@@ -10,6 +10,7 @@ import './corporationDashboard.css'
 import StaffWorkPanel from './StaffWorkPanel'
 import SeoPanel from './SeoPanel'
 import WordPressPanel from './WordPressPanel'
+import SiteSettingsPanel from './SiteSettingsPanel'
 
 export function receivedStatus(externalStatus, now) {
   return Object.entries(externalStatus).filter(([,value]) => value && (!value.expiresAt || value.expiresAt > now))
@@ -76,6 +77,7 @@ export default function CorporationDashboard({ children }) {
   const [newTitle, setNewTitle] = useState('')
   const [exportError, setExportError] = useState('')
   const [workspace, setWorkspace] = useState('diagnosis')
+  const [siteSettings, setSiteSettings] = useState(null)
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
   const actual = executableReceivedStatus({ ...externalStatus, ...runStatuses }, now)
   const live = rosterStatusByRole(actual)
@@ -134,11 +136,12 @@ export default function CorporationDashboard({ children }) {
           <h2>作業スペース</h2>
           <p className="corp-muted">{selected ? selected.title : '左側でプロジェクトを追加・選択してください。'}</p>
           <nav className="corp-workspace-nav" aria-label="作業内容の切り替え">
-            {[['diagnosis', '診断結果'], ['wordpress', 'WordPress保守'], ['request', 'AIへの依頼']].map(([id, label]) => <button key={id} aria-pressed={workspace === id} aria-controls={`workspace-${id}`} onClick={() => setWorkspace(id)}>{label}</button>)}
+            {[['settings', 'サイト設定'], ['diagnosis', '診断結果'], ['wordpress', 'WordPress保守'], ['request', 'AIへの依頼']].map(([id, label]) => <button key={id} aria-pressed={workspace === id} aria-controls={`workspace-${id}`} onClick={() => setWorkspace(id)}>{label}</button>)}
           </nav>
-          <div id="workspace-diagnosis" hidden={workspace !== 'diagnosis'}>{selected && <SeoPanel key={`seo-${selected.id}`} project={selected} />}</div>
-          <div id="workspace-wordpress" hidden={workspace !== 'wordpress'}>{selected && <WordPressPanel key={`wordpress-${selected.id}`} project={selected} />}</div>
-          <div id="workspace-request" hidden={workspace !== 'request'}><StaffWorkPanel project={selected} /></div>
+          <div id="workspace-settings" hidden={workspace !== 'settings'}>{selected && <SiteSettingsPanel key={selected.id} project={selected} onSettings={setSiteSettings} />}</div>
+          <div id="workspace-diagnosis" hidden={workspace !== 'diagnosis'}>{selected && <SeoPanel key={`seo-${selected.id}`} project={selected} settings={siteSettings?.projectId === selected.id ? siteSettings : null} />}</div>
+          <div id="workspace-wordpress" hidden={workspace !== 'wordpress'}>{selected && <WordPressPanel key={`wordpress-${selected.id}`} project={selected} settings={siteSettings?.projectId === selected.id ? siteSettings : null} />}</div>
+          <div id="workspace-request" hidden={workspace !== 'request'}><StaffWorkPanel key={selected?.id || 'empty'} project={selected} settings={siteSettings?.projectId === selected?.id ? siteSettings : null} /></div>
         </section>
       </main>
       <aside className="corp-right corp-card">

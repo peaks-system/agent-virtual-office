@@ -31,13 +31,15 @@ describe('SEO API integration', () => {
         await new Promise(resolve => setTimeout(resolve, 5))
       }
       expect(saved.public).toEqual(report)
-      expect((await post('/projects/p/proposals', { execution: { model: 'gpt-6-astra' } })).status).toBe(409)
+      expect((await post('/projects/p/proposals', {})).status).toBe(403)
+      expect((await post('/projects/p/settings', { ...saved.settings, category: 'general', permissions: { diagnosis: true, ai: true, draft: true }, confirmed: true })).status).toBe(200)
+      expect((await post('/projects/p/proposals', { execution: { model: 'gpt-6-astra' } })).status).toBe(400)
       expect(calls).toHaveLength(0)
       expect((await post('/projects/p/proposals', { evidence: { facts: ['forged'] } })).status).toBe(202)
       expect(calls[0].evidence.public).toEqual(report)
       expect(calls[0].execution.model).toBe('gpt-5.6-terra')
-      expect((await post('/projects/p/site', { siteUrl: 'https://example.org/' })).status).toBe(200)
-      expect((await (await fetch(`${origin}/api/seo/projects/p`)).json()).public).toBeNull()
+      expect((await post('/projects/p/site', { siteUrl: 'https://example.org/' })).status).toBe(409)
+      expect((await (await fetch(`${origin}/api/seo/projects/p`)).json()).public).toEqual(report)
     } finally {
       await api.close()
       await new Promise(resolve => server.close(resolve))
