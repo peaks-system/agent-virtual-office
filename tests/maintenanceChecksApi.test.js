@@ -13,11 +13,17 @@ it('rechecks only saved indexed URLs, rejects stale/foreign input and carries HE
   fs.writeFileSync(path.join(dir, 'p.json'), JSON.stringify(source))
   const probes = [], staffCalls = []
   const check = { status: 404, type: 'html', method: 'HEAD', checkedAt: '2026-09-13T00:00:00Z' }
-  const api = createSeoApi({ root, probe: async (...args) => { probes.push(args); return check }, staff: { start: data => { staffCalls.push(data); return { id: 'r', status: 'review-complete' } }, getRun: () => null, close: async () => {} } })
+  const actionCalls = []
+  const api = createSeoApi({ root, maintenanceActions: async site => { actionCalls.push(site); return { checkedAt: '2026-09-13T00:00:00Z', items: [], mode: 'read-only' } }, probe: async (...args) => { probes.push(args); return check }, staff: { start: data => { staffCalls.push(data); return { id: 'r', status: 'review-complete' } }, getRun: () => null, close: async () => {} } })
   const server = http.createServer(api.handler); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = `http://127.0.0.1:${server.address().port}`
   const post = (route, body, from = origin) => fetch(`${origin}/api/seo/projects/p/${route}`, { method: 'POST', headers: { origin: from, 'content-type': 'application/json' }, body: JSON.stringify(body) })
   try {
+    expect((await post('maintenance-actions', {}, 'https://other.test')).status).toBe(403)
+    expect(actionCalls).toHaveLength(0)
+    expect((await post('maintenance-actions', { siteUrl: 'http://127.0.0.1/' })).status).toBe(200)
+    expect(actionCalls).toEqual([source.siteUrl])
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'p.json'), 'utf8')).maintenanceActionHistory).toHaveLength(1)
     expect((await post('checks', { pageIndex: 0, generatedAt: source.public.generatedAt }, 'https://other.test')).status).toBe(403)
     expect((await post('checks', { pageIndex: 1, generatedAt: source.public.generatedAt })).status).toBe(409)
     expect((await post('checks', { pageIndex: 0, generatedAt: 'old' })).status).toBe(409)

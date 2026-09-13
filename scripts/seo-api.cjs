@@ -10,8 +10,9 @@ const { resolveExecution } = require('./staff-model-policy.cjs')
 const { redactDiagnostics } = require('./seo-redaction.cjs')
 const { isMaintenanceSite } = require('./maintenance-scope.cjs')
 const { createMaintenanceProbe } = require('./maintenance-probe.cjs')
+const { createMaintenanceActions } = require('./maintenance-actions.cjs')
 
-function createSeoApi({ root, authorize = () => true, crawler = auditSite, google, staff, probe = createMaintenanceProbe() } = {}) {
+function createSeoApi({ root, authorize = () => true, crawler = auditSite, google, staff, probe = createMaintenanceProbe(), maintenanceActions = createMaintenanceActions() } = {}) {
   const directory = path.join(root, '.office-work', 'seo')
   const jobs = new Map()
   let active = false, closed = false, crawlController = null
@@ -49,7 +50,7 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
     if (closed) return reply(res, 503, { error: 'オフィスを終了しています。' })
     try {
       const pathname = new URL(req.url, 'http://local').pathname.replace(/^\/api\/seo(?=\/|$)/, '')
-      const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals|checks))?$/)
+      const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals|checks|maintenance-actions))?$/)
       const id = match?.[1], action = match?.[2]
       if (req.method === 'GET') {
         if (pathname === '/google/status') return reply(res, 200, await gsc().status())
@@ -94,6 +95,17 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
         return reply(res, 200, read(id))
       }
       if (!value.siteUrl) return reply(res, 400, { error: '先に公開サイトURLを保存してください。' })
+      if (action === 'maintenance-actions') {
+        if (active) return reply(res, 409, { error: '確認の終了までお待ちください。' })
+        active = true
+        try {
+          const result = await maintenanceActions(value.siteUrl)
+          if (closed) return reply(res, 503, { error: '終了したため結果を保存しませんでした。もう一度確認してください。' })
+          const history = [...(value.maintenanceActionHistory || []), result].slice(-10)
+          save(id, { ...value, maintenanceAction: result, maintenanceActionHistory: history })
+          return reply(res, 200, result)
+        } finally { active = false }
+      }
       if (action === 'audits') {
         if (active) return reply(res, 409, { error: '別の診断が実行中です。終了までお待ちください。' })
         active = true
@@ -129,7 +141,7 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
         } finally { active = false }
       }
       const publicEvidence = isMaintenanceSite(value.siteUrl) ? { ...value.public, pages: (value.public.pages || []).map((page, index) => ({ ...page, headCheck: value.maintenanceChecks?.[index] || null })) } : value.public
-      const evidence = { siteUrl: value.siteUrl, generatedAt: value.public.generatedAt, public: publicEvidence, google: value.google }
+      const evidence = { siteUrl: value.siteUrl, generatedAt: value.public.generatedAt, public: publicEvidence, google: value.google, maintenanceAction: value.maintenanceAction }
       const run = ai().start({ projectId: id, evidence, execution: resolveExecution(body.execution) })
       save(id, { ...value, proposal: run })
       return reply(res, 202, run)

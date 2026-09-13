@@ -171,4 +171,4 @@ async function auditSite(siteUrl, options = {}) {
   return redactDiagnostics({ siteUrl: normalized, generatedAt: new Date().toISOString(), limits, usage, pages, facts, hypotheses, unknowns })
 }
 
-module.exports = { auditSite, normalizeSiteUrl, vettedAddresses, blockedAddress }
+module.exports = { auditSite, normalizeSiteUrl, vettedAddresses, blockedAddress, defaultRequest }

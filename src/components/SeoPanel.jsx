@@ -4,6 +4,7 @@ import { charName } from '../i18n'
 import { useStaffRunState } from '../systems/staffRunState'
 import maintenancePolicy from '../../config/maintenance-workflow.json'
 import MaintenanceReview from './MaintenanceReview'
+import MaintenanceActionSummary from './MaintenanceActionSummary'
 
 async function api(route, body) {
   const response = await fetch(`/api/seo${route}`, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -73,6 +74,9 @@ export default function SeoPanel({ project }) {
   }
   return <section className="corp-real-work" aria-label="SEO診断モード" style={{ overflowWrap: 'anywhere' }}>
     <h2>SEO診断モード</h2>
+    {maintenance && <MaintenanceActionSummary result={state?.maintenanceAction} history={state?.maintenanceActionHistory} busy={active} onCheck={() => action(() => api(`${base}/maintenance-actions`, {}))} />}
+    {error && <p role="alert" className="corp-error">{error}</p>}
+    <details open={!maintenance}><summary>{maintenance ? '診断の詳細・接続設定・AIの検討記録' : '診断と接続設定'}</summary>
     <p className="corp-muted">公開ページを読み取り専用で調査します。サイトの編集・公開・削除やインデックス申請は行いません。</p>
     <form className="corp-editor" onSubmit={event => { event.preventDefault(); action(() => api(`${base}/site`, { siteUrl: url.trim() })) }}>
       <label>サイトURL<input type="url" value={url} maxLength={2048} placeholder="https://example.com/" disabled={active} onChange={event => setUrl(event.target.value)} required /></label>
@@ -101,7 +105,6 @@ export default function SeoPanel({ project }) {
       </select></label>
       <button disabled={active || !property || !state?.siteUrl} onClick={() => action(() => api(`${base}/google`, { property }))}>Google側の診断情報を取得</button>
     </>}
-    {error && <p role="alert" className="corp-error">{error}</p>}
     <h3>診断結果</h3>
     {!report && <p>公開サイトの診断はまだ実行していません。Googleのインデックス状態も未確認です。</p>}
     {report && <>
@@ -142,5 +145,6 @@ export default function SeoPanel({ project }) {
       {maintenance && <p className="corp-muted">報告の diagnostic-page:1 は「確認したページ情報」の1番目を指します。ページ名や本文はAIへ送信していません。</p>}
       {run.result && (maintenance ? <details><summary>AIの検討メモ（実行指示ではありません）</summary><p>過去のメモに「承認待ち」「承認後に実行」とあっても、実行可能な変更案が作成されたことを意味しません。上の確認結果と操作案内を優先してください。</p><pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{run.result}</pre></details> : <><h4>改善案と人間が行う操作</h4><pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{run.result}</pre></>)}
     </div>}
+    </details>
   </section>
 }
