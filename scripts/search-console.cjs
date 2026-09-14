@@ -196,9 +196,10 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
       stored = next
       return state('Google Search Console は設定済みです。')
     },
-    async connect() {
+    async connect({ launchBrowser = true } = {}) {
       await load()
       if (closed || storageError || !stored.client) return state(closed ? 'Google Search Console は閉じられています。' : undefined)
+      if (pending?.expiresAt && now() > pending.expiresAt) cancelPending()
       if (pending) return state()
       const starting = { starting: true }
       pending = starting
@@ -241,9 +242,15 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
       pending.timer = setTimeout(() => { if (pending && pending.server === server) { pending = null; server.close() } }, CALLBACK_TTL_MS)
       const auth = new URL(AUTH_ENDPOINT)
       auth.search = new URLSearchParams({ client_id: stored.client.client_id, redirect_uri: `http://127.0.0.1:${address.port}/oauth2/callback`, response_type: 'code', scope: SCOPE, state: nonce, code_challenge: challenge, code_challenge_method: 'S256', access_type: 'offline', prompt: 'consent' }).toString()
-      try { await openBrowser(auth.toString()) } catch { cancelPending(); throw Object.assign(new Error('browser'), { code: 'SEO_BROWSER_OPEN' }) }
+      pending.authorizationUrl = auth.toString()
+      if (launchBrowser) { try { await openBrowser(pending.authorizationUrl) } catch { cancelPending(); throw Object.assign(new Error('browser'), { code: 'SEO_BROWSER_OPEN' }) } }
       return state()
     },
+    authorizationRedirect() {
+      if (closed || !pending || pending.used || now() > pending.expiresAt) return null
+      return pending.authorizationUrl || null
+    },
+    async cancelAuthorization() { cancelPending(); return state('承認待ちを取り消しました。保存済みのGoogle接続と認証設定は保持しています。') },
     async sites() {
       await load()
       try {

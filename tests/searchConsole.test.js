@@ -11,6 +11,32 @@ const tokens = { access_token: 'mock-access-token', refresh_token: 'mock-refresh
 const response = body => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
 describe('Google Search Console boundary', () => {
+  it('reopens the pending browser redirect with PKCE and cancels without erasing saved authorization', async () => {
+    let clock = Date.now()
+    const vault = { read: async () => ({ client: client.installed, tokens }), write: vi.fn() }
+    const openBrowser = vi.fn()
+    const search = createSearchConsole({ vault, openBrowser, now: () => clock })
+    try {
+      await search.connect({ launchBrowser: false })
+      const first = search.authorizationRedirect(), parsed = new URL(first)
+      expect(parsed.origin).toBe('https://accounts.google.com')
+      expect(parsed.searchParams.get('scope')).toBe('https://www.googleapis.com/auth/webmasters.readonly')
+      expect(parsed.searchParams.get('code_challenge_method')).toBe('S256')
+      expect(parsed.searchParams.has('client_secret')).toBe(false)
+      expect(parsed.searchParams.has('code_verifier')).toBe(false)
+      expect(openBrowser).not.toHaveBeenCalled()
+      await search.connect({ launchBrowser: false }); expect(search.authorizationRedirect()).toBe(first)
+      expect(JSON.stringify(await search.status())).not.toContain('mock-client')
+      await search.cancelAuthorization()
+      expect(search.authorizationRedirect()).toBeNull()
+      expect(await search.status()).toMatchObject({ configured: true, connected: true, pending: false })
+      expect(vault.write).not.toHaveBeenCalled()
+      await search.connect({ launchBrowser: false })
+      expect(search.authorizationRedirect()).not.toBe(first)
+      clock += 301000; expect(search.authorizationRedirect()).toBeNull()
+      await search.connect({ launchBrowser: false }); expect(search.authorizationRedirect()).not.toBeNull()
+    } finally { await search.close() }
+  })
   it('waits for OS browser dispatch and keeps the OAuth URL out of Windows command arguments', async () => {
     for (const exitCode of [0, 1]) {
       const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), kill: vi.fn() })

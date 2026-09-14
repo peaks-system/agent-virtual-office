@@ -56,6 +56,15 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
       const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals|checks|maintenance-actions|settings|properties|property))?$/)
       const id = match?.[1], action = match?.[2]
       if (req.method === 'GET') {
+        if (pathname === '/google/authorize') {
+          // Only a deliberate click from this Office may start/reopen the redirect.
+          // Never return the OAuth URL as JSON or render credential material in HTML.
+          if (req.headers['sec-fetch-site'] !== 'same-origin' || req.headers['sec-fetch-mode'] !== 'navigate' || req.headers['sec-fetch-dest'] !== 'document' || req.headers['sec-fetch-user'] !== '?1') return reply(res, 403, { error: 'Officeの「Search Consoleに接続」ボタンから開いてください。' })
+          await gsc().connect({ launchBrowser: false })
+          const target = gsc().authorizationRedirect()
+          if (!target) { res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end('承認画面を準備できませんでした。Officeへ戻り、認証設定を確認してください。承認処理中の場合は完了をお待ちください。') }
+          res.writeHead(302, { Location: target, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); return res.end()
+        }
         if (pathname === '/google/status') return reply(res, 200, await gsc().status())
         if (pathname === '/google/sites') return reply(res, 200, await gsc().sites())
         if (id && action === 'properties') {
@@ -92,6 +101,7 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
       if (!body || typeof body !== 'object' || Array.isArray(body)) return reply(res, 400, { error: '入力形式を確認してください。' })
       if (pathname === '/google/configuration') { await gsc().configure(body.client); return reply(res, 200, await gsc().status()) }
       if (pathname === '/google/connection') { await gsc().connect(); return reply(res, 202, await gsc().status()) }
+      if (pathname === '/google/cancel-authorization') return reply(res, 200, await gsc().cancelAuthorization())
       if (pathname === '/google/disconnection') { await gsc().disconnect(); return reply(res, 200, await gsc().status()) }
       if (!id || !action) return reply(res, 404, { error: '操作が見つかりません。' })
       const value = read(id)

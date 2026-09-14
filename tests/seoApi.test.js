@@ -8,6 +8,26 @@ const require = createRequire(import.meta.url)
 const { createSeoApi } = require('../scripts/seo-api.cjs')
 
 describe('SEO API integration', () => {
+  it('allows OAuth redirects only from a user-activated same-origin navigation and protects cancellation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oauth-navigation-'))
+    let starts = 0, cancels = 0
+    const api = createSeoApi({ root, google: { connect: async options => { expect(options.launchBrowser).toBe(false); starts++ }, authorizationRedirect: () => 'https://accounts.google.com/o/oauth2/v2/auth', cancelAuthorization: async () => { cancels++; return { pending: false } }, close: async () => {} } })
+    const server = http.createServer(api.handler); await new Promise(r => server.listen(0,'127.0.0.1',r))
+    const origin = `http://127.0.0.1:${server.address().port}`, url = `${origin}/api/seo/google/authorize`
+    const headers = { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-user': '?1' }
+    // Node fetch overwrites Sec-Fetch-Mode, so exercise actual navigation headers via http.
+    const navigate = custom => new Promise(resolve => { http.get(url, { headers: custom }, res => { res.resume(); res.on('end', () => resolve({ code: res.statusCode, headers: res.headers })) }) })
+    try {
+      for (const invalid of [{}, { ...headers, 'sec-fetch-site': 'cross-site' }, { ...headers, 'sec-fetch-user': '?0' }, { ...headers, 'sec-fetch-dest': 'iframe' }]) expect((await navigate(invalid)).code).toBe(403)
+      expect(starts).toBe(0)
+      const valid = await navigate(headers); expect(valid.code).toBe(302); expect(valid.headers.location).toBe('https://accounts.google.com/o/oauth2/v2/auth'); expect(valid.headers['cache-control']).toBe('no-store')
+      expect(starts).toBe(1)
+      const cancelUrl = `${origin}/api/seo/google/cancel-authorization`
+      expect((await fetch(cancelUrl, { method:'POST',headers:{'content-type':'application/json'},body:'{}' })).status).toBe(403)
+      expect((await fetch(cancelUrl, { method:'POST',headers:{origin,'content-type':'application/json'},body:'{}' })).status).toBe(200)
+      expect(cancels).toBe(1)
+    } finally { await api.close(); await new Promise(r=>server.close(r)); fs.rmSync(root,{recursive:true,force:true}) }
+  })
   it('enforces origin, public URLs, server-owned evidence and model approval', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'seo-api-'))
     const calls = []

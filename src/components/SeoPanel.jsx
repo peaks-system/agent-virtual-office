@@ -91,7 +91,8 @@ export default function SeoPanel({ project, settings }) {
     <h3>Search Console接続</h3>
     <p role="status">接続状態：{connection?.pending ? 'Googleでの承認待ち' : connection?.connected ? '読み取り専用で接続済み' : connection?.configured ? '未接続（認証設定済み）' : '未接続（認証設定が必要）'}</p>
     {connection?.message && <p className="corp-muted">{connection.message}</p>}
-    <button disabled={active || !connection?.configured || connection?.pending} onClick={() => action(() => api('/google/connection', {}))}>Search Consoleに接続</button>
+    {!active && connection?.configured ? <a className="corp-primary" style={{ display: 'inline-block', padding: '9px 12px', borderRadius: 8 }} href="/api/seo/google/authorize" target="_blank" rel="noopener noreferrer">{connection.pending ? 'Google承認画面を開く（再表示）' : 'Search Consoleに接続'}</a> : <button disabled>Search Consoleに接続</button>}
+    {connection?.pending && <><p>別タブでGoogleの画面が開きます。表示されない場合は「再表示」を押してください。承認待ちは約5分で期限切れになります。</p><button disabled={active} onClick={() => action(() => api('/google/cancel-authorization', {}))}>承認待ちを取り消す</button></>}
     <p className="corp-muted">通常のブラウザーでGoogle承認画面が開きます。要求する権限はSearch Consoleの読み取りだけです。認証情報はWindowsで暗号化し、画面・Git・AIに渡しません。</p>
     <details><summary>Google接続の準備</summary>
       <p>まずGoogle Cloudで「Google Search Console API」を有効にしてください。次にOAuthの同意設定と「デスクトップアプリ」のクライアントを準備します。操作が不明な場合は、このチャットで順に案内します。</p>
