@@ -29,7 +29,7 @@ export default function SeoPanel({ project, settings }) {
   const [busy, setBusy] = useState(false), [effort, setEffort] = useState(modelPolicy.defaultReasoningEffort), [astra, setAstra] = useState(false)
   const [astraReason, setAstraReason] = useState('')
   const fileInput = useRef(null)
-  useEffect(() => { if (settings) { setEffort(settings.reasoningEffort); setProperty(settings.property || ''); setAstra(false) } }, [settings?.revision, settings?.projectId])
+  useEffect(() => { if (settings) { setEffort(settings.reasoningEffort); setProperty(settings.property || ''); setAstra(false) } }, [settings?.revision, settings?.projectId, settings?.property])
   const active = busy || state?.audit?.status === 'running' || ['queued', 'running'].includes(state?.proposal?.status)
   useEffect(() => { setAstra(false) }, [url, effort, state?.public?.generatedAt, state?.google?.generatedAt])
   useEffect(() => {

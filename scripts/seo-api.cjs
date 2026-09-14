@@ -9,6 +9,7 @@ const { createSeoStaffRuntime } = require('./seo-staff-runtime.cjs')
 const { resolveExecution } = require('./staff-model-policy.cjs')
 const { redactDiagnostics } = require('./seo-redaction.cjs')
 const { createSitePolicy } = require('./site-policy.cjs')
+const { propertyChoice, readable } = require('./search-console-property.cjs')
 const { isMaintenanceSite } = require('./maintenance-scope.cjs')
 const { createMaintenanceProbe } = require('./maintenance-probe.cjs')
 const { createMaintenanceActions } = require('./maintenance-actions.cjs')
@@ -52,11 +53,17 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
     if (closed) return reply(res, 503, { error: 'オフィスを終了しています。' })
     try {
       const pathname = new URL(req.url, 'http://local').pathname.replace(/^\/api\/seo(?=\/|$)/, '')
-      const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals|checks|maintenance-actions|settings))?$/)
+      const match = pathname.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9_-]{0,79})(?:\/(site|audits|google|proposals|checks|maintenance-actions|settings|properties|property))?$/)
       const id = match?.[1], action = match?.[2]
       if (req.method === 'GET') {
         if (pathname === '/google/status') return reply(res, 200, await gsc().status())
         if (pathname === '/google/sites') return reply(res, 200, await gsc().sites())
+        if (id && action === 'properties') {
+          const profile = policies.read(id), status = await gsc().status()
+          if (!status.connected) return reply(res, 200, { sites: [], reason: 'not-connected', siteUrl: profile.siteUrl })
+          const result = await gsc().sites()
+          return reply(res, 200, { ...result, siteUrl: profile.siteUrl, sites: (result.sites || []).map(item => propertyChoice(item, profile.siteUrl + '/')).sort((a,b) => Number(b.selectable) - Number(a.selectable)) })
+        }
         if (id && !action) {
           const value = read(id)
           const run = value.proposal?.id && staff?.getRun(value.proposal.id)
@@ -88,6 +95,14 @@ function createSeoApi({ root, authorize = () => true, crawler = auditSite, googl
       if (pathname === '/google/disconnection') { await gsc().disconnect(); return reply(res, 200, await gsc().status()) }
       if (!id || !action) return reply(res, 404, { error: '操作が見つかりません。' })
       const value = read(id)
+      if (action === 'property') {
+        if (body.manual !== true) {
+          const result = await gsc().sites()
+          if (result.unknowns?.length) return reply(res, 409, { error: 'Googleの一覧を再確認できません。再取得するか、詳細設定の手入力を利用してください。' })
+          if (!(result.sites || []).some(item => item.siteUrl === body.property && readable(item.permissionLevel))) return reply(res, 403, { error: 'このアカウントの閲覧権限を確認できません。アカウント・サイト登録・権限を確認して一覧を再取得してください。' })
+        }
+        return reply(res, 200, policies.setProperty(id, body.property, body.expectedProperty))
+      }
       if (value.proposal?.id && ['queued', 'running'].includes(staff?.getRun(value.proposal.id)?.status)) return reply(res, 409, { error: 'AIによる検討の終了までお待ちください。' })
       if (action === 'settings') {
         if (active) return reply(res, 409, { error: '診断の終了をお待ちください。' })

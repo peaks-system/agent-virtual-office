@@ -28,8 +28,8 @@ export default function ProjectSetupGuide() {
         <li>「診断結果」のSearch Console接続状態を確認します。「読み取り専用で接続済み」なら再認証せず次へ進めます。</li>
         <li>「未接続（認証設定済み）」なら「Search Consoleに接続」を押し、対象サイトを閲覧できるGoogleアカウントで承認します。</li>
         <li>「認証設定が必要」なら「Google接続の準備」を開きます。作成済みのデスクトップアプリ用JSONを「認証用JSONを読み込む」で選び、接続します。JSONがなければ、先にGoogle Cloudでの準備が必要です。中身をチャットへ貼り付けないでください。</li>
-        <li>接続後「閲覧できるサイト一覧を取得」→「Search Consoleのサイト」で今回のサイトを選ぶ →「Google側の診断情報を取得」を押します。他サイトは選びません。</li>
-        <li>選んだプロパティを「サイト設定」の「Search Consoleプロパティ」に入力して保存すると、以後の選択に使えます。例：URL形式なら <code>https://example.com/</code>、ドメイン形式なら <code>sc-domain:example.com</code>。この欄に入力するだけではGoogleへのサイト登録や接続は完了しません。</li>
+        <li>接続後「サイト設定」に戻り「閲覧できるサイト一覧を取得」→「Search Consoleのサイト（このプロジェクト）」で一致候補を選ぶ →「選択したプロパティを保存」を押します。登録URLの対象外の候補は選択できません。</li>
+        <li>「保存済みプロパティ」を確認し、「診断結果」で「Google側の診断情報を取得」を押します。一覧を取得できない場合だけ「詳細設定」の手入力を使います。URL形式の例は <code>https://example.com/</code>、ドメイン形式は <code>sc-domain:example.com</code>。Officeへの保存だけでGoogleのサイト登録・所有権確認は完了しません。</li>
       </ol>
       <p><strong>完了目安：</strong>接続済み表示に加え、「Google側の記録」に取得日時と結果が出ます。未確認・権限不足があれば、その項目はまだ取得できていません。</p>
       <p>一覧にない場合は、Googleアカウントが正しいか確認します。Search Console側でサイトが未登録・権限未設定なら、その準備が必要です。Officeが所有権確認を代行することはありません。</p>

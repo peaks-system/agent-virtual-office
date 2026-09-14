@@ -3,6 +3,7 @@ const http = require('node:http')
 const { spawn } = require('node:child_process')
 const { createSeoVault } = require('./seo-vault.cjs')
 const { createGoogleFetch } = require('./google-transport.cjs')
+const { siteCovers, readable } = require('./search-console-property.cjs')
 
 const SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly'
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
@@ -59,20 +60,6 @@ function parseInstalled(value) {
   if (client.token_uri && ![TOKEN_ENDPOINT, 'https://accounts.google.com/o/oauth2/token'].includes(client.token_uri)) throw invalid()
   if (client.auth_uri && ![AUTH_ENDPOINT, 'https://accounts.google.com/o/oauth2/auth'].includes(client.auth_uri)) throw invalid()
   return { client_id: client.client_id, client_secret: client.client_secret, token_uri: TOKEN_ENDPOINT }
-}
-
-function siteCovers(property, siteUrl) {
-  let target
-  try { target = new URL(siteUrl) } catch { return false }
-  if (!/^https?:$/.test(target.protocol)) return false
-  if (property.startsWith('sc-domain:')) {
-    const domain = property.slice('sc-domain:'.length).toLowerCase()
-    return /^[a-z0-9.-]+$/.test(domain) && (target.hostname === domain || target.hostname.endsWith(`.${domain}`))
-  }
-  try {
-    const prefix = new URL(property)
-    return /^https?:$/.test(prefix.protocol) && target.href.startsWith(prefix.href)
-  } catch { return false }
 }
 
 function pickAnalytics(payload) {
@@ -154,7 +141,7 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
     try {
       const response = await fetchImpl(url, { ...options, redirect: 'error', signal: controller.signal })
       const length = Number(response.headers && response.headers.get && response.headers.get('content-length'))
-      if (!response.ok || (Number.isFinite(length) && length > MAX_RESPONSE_BYTES)) throw new Error('Google request failed')
+      if (!response.ok || (Number.isFinite(length) && length > MAX_RESPONSE_BYTES)) throw Object.assign(new Error('Google request failed'), { code: response.status === 403 ? 'GSC_FORBIDDEN' : response.status === 401 ? 'GSC_AUTH' : 'GSC_FAILED' })
       if (!response.body || typeof response.body.getReader !== 'function') throw new Error('Google request failed')
       const reader = response.body.getReader()
       const chunks = []; let total = 0
@@ -193,7 +180,7 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
     if (typeof property !== 'string' || property.length > 2048 || !siteCovers(property, siteUrl)) throw new Error('Selected property does not cover this site')
     const list = await authorized(`${API_BASE}/sites`)
     const entries = Array.isArray(list.siteEntry) ? list.siteEntry : []
-    if (!entries.some(entry => entry && entry.siteUrl === property)) throw new Error('Selected property is not available to this account')
+    if (!entries.some(entry => entry && entry.siteUrl === property && readable(entry.permissionLevel))) throw new Error('Selected property is not available to this account')
   }
   return {
     async status() { await load(); return state() },
@@ -262,7 +249,7 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
       try {
         const data = await authorized(`${API_BASE}/sites`)
         return { sites: (Array.isArray(data.siteEntry) ? data.siteEntry : []).slice(0, 100).filter(item => item && typeof item.siteUrl === 'string').map(item => ({ siteUrl: item.siteUrl, permissionLevel: typeof item.permissionLevel === 'string' ? item.permissionLevel : 'unknown' })) }
-      } catch { return { sites: [], unknowns: [{ message: 'Google Search Console のデータを取得できませんでした。' }] } }
+      } catch (error) { return { sites: [], reason: error?.code === 'GSC_FORBIDDEN' ? 'forbidden' : error?.code === 'GSC_AUTH' || !stored.tokens ? 'not-connected' : 'failed', unknowns: [{ message: 'Google Search Console のデータを取得できませんでした。' }] } }
     },
     async diagnose({ siteUrl, property } = {}) {
       await load()
@@ -278,7 +265,9 @@ function createSearchConsole({ vault = createSeoVault(), openBrowser = externalB
         ])
         const inspectionResult = pickInspection(inspection)
         const findings = inspectionFacts(inspectionResult, target.href)
-        return { property, siteUrl: target.href, generatedAt: new Date(now()).toISOString(), analytics: pickAnalytics(analytics), sitemaps: pickSitemaps(sitemaps), inspection: inspectionResult, facts: findings.facts, unknowns: findings.unknowns }
+        const sameOrigin = value => { try { return new URL(value).origin === target.origin } catch { return false } }
+        findings.unknowns.push({ message: '取得上限内のデータから登録サイトと同じURLのオリジンだけを表示します。別のサブドメイン・http/httpsのデータは除外します。', url: target.href })
+        return { property, siteUrl: target.href, generatedAt: new Date(now()).toISOString(), analytics: pickAnalytics(analytics).filter(row => sameOrigin(row.page)), sitemaps: pickSitemaps(sitemaps).filter(row => sameOrigin(row.path)), inspection: inspectionResult, facts: findings.facts, unknowns: findings.unknowns }
       } catch { return { property: null, siteUrl: null, generatedAt: new Date(now()).toISOString(), analytics: [], sitemaps: [], inspection: null, facts: [], unknowns: [{ message: 'Google Search Console のデータを取得できませんでした。' }] } }
     },
     async disconnect() { await load(); cancelPending(); authGeneration += 1; stored.tokens = null; if (stored.client) await persist(); return state('Google Search Console の接続を解除しました。') },

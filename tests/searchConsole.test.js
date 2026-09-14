@@ -113,7 +113,7 @@ describe('Google Search Console boundary', () => {
     const vault = { read: async () => ({ client: client.installed, tokens }), write: async () => {} }
     const fetchImpl = vi.fn(async () => new Response('x', { headers: { 'content-length': '999999' } }))
     const search = createSearchConsole({ vault, fetchImpl })
-    expect(await search.sites()).toEqual({ sites: [], unknowns: [{ message: 'Google Search Console のデータを取得できませんでした。' }] })
+    expect(await search.sites()).toEqual({ sites: [], reason: 'failed', unknowns: [{ message: 'Google Search Console のデータを取得できませんでした。' }] })
   })
 
   it('does not persist tokens when closed while an OAuth exchange is pending', async () => {
