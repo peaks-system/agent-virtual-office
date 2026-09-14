@@ -11,6 +11,7 @@ import StaffWorkPanel from './StaffWorkPanel'
 import SeoPanel from './SeoPanel'
 import WordPressPanel from './WordPressPanel'
 import SiteSettingsPanel from './SiteSettingsPanel'
+import ProjectSetupGuide from './ProjectSetupGuide'
 
 export function receivedStatus(externalStatus, now) {
   return Object.entries(externalStatus).filter(([,value]) => value && (!value.expiresAt || value.expiresAt > now))
@@ -118,6 +119,7 @@ export default function CorporationDashboard({ children }) {
         })}</div>
         {!!archived.length && <details className="corp-archived"><summary>{d('archived')} ({archived.length})</summary>{archived.map(project => <div key={project.id}><span>{project.title}</span><button onClick={() => board.restoreProject(project.id)}>{d('restore')}</button></div>)}</details>}
         <button className="corp-text-button" onClick={exportBackup}>{d('backup')}</button>
+        <ProjectSetupGuide />
         <details className="corp-archived"><summary>{d('help')}</summary><p>{d('startHelp')}</p><p>{d('stopHelp')}</p></details>
         <div className="corp-section-title corp-staff-heading"><h2>STAFF LIST</h2><span>{staff.length}</span></div>
         <p className="corp-eyebrow">{d('staff')}</p>
