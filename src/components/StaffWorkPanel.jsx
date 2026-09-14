@@ -2,12 +2,17 @@ import React, { useEffect, useState } from 'react'
 import { useStaffRunState } from '../systems/staffRunState'
 import { charName } from '../i18n'
 import modelPolicy from '../../config/model-policy.json'
+import { lookupStaffRun, staffStartBlocked } from '../systems/staffRunRecovery'
 
 const stages = { planning: '依頼の整理・割り振り', draft: '独立した初案', review: '相互レビュー', revise: '修正', quality: '品質確認', final: '取りまとめ' }
 const statuses = { queued: '開始待ち', running: '実行中', 'awaiting-human': '人間の最終確認待ち', error: '実行できませんでした', cancelled: '中止しました' }
 const ACTIVE_PREFIX = 'office-staff-active-run:'
 
-export default function StaffWorkPanel({ project, settings }) {
+export default function StaffWorkPanel(props) {
+  return <StaffWorkSession key={props.project?.id || 'empty'} {...props} />
+}
+
+function StaffWorkSession({ project, settings }) {
   const ACTIVE_KEY = ACTIVE_PREFIX + (project?.id || 'empty')
   const [astraReason, setAstraReason] = useState('')
   useEffect(() => { if (settings) setEffort(settings.reasoningEffort) }, [settings?.revision])
@@ -15,6 +20,8 @@ export default function StaffWorkPanel({ project, settings }) {
   const [run, setRun] = useState(null)
   const [runId, setRunId] = useState(() => { try { return localStorage.getItem(ACTIVE_KEY) || null } catch { return null } })
   const [error, setError] = useState('')
+  const [lookup, setLookup] = useState('checking')
+  const [retry, setRetry] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [effort, setEffort] = useState(modelPolicy.defaultReasoningEffort)
   const [approveAstra, setApproveAstra] = useState(false)
@@ -24,24 +31,23 @@ export default function StaffWorkPanel({ project, settings }) {
     if (!runId) return
     let alive = true
     let timer
+    const controller = new AbortController()
+    setLookup('checking')
     const poll = async () => {
-      try {
-        const response = await fetch(`/api/staff/runs/${encodeURIComponent(runId)}`)
-        const value = await response.json()
-        if (!response.ok) throw new Error(value.error || '実行状態を取得できません。')
-        if (!alive) return
-        setRun(value); setError(''); useStaffRunState.getState().applyRun(value)
-        if (['queued', 'running'].includes(value.status)) timer = setTimeout(poll, 1500)
-      } catch (e) {
-        if (alive) { setError(e.message); timer = setTimeout(poll, 5000) }
-      }
+      const value = await lookupStaffRun(runId, project?.id, { signal: controller.signal })
+      if (!alive) return
+      setLookup(value.lookup); setRun(value.run)
+      useStaffRunState.getState().applyRun(value.run)
+      setError(value.lookup === 'missing' ? '保存された実行記録が見つかりません。実行表示をリセットできます。成果物は削除しません。' : value.lookup === 'unavailable' ? '実行状態を取得できませんでした。処理が停止したとは限りません。' : '')
+      if (['queued', 'running'].includes(value.run?.status)) timer = setTimeout(poll, 1500)
     }
     poll()
-    return () => { alive = false; clearTimeout(timer) }
-  }, [runId])
+    return () => { alive = false; controller.abort(); clearTimeout(timer) }
+  }, [runId, retry, project?.id])
+  const blockedReason = staffStartBlocked({ project, settings, request, approveAstra, astraReason, submitting, runId, lookup, run })
   async function start(event) {
     event.preventDefault()
-    if (!project || !request.trim() || active) return
+    if (blockedReason) return
     setSubmitting(true); setError('')
     const execution = { model: approveAstra ? modelPolicy.approvalRequiredModel : modelPolicy.defaultModel, reasoningEffort: effort, humanApprovedAstra: approveAstra }
     setApproveAstra(false)
@@ -73,12 +79,16 @@ export default function StaffWorkPanel({ project, settings }) {
       <label>思考レベル<select value={effort} disabled={active} onChange={e => setEffort(e.target.value)}><option value="low">低（速度優先）</option><option value="medium">中（標準）</option></select></label>
       <label>Astraを使う必要性と期待する効果<input value={astraReason} maxLength={500} onChange={e => { setAstraReason(e.target.value); setApproveAstra(false) }} /></label>
       <label><input type="checkbox" checked={approveAstra} disabled={active} onChange={e => setApproveAstra(e.target.checked)} />今回の共同作業の全工程にAstraを使うことを承認する（利用量が増える場合があります）</label>
-      <button className="corp-primary" disabled={!project || settings?.category !== 'general' || !settings?.permissions?.ai || (approveAstra && astraReason.trim().length < 5) || !request.trim() || active || (!run && !!runId && !error)}>{active ? '実行中…' : 'PMに依頼して共同作業を開始'}</button>
+      <button className="corp-primary" disabled={!!blockedReason} aria-describedby="staff-start-reason">{active ? '実行中…' : 'PMに依頼して共同作業を開始'}</button>
     </form>
-    {error && <><p role="alert" className="corp-error">{error}</p>{!active && <button type="button" onClick={() => {
-      setRunId(null); setRun(null); setError(''); useStaffRunState.getState().applyRun(null)
+    <p id="staff-start-reason" role="status">{blockedReason || '調査・記事案の検討を開始できます。WordPress接続は不要です。'}</p>
+    {error && <p role="alert" className="corp-error">{error}</p>}
+    {runId && <><p className="corp-muted">リセットは表示だけを解除します。実行中の処理の中止や成果物の削除は行いません。処理が続いている場合、新しい依頼はサーバー側で拒否されます。</p>
+    {lookup === 'unavailable' && <button type="button" onClick={() => setRetry(value => value + 1)}>実行状態を再確認</button>}
+    <button type="button" disabled={submitting} onClick={() => {
+      setRunId(null); setRun(null); setError(''); setLookup('ready'); useStaffRunState.getState().applyRun(null)
       try { localStorage.removeItem(ACTIVE_KEY) } catch { setError('表示用の実行IDを解除できませんでした。') }
-    }}>実行表示をリセット（保存済み成果物は保持）</button>}</>}
+    }}>実行表示をリセット（保存済み成果物は保持）</button></>}
     {run && <div aria-live="polite">
       {run.execution && <p>使用モデル：{run.execution.model === 'gpt-6-astra' ? 'Astra（今回のみ承認済み）' : '5.6 Terra'} ／ 思考：{run.execution.reasoningEffort === 'low' ? '低' : '中'}</p>}
       <p><strong>{statuses[run.status] || run.status}</strong></p>
