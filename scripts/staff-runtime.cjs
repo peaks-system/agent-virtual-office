@@ -4,6 +4,7 @@ const path = require('node:path')
 const { randomUUID } = require('node:crypto')
 const { loadStaffConfig, buildInstructions } = require('./staff-config.cjs')
 const { resolveExecution } = require('./staff-model-policy.cjs')
+const { parseConfirmation, decisionInput } = require('./staff-confirmation.cjs')
 
 const SPECIALISTS = new Set(['arch', 'res', 'ops', 'gate', 'designer', 'dev'])
 const safeId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(value)
@@ -114,6 +115,8 @@ function createStaffRuntime({ provider, dataRoot, configPath, onStatus = () => {
       for (const a of plan.assignments) revisions.push({ staffId: a.staffId, output: await call(a.staffId, 'revise', { task: a.task, ownDraft: drafts.find(d => d.staffId === a.staffId).output, reviews }) })
       const quality = await call('qa', 'quality', { revisions })
       run.result = await call('pm', 'final', { assignments: plan.assignments, revisions, quality })
+      run.confirmation = parseConfirmation(run.result)
+      run.result = run.confirmation.report
       run.status = 'awaiting-human'; run.staffId = null; run.stage = 'final'
     } catch {
       run.status = controller.signal.aborted ? 'cancelled' : 'error'
@@ -138,7 +141,41 @@ function createStaffRuntime({ provider, dataRoot, configPath, onStatus = () => {
       promises.set(id, promise)
       return publicRun(run)
     },
-    getRun(id) { return runs.has(id) ? publicRun(runs.get(id)) : null },
+    getRun(id, projectId) {
+      if (runs.has(id)) return !projectId || runs.get(id).projectId === projectId ? publicRun(runs.get(id)) : null
+      if (!safeId(id) || !safeId(projectId)) return null
+      const dir = ensureDir(path.join(root, projectId, 'runs'))
+      const file = path.join(dir, `${id}.json`)
+      if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > MAX_OUTPUT * 2) return null
+      const run = JSON.parse(fs.readFileSync(file, 'utf8'))
+      if (run.id !== id || run.projectId !== projectId) return null
+      if (['queued', 'running'].includes(run.status)) { run.status = 'cancelled'; run.error = '再起動前の実行です。完了を確認できないため、自動再開しません。' }
+      return publicRun(run)
+    },
+    decide(id, projectId, body) {
+      const run = this.getRun(id, projectId)
+      if (!run || run.status !== 'awaiting-human' || run.decision || active || closed) throw Error('Decision unavailable')
+      const decision = decisionInput(run, body)
+      if (hasCredential(JSON.stringify(decision))) throw Error('Invalid decision')
+      run.decision = decision
+      const file = path.join(ensureDir(path.join(root, projectId, 'runs')), `${id}.json`)
+      // Record the human action before dispatch; failures must not silently repeat it.
+      write(file, JSON.stringify(run)); runs.set(id, run)
+      if (decision.action === 'reject') return { parent: publicRun(run), next: null }
+      try {
+        const request = JSON.stringify({ scope: '追加検討のみ。外部操作・WordPress書き込みの承認ではありません。提供されていない情報の調査済み表現は禁止。', originalRequest: run.request.slice(0, 500), previousReport: run.result.slice(0, 1000), contextNotice: '長い依頼・前回報告は抜粋です。省略箇所を確認済みと扱わないでください。', decision, instruction: run.confirmation?.fallback ? '確認事項を指定JSON形式で整理してください。' : '選択と修正依頼を引き継いで再検討してください。' })
+        const next = this.start({ projectId, request, execution: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' } })
+        runs.get(next.id).parentRunId = id
+        decision.nextRunId = next.id
+        decision.outcome = 'started'
+        write(file, JSON.stringify(run))
+        return { parent: publicRun(run), next }
+      } catch {
+        decision.outcome = 'dispatch-failed'
+        write(file, JSON.stringify(run))
+        return { parent: publicRun(run), next: null }
+      }
+    },
     async waitForRun(id) { await promises.get(id); return runs.has(id) ? publicRun(runs.get(id)) : null },
     cancel(id) { if (active?.id === id) { active.controller.abort(); return true } return false },
     async close() { closed = true; active?.controller.abort(); await Promise.allSettled([...promises.values()]) },

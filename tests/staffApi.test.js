@@ -16,7 +16,7 @@ describe('staff HTTP boundary', () => {
   })
   it('starts, polls and cancels only validated same-origin requests', async () => {
     const run = { id: 'run-1', status: 'queued' }
-    const runtime = { start: vi.fn(() => run), getRun: vi.fn(id => id === run.id ? run : null), cancel: vi.fn(() => { run.status = 'cancelled' }), close: vi.fn() }
+    const runtime = { start: vi.fn(() => run), getRun: vi.fn(id => id === run.id ? run : null), decide: vi.fn(() => ({ parent: run, next: null })), cancel: vi.fn(() => { run.status = 'cancelled' }), close: vi.fn() }
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'staff-policy-'))
     const policies = require('../scripts/site-policy.cjs').createSitePolicy(root)
     policies.update('project-1', { ...policies.read('project-1'), siteUrl: 'https://example.com', category: 'general', permissions: { diagnosis: true, ai: true, draft: true }, confirmed: true })
@@ -37,6 +37,11 @@ describe('staff HTTP boundary', () => {
       expect(runtime.start).not.toHaveBeenCalled()
       expect(await (await fetch(`${base}/api/staff/runs/run-1`)).json()).toEqual(run)
       expect((await fetch(`${base}/api/staff/runs/missing`)).status).toBe(404)
+      const decision = body => fetch(`${base}/api/staff/runs/run-1/decision`, { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      expect((await decision({ projectId: 'unknown', action: 'approve' })).status).toBe(403)
+      expect(runtime.decide).not.toHaveBeenCalled()
+      expect((await decision({ projectId: 'project-1', action: 'reject', actor: 'Local', feedback: '' })).status).toBe(200)
+      expect(runtime.decide).toHaveBeenCalledTimes(1)
       const cancelled = await fetch(`${base}/api/staff/runs/run-1/cancel`, { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json' }, body: '{}' })
       expect((await cancelled.json()).status).toBe('cancelled')
     } finally {

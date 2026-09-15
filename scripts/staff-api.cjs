@@ -30,9 +30,10 @@ function createStaffApi({ root, authorize = () => true, runtime: suppliedRuntime
   const handler = async (req, res) => {
     if (!permitted(req) || !authorize(req)) return reply(res, 403, { error: 'この操作は同じPCのオフィス画面から実行してください。' })
     const pathname = new URL(req.url, 'http://local').pathname.replace(/^\/api\/staff(?=\/|$)/, '')
-    const match = pathname.match(/^\/runs\/([A-Za-z0-9_-]{1,100})(\/cancel)?$/)
+    const match = pathname.match(/^\/runs\/([A-Za-z0-9_-]{1,100})(\/(?:cancel|decision))?$/)
     if (req.method === 'GET' && match && !match[2]) {
-      const run = runtime?.getRun(match[1])
+      let run
+      try { run = getRuntime().getRun(match[1], new URL(req.url, 'http://local').searchParams.get('projectId') || undefined) } catch { return reply(res, 409, { error: '保存された実行記録を読み込めませんでした。' }) }
       return reply(res, run ? 200 : 404, run || { error: '実行記録が見つかりません。サーバーの再起動後は保存フォルダーを確認してください。' })
     }
     if (req.method !== 'POST' || !(pathname === '/runs' || match?.[2])) return reply(res, 404, { error: '操作が見つかりません。' })
@@ -47,6 +48,11 @@ function createStaffApi({ root, authorize = () => true, runtime: suppliedRuntime
         chunks.push(Buffer.from(chunk))
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+      if (match?.[2] === '/decision') {
+        const profile = policies.requirePermission(body.projectId, 'ai')
+        if (profile.category !== 'general') return reply(res, 403, { error: '追加検討はAI検討を許可した一般サイト専用です。' })
+        return reply(res, 200, getRuntime().decide(match[1], body.projectId, body))
+      }
       if (match?.[2]) {
         const run = runtime?.getRun(match[1])
         if (!run) return reply(res, 404, { error: '実行記録が見つかりません。' })

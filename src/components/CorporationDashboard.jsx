@@ -143,7 +143,7 @@ export default function CorporationDashboard({ children }) {
           <div id="workspace-settings" hidden={workspace !== 'settings'}>{selected && <SiteSettingsPanel key={selected.id} project={selected} onSettings={setSiteSettings} />}</div>
           <div id="workspace-diagnosis" hidden={workspace !== 'diagnosis'}>{selected && <SeoPanel key={`seo-${selected.id}`} project={selected} settings={siteSettings?.projectId === selected.id ? siteSettings : null} />}</div>
           <div id="workspace-wordpress" hidden={workspace !== 'wordpress'}>{selected && <WordPressPanel key={`wordpress-${selected.id}`} project={selected} settings={siteSettings?.projectId === selected.id ? siteSettings : null} />}</div>
-          <div id="workspace-request" hidden={workspace !== 'request'}><StaffWorkPanel key={selected?.id || 'empty'} project={selected} settings={siteSettings?.projectId === selected?.id ? siteSettings : null} /></div>
+          <div id="workspace-request" hidden={workspace !== 'request'}><StaffWorkPanel onWordPress={() => setWorkspace('wordpress')} key={selected?.id || 'empty'} project={selected} settings={siteSettings?.projectId === selected?.id ? siteSettings : null} /></div>
         </section>
       </main>
       <aside className="corp-right corp-card">

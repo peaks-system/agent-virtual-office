@@ -21,7 +21,7 @@ export async function lookupStaffRun(id, projectId, { fetcher = fetch, signal, t
   try {
     return await Promise.race([
       (async () => {
-        const response = await fetcher(`/api/staff/runs/${encodeURIComponent(id)}`, { signal: controller.signal })
+        const response = await fetcher(`/api/staff/runs/${encodeURIComponent(id)}?projectId=${encodeURIComponent(projectId)}`, { signal: controller.signal })
         if (response.status === 404) return { lookup: 'missing', run: null }
         if (!response.ok) return { lookup: 'unavailable', run: null }
         const run = await response.json()

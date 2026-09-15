@@ -3,6 +3,7 @@ import { useStaffRunState } from '../systems/staffRunState'
 import { charName } from '../i18n'
 import modelPolicy from '../../config/model-policy.json'
 import { lookupStaffRun, staffStartBlocked } from '../systems/staffRunRecovery'
+import StaffApproval from './StaffApproval'
 
 const stages = { planning: '依頼の整理・割り振り', draft: '独立した初案', review: '相互レビュー', revise: '修正', quality: '品質確認', final: '取りまとめ' }
 const statuses = { queued: '開始待ち', running: '実行中', 'awaiting-human': '人間の最終確認待ち', error: '実行できませんでした', cancelled: '中止しました' }
@@ -12,7 +13,7 @@ export default function StaffWorkPanel(props) {
   return <StaffWorkSession key={props.project?.id || 'empty'} {...props} />
 }
 
-function StaffWorkSession({ project, settings }) {
+function StaffWorkSession({ project, settings, onWordPress }) {
   const ACTIVE_KEY = ACTIVE_PREFIX + (project?.id || 'empty')
   const [astraReason, setAstraReason] = useState('')
   useEffect(() => { if (settings) setEffort(settings.reasoningEffort) }, [settings?.revision])
@@ -90,8 +91,10 @@ function StaffWorkSession({ project, settings }) {
       try { localStorage.removeItem(ACTIVE_KEY) } catch { setError('表示用の実行IDを解除できませんでした。') }
     }}>実行表示をリセット（保存済み成果物は保持）</button></>}
     {run && <div aria-live="polite">
+      {run.parentRunId && <button type="button" onClick={() => { setRun(null); setRunId(run.parentRunId); try { localStorage.setItem(ACTIVE_KEY, run.parentRunId) } catch { setError('実行IDを保存できませんでした。') } }}>前の報告・判断履歴を見る</button>}
+      {run.status === 'awaiting-human' && <StaffApproval key={run.id} run={run} onRun={setRun} onWordPress={onWordPress} onOpenRun={id => { setRun(null); setRunId(id); try { localStorage.setItem(ACTIVE_KEY, id) } catch { setError('実行IDを保存できませんでした。') } }} />}
       {run.execution && <p>使用モデル：{run.execution.model === 'gpt-6-astra' ? 'Astra（今回のみ承認済み）' : '5.6 Terra'} ／ 思考：{run.execution.reasoningEffort === 'low' ? '低' : '中'}</p>}
-      <p><strong>{statuses[run.status] || run.status}</strong></p>
+      <p><strong>{run.decision ? '判断を記録済み' : statuses[run.status] || run.status}</strong></p>
       {run.projectId !== project?.id && <p className="corp-muted">別のプロジェクトの実行結果です。</p>}
       {run.staffId && <p>{charName(run.staffId)}：{stages[run.stage] || run.stage}</p>}
       {active && <button onClick={cancel} type="button">実行を中止</button>}
