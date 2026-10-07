@@ -5,6 +5,211 @@ live in `docs/specs/_shipped-log.md`; this file is the high-level story.
 
 Format loosely follows [Keep a Changelog](https://keepachangelog.com).
 
+## v1.6.10 — 2026-09-27 — The office only shows what is really happening, and the server stops falling over
+
+Thirteen pull requests since v1.6.9. Most come from a full-repo audit on 2026-09-26 (server,
+hooks, client runtime), worked branch by branch with a fresh reviewer each round; the rest finish
+the 2026-09-19 review and an external audit from 2026-09-24.
+
+> **Upgrade note — read this if you run the office behind a reverse proxy, in Docker, or reach it
+> by hostname.** The server now rejects requests whose `Host` header is not an allowed host (this
+> blocks DNS-rebinding pages from reading your agents' status). `localhost`, `*.localhost` and IP
+> addresses work as before. If you reach the office as e.g. `office.example.com` or `mypc.local`,
+> set `OFFICE_ALLOWED_HOSTS` (comma-separated; a leading dot like `.example.com` allows
+> subdomains) or every request gets `403`. `docker-compose.yml`, the nginx/systemd/PM2 examples and
+> `DEPLOYMENT.md` show where. Requests carrying a valid `OFFICE_API_TOKEN` are exempt, so CI
+> webhooks keep working. The same variable now applies to `npm run dev`. (#246, #252)
+
+### Fixed
+
+- **One malformed request could crash the server.** A request line like `GET http://[ HTTP/1.1`
+  threw inside the request handler and the process exited; it now gets `400` and the server keeps
+  running. (#246)
+- **The live status stream no longer drops about once a minute.** The server's own 30-second idle
+  timeout was racing the 30-second heartbeat, so the stream kept closing and reconnecting. (#246)
+- **An office event no longer plays with nobody in it.** A "deploy success" celebration could fire
+  while the ops agent was busy, and two-person scenes showed an empty banner for 20 seconds. Events
+  now fire only when everyone they need is genuinely free, and an agent who starts real work leaves
+  the scene instead of acting it out. (#251)
+- **A quiet agent keeps what it was doing.** When the office inferred "thinking" after a silent
+  stretch, it also wiped the agent's task and file and made it look freshly active; it now keeps the
+  real details and the real "since" time. (#251)
+- **Long tool calls stop turning idle.** A three-minute test run showed the agent as idle after two
+  minutes although it was still working; the office now trusts the server's "nothing changed"
+  answers and only clears an agent the server has also dropped (about five minutes). (#250)
+- **The live stream reconnects after an outage**, and the health dot no longer flickers offline
+  while polling is working fine. (#250)
+- **"Done today" survives closing the tab for a few hours.** (#250)
+- **Codex and Claude Code in the same project stop erasing each other.** They wrote the same status
+  file; Codex now writes its own (`office-status-codex-*.json`), and the Codex helper no longer
+  hangs when run from a terminal. The two now appear as two sessions. (#247)
+- **The Claude hook's file lock can no longer be taken twice**, and status writes retry when Windows
+  briefly locks the file instead of risking a half-written file. (#249)
+- **The dev server stops inventing agents.** It watched `~/.claude` too, so Claude's own transcript
+  files showed up as a working agent; it also overwrote a webhook's `blocked` state after 10 seconds.
+  Its CORS behaviour now matches production. (#248)
+- A speech bubble is not shown for a speaker you cannot see in the compact panel (except when that
+  agent is blocked and needs you). (#240)
+- The coffee machine says **BUSY** when every agent is working, instead of ignoring the click. (#241)
+- Every one-shot animation in the office actually plays (the done flash, poke bob, desk slam and
+  others were snapping straight to their last frame). (#244)
+
+### Changed
+
+- **Friday 15:00 is the team meeting, not tea.** Only one office event can run at a time now, and the
+  Friday tea break was always winning the slot, so the meeting never happened. (#251)
+- **Search text stays out of bubbles.** A web search shows "Searching" and a sub-agent without a
+  description shows the generic delegating label, instead of the raw query or prompt. (#249)
+
+### Housekeeping — not user-facing
+
+- vitest 4.1.11 for a dev-only advisory (GHSA-82fw-gwwq-j7x9); a cap on concurrent live streams
+  (`OFFICE_MAX_SSE_CLIENTS`); the dev server's single status clock and bridge-UI buttons from the
+  2026-09-24 audit (#245); `bridge.js` and the generic bridge no longer forward spoofable fields;
+  setup/uninstall keep a symlinked `settings.json`; render-smoke really kills a stuck server;
+  `.gitignore` for the single-file build (#242). (#245, #246, #249, #252, #242, #243)
+
+### What this release does not claim
+
+- A dead hook now takes up to about five minutes to clear (it was two). That is the trade for long
+  tool calls no longer looking idle.
+- With Claude Code and Codex in the same project, each session shows one representative agent, so a
+  second active role on one side can be hidden.
+- A "deploy success" can still fire shortly after ops stopped for a reason other than finishing; a
+  stricter check is planned.
+- The Claude hook's lock narrows, but cannot fully close, a race between three hooks and a crashed
+  one; the worst case is one lost status update, as before the lock existed.
+
+## v1.6.9 — 2026-09-20 — Nothing gets cut off in the small window, and English gets whole sentences
+
+Three pull requests since v1.6.8, all answering an external review that was worked as untrusted
+input: every finding was re-checked against the code before anything changed, and two of its ten
+were rejected on evidence. **Two of the three are user-facing.** The third is build hygiene and is
+listed as such.
+
+### Fixed
+
+- **The compact panel (`?mode=panel`) no longer cuts off the agent inspector.** Clicking a desk
+  agent put the card's name and close button above the visible window — 155px in a wide panel — and
+  in a tall panel the right-hand values were cut off too. The card now stays inside whatever the
+  panel shows. The full office is unchanged, measured to the pixel. (#236)
+- **An agent speaking in the top aisle or doorway is heard in the panel.** Its speech bubble used to
+  render above the panel's view; it now flips below the agent. (#236)
+- **No speech bubble without a visible speaker.** Agents in the meeting room sit outside every panel
+  crop, yet their bubbles were being pulled sideways into view — already true in v1.6.8, and made
+  worse by the first version of this fix before a review caught it. A bubble is now never moved into
+  view for an agent you cannot see. (#236)
+- **"Waiting · 3m" keeps counting.** Times like "3m" only updated when something unrelated happened
+  to change, so when every agent was waiting on you — exactly when the number matters — they froze.
+  The roster, the inspector and the activity feed now refresh every 10 seconds. (#236)
+- **English speech bubbles stopped getting cut mid-word.** Every bubble was cut at 16 characters,
+  and 16 English characters are only about 60% as wide as 16 Chinese ones, so nearly half of the
+  English lines read like "forgot a semicol…". Bubbles now fit by measured width and prefer to
+  break between words: whole English lines went from 52% to 85% (Chinese 92% to 95%), and the
+  average bubble got narrower in both languages, because the old per-character estimate overstated
+  English width — real English text measures about 22% narrower than it assumed. (#237)
+
+### Removed
+
+- **A status channel that guessed "working" from the page title.** It could only ever read the
+  office's own tab title, which the office never changes, so it had never fired in normal use. Its
+  only reachable effect was a trap: any future "status in the tab title" feature would have fed back
+  into fake work. (#236)
+
+### Housekeeping — not user-facing
+
+Nothing in this section changes what you see in the office.
+
+- **Every `vite` / `vitest` run stopped printing three config warnings.** The dev-server config is
+  now native ESM (`vite.config.mjs`); Vite's own warning says the old form would stop loading in a
+  future major version. A new test fails if the Dockerfile or the npm package list names a file that
+  does not exist — both used to drop a missing file silently. This finishes the part of the
+  September 8 audit that v1.6.8 left open. (#238)
+- Two stale comments still said the doorway stacking bug was "known, unfixed"; it was fixed in
+  August. (#236)
+
+### What this release does not claim
+
+- In the compact panel the inspector card, now fully visible, can cover the agent you clicked — the
+  full office already did this; changing it needs a placement design.
+- A speaker just **below** the panel's view (in the lounge) still shows its bubble inside the panel.
+  That predates this release and is tracked as AVO-196, because hiding it would silence an agent's
+  real speech.
+- When an agent crosses the north door in the panel, its bubble can appear below it while only its
+  feet are in view, for about a second.
+- The bubble width is measured in the font your browser actually uses, so line breaks can differ
+  slightly between Windows and macOS — by design, since the old fixed estimate was only right for
+  one font.
+
+## v1.6.8 — 2026-09-14 — A calmer office, and waiting finally looks like waiting
+
+Five commits since v1.6.7. **Two of them are user-facing**: a new, calmer look for the office, and
+an audit sweep whose headline fixes are a container that never started and a waiting agent that
+looked busy. The other three are tooling and governance and are listed as such below.
+
+### Changed
+
+- **A warmer, calmer office.** The main floor is a lighter warm oak and the walls a softer walnut,
+  so every status colour stands out more against the floor while rooms stay clearly separated. The
+  ENGINEERING sign is now readable. The agent inspector is a paper card with a light tint of the
+  agent's role colour behind the name, readable ink text and sans type. The status colour moved from
+  the text to the dot, because no status colour is readable as text — not even on white. The look was
+  chosen from rendered candidates before any code was written. Positions, sprites, status and role
+  colours, movement and translations are unchanged. (#234)
+- **The office palette is now tokens with rules.** Floors, walls, doors, signs and the inspector card
+  live in `src/systems/officePalette.js`, and `tests/officePalette.test.js` checks five legibility
+  rules (status vs floor, wall vs room, card text contrast, status colour only on the dot, no stray
+  palette literals). Each failure message says what to fix. Contributor notes are in
+  `docs/ARCHITECTURE.md` §Office palette. (#234)
+
+### Fixed
+
+- **A container built from this repo exited immediately.** The Docker image did not copy two modules
+  the server imports, so `docker run` died on `ERR_MODULE_NOT_FOUND` while the build, tests and smoke
+  gates all stayed green. The image now copies exactly what the server needs, a test walks the import
+  graph so a new import cannot silently break it again, and CI now builds and runs the image and
+  waits on its own health check. (#232)
+- **An agent waiting on your permission prompt looked busy.** It sat at its desk typing and saying
+  "almost... almost~" — a work claim over the exact absence of work. It now shows an hourglass at its
+  desk and has its own lines in both languages. It does not walk anywhere, because in this office
+  position means state. (#232)
+- **Codex-driven agents could vanish or lose their reason badge.** The Codex hook was still on an
+  old four-status list, so it dropped `planning` and `awaiting-approval` agents, under-counted active
+  agents, and stripped the fields that carry a blocked agent's reason. (#232)
+- **`setOfficeStatus({ dev: 'planning' })` produced a "working" agent labelled "planning"** in the
+  browser bridge. Status values are now recognised as statuses. (#232)
+- **The shell hook's sequence number was in the wrong unit on Linux and invalid on macOS**, which the
+  office uses to de-duplicate and expire updates. It is now milliseconds everywhere. (#232)
+- **`hooks-config.json` — the file the docs tell you to paste — was missing `PermissionDenied` and
+  `StopFailure`,** the two events that turn a denied tool call or an API failure into an honest
+  `blocked`. The docs said six events; the CLI registers eight. Both are now pinned to the CLI. (#232)
+- Smaller parity fixes: `bridge-ui.js` used different role colours than the office for 7 of 8 roles;
+  the generic LLM bridge ignored the language setting; `server.mjs` now honours `OFFICE_STATUS_DIR`
+  like the dev server does and prints it at startup; `README.zh-TW.md` caught up on four sections and
+  `ARCHITECTURE.md` gained the missing Designer desk and Gate station. (#232)
+
+### Housekeeping — not user-facing
+
+Nothing in this section changes what you see in the office.
+
+- The soak can now see an agent whose displayed activity has gone stale (AVO-195). It **warns, it
+  does not fail**: an unchanged label cannot be told apart from the same activity picked again, so a
+  hard gate would be claiming more than it can measure. (#231)
+- An old June work log that kept a validator warning lit for months was archived as-is. (#233)
+- Ship records and the audit chain for the v1.6.7 cut. (#230)
+
+### What this release does not claim
+
+- The palette's floor rule compares each status colour **at full strength**, while status rings
+  render slightly transparent. It guards the floor from camouflaging a status; it does not certify
+  every ring's contrast.
+- One audit finding is only partly closed: a deprecated Rollup option is fixed, but two build
+  warnings remain because clearing them means renaming `vite.config.js`, which is out of scope for
+  a defect sweep.
+- Known and accepted: the ENGINEERING sign sits about 3px under the Developer name tag (the tag draws
+  on top). In panel mode the inspector can overflow its cropped view — that was already true in
+  v1.6.7.
+
 ## v1.6.7 — 2026-09-02 — Nobody is shown napping through real work
 
 Ten commits since v1.6.6. **Two of them are user-facing**, and both are the same shape as the last

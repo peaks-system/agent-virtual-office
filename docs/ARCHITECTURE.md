@@ -77,36 +77,43 @@ Claude/Codex hooks      Bridge page/API       File/session scanner
 ```
   ┌────────────────────────────────┬──────────┐
   │  Entrance + Hallway            │ Meeting  │
-  │  y=10~133, x=10~593           │ Room     │
-  │  門口、走廊、佈告欄             │ x=628~785│
-  ├════════════════════════════════┤ y=15~413 │
-  │  ▒▒▒ 北牆 (y=138~163, 25px) ▒▒│          │
-  │  窗戶×4 + 時鐘嵌在牆內          │◄ 東牆    │
+  │  y=10~133, x=10~593            │ Room     │
+  │  門口、走廊、佈告欄            │ x=628~785│
+  │  Gate 門神站位 x=100 y=80      │ y=15~413 │
+  ├════════════════════════════════┤          │
+  │  ▒▒▒ 北牆 (y=138~163, 25px)    │          │
+  │  窗戶×4 + 時鐘嵌在牆內         │◄ 東牆    │
   │  門口開口: x=88~140            │  x=598   │
   ├────────────────────────────────┤  ~623    │
   │  Main Office                   │  25px    │
-  │  y=163~399, x=15~593          │  門口:    │
+  │  y=163~399, x=15~593           │  門口:   │
   │                                │  y=185   │
-  │  ┌PM─┐  ┌Arch┐   ┌QA──┐ ┌Res─┐│  ~235   │
-  │  │140│  │260 │   │400 │ │520 ││          │
-  │  │240│  │240 │   │220 │ │220 ││          │
-  │  └───┘  └────┘   └────┘ └────┘│          │
+  │  ┌PM─┐  ┌Arch┐   ┌QA──┐ ┌Res─┐ │  ~235    │
+  │  │140│  │260 │   │400 │ │520 │ │          │
+  │  │240│  │240 │   │220 │ │220 │ │          │
+  │  └───┘  └────┘   └────┘ └────┘ │          │
   │                                │          │
-  │       ┌Dev─┐  ┌Ops─┐          │          │
+  │       ┌Dev─┐  ┌Ops─┐           │          │
   │       │340 │  │460 │  白板     │          │
-  │       │340 │  │340 │  x=535   │          │
-  │       └────┘  └────┘          │          │
-  ├════════════════════════════════┤══════════┤
-  │  ▒▒▒ 南牆 (y=399~419, 20px) ▒▒▒▒▒▒▒▒▒▒▒│
-  │  門口: x=213~267    門口: x=508~562      │
+  │       │340 │  │340 │  x=535    │          │
+  │       └────┘  └────┘           │          │
+  │  ┌Des─┐                        │          │
+  │  │140 │                        │          │
+  │  │360 │                        │          │
+  │  └────┘                        │          │
+  ├════════════════════════════════┴══════════┤
+  │  ▒▒▒ 南牆 (y=399~419, 20px)               │
+  │  門口: x=213~267    門口: x=508~562       │
   ├──────────────────────┬─────────┬──────────┤
   │  Lounge              │ 隔牆    │ Research │
-  │  x=15~451            │ x=456  │ x=469    │
-  │  y=424~545           │ ~464   │ ~785     │
-  │  沙發 咖啡機 WC       │        │ 書架     │
-  │                      │        │ 電話亭   │
-  └──────────────────────┴────────┴──────────┘
+  │  x=15~451            │ x=456   │ x=469    │
+  │  y=424~545           │ ~464    │ ~785     │
+  │  沙發 咖啡機 WC      │         │ 書架     │
+  │                      │         │ 電話亭   │
+  └──────────────────────┴─────────┴──────────┘
 ```
+
+> 桌子座標的 SSoT 是 `src/components/PixelOffice.jsx` 的 `DESK_DATA`（共 7 張）。`gate`（門神）**沒有桌子** —— 它的位置來自 `movementSystem.js` 的 `WAYPOINTS.gate = { x: 100, y: 80 }`，站在門口走廊。上圖原本漏掉 `designer` 與 `gate` 兩個位置。
 
 ### 移動系統核心架構 (`movementSystem.js`)
 
@@ -728,3 +735,21 @@ An honest in-place "it noticed you" reaction layered onto the existing agent cli
 ### Per-feature specs (cont.)
 
 - [[shareable-daily-card]] · [[poke-acknowledge]] · ADR-005 (user drag rejected → poke redirect)
+
+## Office palette — change the look without breaking legibility
+
+Every colour of the room shell (floors, walls, door openings, outer frame), the team signs and the agent inspector card lives in one pure module, **`src/systems/officePalette.js`** (`SCENE`, `SIGNS`, `CARD`). Components reference the tokens instead of repeating the hex, and the room-shell rects carry no literal fill at all, so a door opening follows the floor token of the room it opens into. Furniture art, sprites, speech bubbles and the day/night + theme overlays keep their own homes (`TopDownFurniture.jsx`, `AgentCharacter.jsx`, `BehaviorBubble.jsx`, `lighting.js`, `theme.js`).
+
+A pretty palette is not allowed to hurt the product's first job — reading agent status at a glance — so `tests/officePalette.test.js` enforces five rules. Each failure says what to change:
+
+| Rule | What it protects | Threshold |
+|---|---|---|
+| R1 | The main floor never camouflages a status hue (solid `STATUS_COLORS` vs floor) | ≥ 1.2:1 |
+| R2 | Walls still separate every room they border | ≥ 1.5:1 |
+| R3 | Inspector text on paper and the name over each role's header tint (all roles in `src/config/characters.json`); the close ✕ icon over that tint | text ≥ 4.5:1 (WCAG AA), icon ≥ 3:1 |
+| R4 | `STATUS_COLORS` appears in the inspector only on the status dot, never as text (aliases included) | source check |
+| R5 | No palette hex repeated as a literal; no literal `fill` on any room-shell rect | source check |
+
+`STATUS_COLORS` (`src/systems/constants.js`) is deliberately **not** a palette token: status colours carry meaning, so a restyle adapts the floor to them, never the reverse. R1 is honest about its limit: rings are drawn below full opacity and pulse (50% peak at base effort, up to 100% at max effort), so what you see on screen is usually lower than the solid number (working amber is 1.25:1 solid and about 1.13:1 at 50%). It keeps a floor from camouflaging a status hue; the name pill still carries status at full strength. Every rule is also tested against a real past mistake so it provably fails when it should: the old `#C8A878` floor (working amber 1.04:1), a rejected `#A39C89` wall (1.03:1 against research), the pre-palette status line coloured with `STATUS_COLORS`, and the pre-palette door literal `fill="#9898B0"`.
+
+To try a new look: edit the tokens, run `npx vitest run tests/officePalette.test.js`, then take a real screenshot with `node scripts/staged-capture.mjs`, which runs against an isolated status directory so your own live agent traffic cannot repaint the scene. Spec: [[calm-stationery-palette]].

@@ -54,3 +54,32 @@ source_sha: 09478fc
 - [DECISION] Poke uses Model A (layered onto the existing click — no new gesture): click = inspector + in-place bob + real-status quip bubble; re-click while inspector open = reaction only; Space = poke-only; right-click = poke + preventDefault. Long-press/right-click-primary rejected (input trap on small auto-moving sprites + undiscoverable + keyboard-hostile). Full rationale: ADR-005.
 - [CONSTRAINT] The poke bob reuses the AVO-136 `<animateTransform>` additive idiom (key=seq to replay per poke), is reduced-motion-gated, and is `aria-hidden`; the quip bubble is `role=status aria-live=polite` and preempts the ambient BehaviorBubble slot (no overlap). New in-scene reactions follow this animate-additive + a11y pattern.
 - [TRADEOFF] v1 reaction is a bob + bubble (not a literal sprite-facing turn); the inspector popover can occlude the quip bubble on the just-clicked agent (bob stays visible). Accepted; richer facing / non-occluding placement is a later refinement.
+
+### [ui-rendering][2026-09-08][fix/audit-2026-09-08 (audit remediation)]
+cross-ref: See [hook-integration][2026-09-08][fix/audit-2026-09-08 (audit remediation)] in docs/architecture/hook-integration.log.md
+
+- [DECISION] `awaiting-approval` gets its own desk-bound behavior (`await-approval`, hourglass glyph) instead of reusing an idle one. `check-phone` and `stretch` are lounge DESTINATIONS in `movementSystem.js`'s `BEHAVIOR_LOCATIONS`, so mapping a status signal to either would have WALKED the agent to the sofa -- position is state in this product. Reusing `scratch-head` was also rejected: it is `blocked`'s, and AVO-167 deliberately separates the alarm-fast block ring from the calm cyan wait ring.
+- [CONSTRAINT] A status that arrives with NO task (everything `idleGapInfer` produces) needs an explicit branch in BOTH `decideBehavior` and `generateContextBubble`. Without one it falls through to the task-family default and the role `-working` bubble pool -- an agent waiting on a human permission prompt animated a typing keyboard and said "almost... almost~", a work claim over the exact absence of work (ADR-007 honesty gate).
+
+### [ui-rendering][2026-09-13][feat/calm-stationery-palette]
+source_spec: docs/specs/calm-stationery-palette.md
+source_sha: 0cbe3c1
+
+- [DECISION] Status colour is a graphic channel, never a text colour: in the inspector it lives on the status dot and the scene ring, and all text is ink/muted ink, because no `STATUS_COLORS` value reaches 4.5:1 as text.
+- [DECISION] Scene palette changes are static fills beneath the agent layer only; room readability (walls vs neighbouring floors) and ring contrast are measured before a token is accepted.
+- [DECISION] Taste calls on how the office looks are made by the owner from same-state rendered candidates, not delegated through a design packet.
+
+### [ui-rendering][2026-09-19][fix/review-2026-09-19]
+source_spec: docs/specs/review-2026-09-19-remediation.md
+source_sha: 94e3d5a
+
+- [DECISION] Overlays that must stay on-screen (inspector card, speech bubble) clamp against the LIVE viewBox bounds published in `store.sceneBounds`, never against literal 800×560 numbers — panel mode crops the scene, so a literal is a clip waiting to happen.
+- [CONSTRAINT] A bubble may be moved to stay visible, but never into view for a speaker who is not visible (orphan guard). Relocating speech without its speaker would detach the voice channel (ADR-007) from its source.
+- [TRADEOFF] The inspector's counter-scale is sacrificed before visibility: when the card cannot fit at its readable size it shrinks to fit rather than clipping. Smaller text beats a missing close button.
+- [DECISION] The document-title status channel is deleted, not flag-gated: a page can only see its own title, the office never sets it, so the channel is dead code whose only reachable behaviour is self-feedback into a fabricated `working`.
+- [CONSTRAINT] A relative-time label must not outlive its truth by more than one tick (10 s); a component that renders "ago"/"since" text owns a clock tick instead of relying on unrelated store churn to re-render it.
+
+### [ui-rendering][2026-09-19][fix/bubble-truncation-width]
+source: PR #237 (quick-win, REV-07)
+
+- [CONSTRAINT] Speech-bubble text is fitted by WIDTH (budget 140, `BUBBLE_TEXT_BUDGET`), measured with canvas `measureText` in the exact font the `<text>` renders (one shared constant, pinned by a test) — never by character count. Character caps are script-biased: 16 CJK ≈ 1.7× the width of 16 Latin. Change the budget only from a re-run of the per-line simulation (whole-line % and mean/max box per locale), not by feel.

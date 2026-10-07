@@ -1,6 +1,6 @@
 {
   "name": "agent-virtual-office",
-  "version": "1.6.7",
+  "version": "1.6.10",
   "description": "Pixel-art virtual office that visualizes your AI coding agents in real time — Claude Code, Codex, Gemini CLI, or any tool that can POST status. Pure SVG, zero backend, runs locally.",
   "main": "bin/cli.js",
   "bin": {
@@ -60,7 +60,7 @@
     "public/",
     "src/",
     "index.html",
-    "vite.config.js",
+    "vite.config.mjs",
     "server.mjs",
     "package.json",
     "Dockerfile",
@@ -78,9 +78,10 @@
   },
   "devDependencies": {
     "playwright": "^1.62.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "overrides": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "source-map-js": "^1.2.2"
   }
 }

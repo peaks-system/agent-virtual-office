@@ -1,11 +1,16 @@
+// Identity colors MIRROR src/config/characters.json (the `agentcortex` pack) -- this page is
+// plain static HTML with no bundler, so it cannot import the JSON. Only `designer` used to
+// match; every other role showed a different colour here than the office itself did, so the
+// same agent read as two people across the two views. tests/bridgeUiRoleColors.test.js pins
+// the mirror to the canonical file.
 const AGENTS = [
-  { id: 'pm', name: 'PM', color: '#5B8CFF' },
-  { id: 'arch', name: 'Architect', color: '#8B5CF6' },
-  { id: 'dev', name: 'Developer', color: '#F97316' },
-  { id: 'qa', name: 'QA', color: '#22C55E' },
-  { id: 'ops', name: 'DevOps', color: '#EC4899' },
-  { id: 'res', name: 'Researcher', color: '#06B6D4' },
-  { id: 'gate', name: 'Gatekeeper', color: '#EAB308' },
+  { id: 'pm', name: 'PM', color: '#378ADD' },
+  { id: 'arch', name: 'Architect', color: '#7F77DD' },
+  { id: 'dev', name: 'Developer', color: '#1D9E75' },
+  { id: 'qa', name: 'QA', color: '#BA7517' },
+  { id: 'ops', name: 'DevOps', color: '#D85A30' },
+  { id: 'res', name: 'Researcher', color: '#5DCAA5' },
+  { id: 'gate', name: 'Gatekeeper', color: '#E24B4A' },
   { id: 'designer', name: 'Designer', color: '#E8688A' },
 ]
 
@@ -14,7 +19,7 @@ AGENTS.forEach(a => { state[a.id] = null })
 
 function clearActiveButtons() {
   document.querySelectorAll('.agent-btns button').forEach(b => {
-    b.className = b.className.replace(/active-\w+/, '').trim()
+    b.className = b.className.replace(/active-[\w-]+/g, '').trim()
   })
 }
 
@@ -30,12 +35,19 @@ function createAgentCard(agent) {
 
   const buttons = document.createElement('div')
   buttons.className = 'agent-btns'
-  for (const status of ['working', 'blocked', 'done']) {
+  const labels = {
+    working: 'work',
+    blocked: 'block',
+    done: 'done',
+    planning: 'plan',
+    'awaiting-approval': 'wait',
+  }
+  for (const status of ['working', 'blocked', 'done', 'planning', 'awaiting-approval']) {
     const btn = document.createElement('button')
     btn.dataset.agent = agent.id
     btn.dataset.status = status
     btn.type = 'button'
-    btn.textContent = status === 'working' ? 'work' : status === 'blocked' ? 'block' : 'done'
+    btn.textContent = labels[status] || status
     btn.addEventListener('click', () => toggle(agent.id, status, btn))
     buttons.appendChild(btn)
   }
@@ -47,11 +59,11 @@ function createAgentCard(agent) {
 function toggle(agentId, status, btn) {
   if (state[agentId] === status) {
     state[agentId] = null
-    btn.className = btn.className.replace(/active-\w+/, '').trim()
+    btn.className = btn.className.replace(/active-[\w-]+/g, '').trim()
   } else {
     state[agentId] = status
     btn.parentElement.querySelectorAll('button').forEach(b => {
-      b.className = b.className.replace(/active-\w+/, '').trim()
+      b.className = b.className.replace(/active-[\w-]+/g, '').trim()
     })
     btn.classList.add('active-' + status)
   }
@@ -129,7 +141,7 @@ function applyUrlParams() {
   for (const [k, v] of params.entries()) {
     if (AGENTS.find(a => a.id === k)) {
       state[k] = v
-      const isStatus = ['working', 'blocked', 'done'].includes(v)
+      const isStatus = ['working', 'blocked', 'done', 'planning', 'awaiting-approval'].includes(v)
       const btn = document.querySelector(`button[data-agent="${k}"][data-status="${isStatus ? v : 'working'}"]`)
       if (btn) btn.classList.add('active-' + (isStatus ? v : 'working'))
     }

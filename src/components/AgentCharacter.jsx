@@ -8,8 +8,9 @@ import { BlockedReasonBadge } from './blockedReasonBadge'
 import { recurringInfo } from '../systems/recurringFailure'
 import { selectVisibleBubbles, BUBBLE_VISIBLE_CAP } from '../systems/bubbleVisibility.js'
 import { stepWalkFrame } from '../systems/walkFrame.js'
-import { WALK_SPEED, WALK_FRAME_INTERVAL, BEHAVIOR_STUCK_RETRIES, BEHAVIOR_STUCK_RETRY_MS, WATCHDOG_INTERVAL, WATCHDOG_TIMEOUT, shouldSkipBehaviorWatchdog } from '../systems/constants.js'
-import BehaviorBubble from './BehaviorBubble'
+import { WALK_SPEED, WALK_FRAME_INTERVAL, BEHAVIOR_STUCK_RETRIES, BEHAVIOR_STUCK_RETRY_MS, WATCHDOG_INTERVAL, WATCHDOG_TIMEOUT, shouldSkipBehaviorWatchdog, BLOCKED_FAMILY } from '../systems/constants.js'
+import BehaviorBubble, { shouldFlipBubbleBelow, isSpeakerOnScreen } from './BehaviorBubble'
+import OneShotSmil from './OneShotSmil.jsx'
 import { shouldShakeDesk } from '../systems/eventJuice.js'
 import { pickPokeReaction, pickQuipIndex } from '../systems/pokeReaction.js'
 
@@ -179,6 +180,24 @@ const BehaviorIndicator = React.memo(function BehaviorIndicator({ behavior }) {
           <rect x={0} y={6} width={3 + (frame % 2)} height={2} fill="#378ADD" rx={0.3} />
           <rect x={0} y={3} width={5} height={2} fill="#5CB88A" rx={0.3} />
           <rect x={0} y={0} width={4 + (frame % 3)} height={2} fill="#EF9F27" rx={0.3} />
+        </g>
+      )
+    }
+    case 'await-approval': {
+      // AVO-167: hourglass — sand falls, nothing else moves. Deliberately the calmest glyph in
+      // this switch: this agent is stopped at its desk waiting on a human permission prompt, and
+      // the slot previously rendered the 'typing' keyboard, which claimed work that was not
+      // happening. Cool cyan matches the STATUS_COLORS ring for the same state.
+      const sand = frame % 4          // 0..3 — grains that have fallen through
+      const top = 3 - sand
+      return (
+        <g transform={`translate(${ox}, ${oy})`}>
+          <rect x={1} y={0} width={5} height={0.8} fill="#1E9FD4" />
+          <rect x={1} y={8.2} width={5} height={0.8} fill="#1E9FD4" />
+          <polyline points="1.5,0.8 5.5,0.8 3.5,4.5 5.5,8.2 1.5,8.2 3.5,4.5 1.5,0.8"
+            fill="none" stroke="#1E9FD4" strokeWidth={0.6} strokeLinejoin="round" />
+          {top > 0 && <polygon points={`${3.5 - top * 0.55},${1.1} ${3.5 + top * 0.55},${1.1} 3.5,${1.1 + top * 0.7}`} fill="#7FD4EF" />}
+          {sand > 0 && <polygon points={`${3.5 - sand * 0.55},7.9 ${3.5 + sand * 0.55},7.9 3.5,${7.9 - sand * 0.7}`} fill="#7FD4EF" />}
         </g>
       )
     }
@@ -395,6 +414,9 @@ function AgentCharacter({ agent }) {
   // 0..800 OR the panel crop). Primitive subscriptions → re-render only on a real bounds change.
   const sceneMinX = useOfficeStore((s) => s.sceneBounds.minX)
   const sceneW = useOfficeStore((s) => s.sceneBounds.w)
+  // REV-02: the visible top, so the bubble flips below against the panel crop, not y=0.
+  const sceneMinY = useOfficeStore((s) => s.sceneBounds.minY)
+  const sceneH = useOfficeStore((s) => s.sceneBounds.h)
   // L3 reluctant-participant tell (transient expiry ts). Pure overlay — never affects behavior.
   const reluctantUntil = useOfficeStore((s) => s.reluctant?.[id])
   // AVO-110: hook-stamped blocked-reason token (primitive subscription → re-render only on change).
@@ -1228,22 +1250,26 @@ function AgentCharacter({ agent }) {
           translate/scale. key={seq} remounts per poke so each click replays. Reduced-motion
           drops the motion (the quip bubble still acknowledges the poke). Decorative → aria-hidden. */}
       {!reducedMotion && pokeBob && (
-        <animateTransform key={`poke-${pokeBob.seq}`} attributeName="transform" type="translate" additive="sum"
-          values={pokeBob.intensity === 'turnaway' ? '0 0;-3 0;3 0;-2 0;0 0'
-            : pokeBob.intensity === 'long' ? '0 0;0 -5;0 -2;0 -5;0 0'
-            : '0 0;0 -4;0 0'}
-          keyTimes={pokeBob.intensity === 'normal' ? '0;0.5;1' : '0;0.25;0.5;0.75;1'}
-          dur={pokeBob.intensity === 'normal' ? '0.32s' : pokeBob.intensity === 'long' ? '0.6s' : '0.5s'}
-          repeatCount="1" fill="freeze" aria-hidden="true" />
+        <OneShotSmil key={`poke-${pokeBob.seq}`}>
+          <animateTransform attributeName="transform" type="translate" additive="sum"
+            values={pokeBob.intensity === 'turnaway' ? '0 0;-3 0;3 0;-2 0;0 0'
+              : pokeBob.intensity === 'long' ? '0 0;0 -5;0 -2;0 -5;0 0'
+              : '0 0;0 -4;0 0'}
+            keyTimes={pokeBob.intensity === 'normal' ? '0;0.5;1' : '0;0.25;0.5;0.75;1'}
+            dur={pokeBob.intensity === 'normal' ? '0.32s' : pokeBob.intensity === 'long' ? '0.6s' : '0.5s'}
+            repeatCount="1" fill="freeze" aria-hidden="true" />
+        </OneShotSmil>
       )}
       {/* AVO-136: desk-slam → a brief LOCAL jitter on this agent only. `additive="sum"` composes the
           shake ON TOP of the base translate/scale (a CSS transform would override positioning). One
           play; mounts only while in desk-slam, so it fires once on onset (anti-nag). Gated off under
           reduced-motion — the desk-slam posture + confused expression remain the semantic tell. */}
       {shouldShakeDesk(state.behavior, reducedMotion) && (
-        <animateTransform attributeName="transform" type="translate" additive="sum"
-          values="0 0;-1.6 0;1.6 0;-1 0;1 0;0 0" keyTimes="0;0.2;0.4;0.6;0.8;1"
-          dur="0.42s" repeatCount="1" fill="freeze" />
+        <OneShotSmil>
+          <animateTransform attributeName="transform" type="translate" additive="sum"
+            values="0 0;-1.6 0;1.6 0;-1 0;1 0;0 0" keyTimes="0;0.2;0.4;0.6;0.8;1"
+            dur="0.42s" repeatCount="1" fill="freeze" />
+        </OneShotSmil>
       )}
       {/* AVO-132: single working/planning glow ring; effort (high/xhigh/max) intensifies it
           (peak opacity + stroke width) instead of stacking a second concentric aura.
@@ -1291,8 +1317,10 @@ function AgentCharacter({ agent }) {
           the ✓ status icon + green name carry the done state after. reducedMotion → no flash. */}
       {state.status === 'done' && !reducedMotion && (
         <circle cx={0} cy={-18} r={16} fill="none" stroke={glowColor} strokeWidth="2.5" opacity="0.6">
-          <animate attributeName="r" values="16;30" dur="0.7s" repeatCount="1" fill="freeze" />
-          <animate attributeName="opacity" values="0.6;0" dur="0.7s" repeatCount="1" fill="freeze" />
+          <OneShotSmil>
+            <animate attributeName="r" values="16;30" dur="0.7s" repeatCount="1" fill="freeze" />
+            <animate attributeName="opacity" values="0.6;0" dur="0.7s" repeatCount="1" fill="freeze" />
+          </OneShotSmil>
         </circle>
       )}
 
@@ -1315,8 +1343,10 @@ function AgentCharacter({ agent }) {
         state.status === 'blocked' ? (
           <g key={`reason-${reasonCode || 'unknown'}`}>
             {!reducedMotion && (
-              <animateTransform attributeName="transform" type="scale"
-                values="0.6 0.6;1.1 1.1;1 1" keyTimes="0;0.6;1" dur="0.35s" repeatCount="1" fill="freeze" />
+              <OneShotSmil>
+                <animateTransform attributeName="transform" type="scale"
+                  values="0.6 0.6;1.1 1.1;1 1" keyTimes="0;0.6;1" dur="0.35s" repeatCount="1" fill="freeze" />
+              </OneShotSmil>
             )}
             <BlockedReasonBadge
               reasonCode={reasonCode}
@@ -1327,8 +1357,10 @@ function AgentCharacter({ agent }) {
         ) : (
           <g key={state.behavior}>
             {!reducedMotion && (
-              <animateTransform attributeName="transform" type="scale"
-                values="0 0;1.15 0.9;1 1" keyTimes="0;0.6;1" dur="0.3s" repeatCount="1" fill="freeze" />
+              <OneShotSmil>
+                <animateTransform attributeName="transform" type="scale"
+                  values="0 0;1.15 0.9;1 1" keyTimes="0;0.6;1" dur="0.3s" repeatCount="1" fill="freeze" />
+              </OneShotSmil>
             )}
             <BehaviorIndicator behavior={state.behavior} />
           </g>
@@ -1379,17 +1411,24 @@ function AgentCharacter({ agent }) {
         {/* Bubble grows in place too (anchored at its -68 origin). At labelScale 1 this is
             identical to the prior `<BehaviorBubble x={0} y={-68}/>` directly under scale(1/1.35).
             FLIP-BELOW: an agent near the office top (e.g. the Gatekeeper at the top wall) would draw
-            its above-the-head bubble past the SVG's y=0 edge and get clipped. The bubble's projected
-            top is pos.y − 68 − 34·labelScale; when that crosses the top edge we anchor it just below
-            the agent (+6) and flip the tail up so the whole bubble stays inside the scene. */}
+            its above-the-head bubble past the SVG's top edge and get clipped. The bubble's projected
+            top is pos.y − 68 − 34·labelScale; when that crosses the VISIBLE top (y=0, or the panel
+            crop's top — REV-02) we anchor it just below the agent (+6) and flip the tail up so the
+            whole bubble stays inside the scene. Rule + orphan guard: shouldFlipBubbleBelow. */}
         {(() => {
-          const bubbleTopAbove = pos.y - 68 - 34 * labelScale
-          const below = bubbleTopAbove < 6
+          const below = shouldFlipBubbleBelow({ posX: pos.x, posY: pos.y, labelScale, sceneMinX, sceneMinY, sceneW })
           // AVO-158: a live poke quip momentarily PREEMPTS the ambient bubble (reuses the same
           // slot → no overlap, inherits edge-clamping). When a quip is showing, mark the group
           // as a polite live region so the acknowledge is announced once (reaction bob is
           // aria-hidden separately). aria-atomic so the whole short quip reads as one unit.
-          const bubbleMsg = pokeQuip || (bubbleVisible ? state.bubble : null)
+          // AVO-196: an agent whose body is entirely outside the crop (the lounge, below a panel
+          // view) would otherwise render speech inside it with nobody visible saying it. Hidden,
+          // EXCEPT the blocked family, which ADR-007 D1 licenses as the message worth interrupting
+          // for and which the panel's control bar surfaces too. Hides TEXT only; ring/pill are
+          // off-screen anyway (the same honest-suppression rule as the bubble cap).
+          const offScreenSpeaker = !isSpeakerOnScreen({ posX: pos.x, posY: pos.y, sceneMinX, sceneMinY, sceneW, sceneH })
+            && !BLOCKED_FAMILY.has(state.status)
+          const bubbleMsg = offScreenSpeaker ? null : (pokeQuip || (bubbleVisible ? state.bubble : null))
           return (
             <g transform={`translate(0, ${below ? 6 : -68}) scale(${labelScale})`}
               role={pokeQuip ? 'status' : undefined}

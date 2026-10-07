@@ -36,12 +36,14 @@ docs/context/private/
 .claude-chat/
 .cursor/
 .antigravity/scratch/
+scratch/
 
 
 
 # App Build
 node_modules/
 dist/
+dist-single/
 
 
 # AgentCortex Template - Downstream Ignore Defaults

@@ -43,7 +43,7 @@ function request(handler, body) {
   return res
 }
 
-describe.each(['server.mjs', 'vite.config.js'])('%s language persistence', file => {
+describe.each(['server.mjs', 'vite.config.mjs'])('%s language persistence', file => {
   it.each(['ja', 'en', 'zh-TW'])('persists supported language %s', lang => {
     const { handler, write } = loadHandler(file)
     const res = request(handler, ` ${lang} `)

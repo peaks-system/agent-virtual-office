@@ -36,3 +36,54 @@ cross_ref: docs/architecture/silent-catch-policy.md
 - [DECISION] Bridge page dynamic UI must avoid inline handlers and dynamic `innerHTML`. The launcher keeps the external script split (`public/bridge.html` + `public/bridge-ui.js`) so the existing CSP can block inline script without breaking controls.
 - [CONSTRAINT] Hook and bridge failure handling is intentionally crash-proof, but new silent catches must follow `docs/architecture/silent-catch-policy.md`; user-visible API failures remain observable through status codes or sanitized logs.
 - [CONSTRAINT] Hook hot paths must stay fast and avoid logging raw prompts, command bodies, token payloads, or local paths unless an existing sanitized diagnostic channel explicitly allows it.
+
+### [hook-integration][2026-09-08][fix/audit-2026-09-08 (audit remediation)]
+source_review: docs/reviews/2026-09-08-audit-handoff.md
+source_sha: 936d92baae08f709d75c5134af183db1c667d559
+cross_ref: docs/architecture/ui-rendering.log.md
+
+- [DECISION] Every restatement of the office-status contract outside `src/utils/statusContract.mjs` is a MIRROR and must be pinned by a drift-guard test. Three mirrors had silently drifted behind AVO-101/AVO-167: `public/hooks/office-status-codex.js` (a standalone CJS script that cannot `require` the ESM contract), `public/bridge.js`, and `public/bridge-ui.js`'s identity colours. The mirrors stay -- what changed is that an unpinned mirror is now considered a defect, not a shortcut.
+- [DECISION] A missing status in a mirror is not a filter, it is a MISCLASSIFICATION. `bridge.js` treated any non-whitelisted value as a task NAME, so `{ dev: 'planning' }` produced a "working" agent labelled "planning"; the codex hook DROPPED the agent outright. Both failure modes are silent and neither surfaces as an error.
+- [DECISION] `server.mjs` now resolves its status directory through `OFFICE_STATUS_DIR`, matching `vite.config.js`, and announces an active override in the startup banner. The dev-server precedent deliberately scoped that variable to `configureServer` so it could not reach a built office; that claim is about the vite plugin's own registration and the browser payload (still true -- `grep -rl OFFICE_STATUS_DIR dist/` finds nothing). Extending it to the production server adds no fabrication capability, only a second way to point at the file the existing `/api/status` writer already owns.
+- [DECISION] `_seq` is a MILLISECOND epoch across every transport. The shell hook had been emitting `date +%s%N` -- nanoseconds on GNU date, and a literal `"1757318400N"` on BSD/macOS. Both break consumers written against milliseconds: `scanSessions` dedups a bare status file against a slugged one inside a 2s window and expires `done` against `Date.now()`, and the client keeps a numeric high-water mark.
+- [CONSTRAINT] `server.mjs` is NOT self-contained. It imports `src/server/scanSessions.mjs` and `src/utils/normalizePost.mjs`, so any packaging step that ships the server must ship that import closure. The Dockerfile runner stage did not, and every container built from it exited on `ERR_MODULE_NOT_FOUND` while the build, the tests and the smoke gates all stayed green. `tests/dockerRuntimeClosure.test.js` now walks the graph and fails when it reaches outside what the runner copies.
+- [CONSTRAINT] Hand-wiring instructions are part of the contract. `bin/cli.js` registers 8 hook events; `docs/INTEGRATIONS.md` said 6 and `public/hooks/hooks-config.json` -- the file the docs tell you to paste -- omitted `PermissionDenied` and `StopFailure`, which are exactly what turn a denied tool call or a Claude-API failure into an honest `blocked` state. A hand-wired install silently lost that. Pinned to `bin/cli.js` by `tests/hookEventRegistrationParity.test.js`.
+- [CONSTRAINT] Hook-authored labels must resolve language through `detectHookLang()` (`~/.claude/office-lang`, default `en`). `generic-llm-bridge.js` had hard-coded Traditional Chinese, so an English office showed Chinese status text with no way to change it.
+- [TRADEOFF] The Docker runner copies `src/server` + `src/utils` (56 KB) rather than all of `src/` (1.1 MB). The narrower copy keeps app source out of the runtime image but can be outgrown by a future import -- which is why it ships paired with the import-graph guard rather than on its own.
+
+### [hook-integration][2026-09-20][chore/vite-config-esm]
+source_spec: docs/specs/vite-config-esm.md
+source_sha: f49a69c
+
+- [DECISION] The dev-server config is a native ES module (`vite.config.mjs`) importing the transport contract from `statusContract.mjs` directly; the package stays `"type": "commonjs"` so bin/ and the hooks are untouched.
+- [CONSTRAINT] Build/packaging manifests that name repo paths (Dockerfile `COPY`, package.json `files`) are guarded by a test that every named path exists — both consumers drop a missing path silently, so a rename can otherwise ship a broken image or tarball with every gate green.
+
+### [hook-integration][2026-09-27][fix/hook-robustness-privacy]
+source_spec: docs/specs/hook-robustness-privacy.md
+source_sha: e3199900f26649a5ccec77e0afb29068319e273c
+
+- [DECISION] `GET /api/status` stays unauthenticated and keeps serving `activeFile`/`_cwd`
+  verbatim — the default bind is loopback-only, so exposure only reaches another machine once
+  the operator has already opted into `--host` (the same trust boundary the existing write-side
+  warning covers); fixing the read side touches `server.mjs`, outside this branch's target files.
+- [TRADEOFF] Identity-verified lock steal (owner token + mtime, re-checked after the rename) adds
+  ~93-320ms measured worst-case latency under active contention in exchange for closing the
+  double-steal TOCTOU; accepted since steals are already the rare, already-contended path and the
+  common case (no contention) adds 0ms.
+- [DECISION] Accept the move-aside/rename-back window's two residual outcomes — a bounded
+  double-claim when a third acquirer races the restore, and a bounded (≤staleMs) self-healing
+  zombie lock — rather than adding OS-level file locking (`flock`/`LockFileEx`) or a second lock
+  primitive; both match the pre-lock baseline hazard this file exists to narrow, not a new class.
+- [CONSTRAINT] The hook must never hang or add unbounded latency — every steal-path addition
+  (identity check, EPERM/EBUSY retry, orphan cleanup) stays inside the existing
+  `maxRetries × waitMs` budget.
+- [DECISION] `WebSearch`/`Agent` privacy fixes reuse the existing generic-noun fallback labels
+  (no new locale strings) rather than inventing new office-vibe copy for two tools.
+- [DECISION] `bridge.js` duplicates `HOOK_ORIGIN` from `inferStatus.js` (kept in sync via a
+  comment) rather than adding a bundler dependency to a standalone, no-build-step script.
+- [DECISION] `saveSkillContext`'s non-atomic write is left untouched — it is a single-agent cache
+  file, not the shared multi-writer `STATUS_FILE` the audit scoped `atomicWriteJson` to; folding
+  it in would be an unrequested refactor of a file the audit never flagged.
+- [TRADEOFF] `releaseStatusLock`'s read-token-then-`rmSync` residual (LOW #4) is documented, not
+  closed with a rename-verify release — the window is narrower than the acquire-side one and its
+  severity (LOW) does not currently justify the added machinery.

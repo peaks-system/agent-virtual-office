@@ -16,6 +16,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import net from 'node:net'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
@@ -29,6 +30,10 @@ import wordpressApiModule from './scripts/wordpress-api.cjs'
 // Uses the .mjs extension so Node.js can import it directly at runtime
 // (package "type":"commonjs" prevents importing .js ESM files without transpilation).
 import { normalizePost, nextSeq, VALID_ROLES, VALID_STATUSES } from './src/utils/normalizePost.mjs'
+// fix/dev-allowed-hosts: the env-parsing step of the Host allowlist below is now shared with
+// vite.config.mjs (the dev server) so OFFICE_ALLOWED_HOSTS means the same thing in both
+// transports — see src/utils/hostAllowlist.mjs for what is and isn't shared.
+import { hostnameFromHeader, parseAllowedHostsEnv } from './src/utils/hostAllowlist.mjs'
 
 // Count working/blocked agents — used by the /api/event webhook handler.
 function countActive(agents) {
@@ -68,7 +73,20 @@ if (!fs.existsSync(path.join(dist, 'index.html'))) {
 }
 
 // ─── Shared paths ────────────────────────────────────────────────────────────
-const STATUS_PATH = path.join(os.homedir(), '.claude', 'office-status.json')
+// OFFICE_STATUS_DIR overrides the directory the office reads/writes status in, matching
+// `vite.config.mjs` (the dev server) so the two transports resolve the same path from the
+// same input. Without it the only way to relocate the status directory here was to spoof
+// HOME/USERPROFILE for the whole process, which is what the E2E tests had to do and what a
+// deployment on a read-only rootfs or a service account with an unusual home was left with.
+//
+// This is NOT a status-fabrication surface: it only re-points the file the existing
+// /api/status writer already owns. The known hazard is the operator-forgetfulness one
+// recorded when the dev-server flag shipped -- a stale/empty office being read as if it
+// were live -- so an override is announced in the startup banner below rather than being
+// silent. `path.dirname(STATUS_PATH)` is also what scanAndMerge/getSessionStats scan, so
+// session discovery follows the override with no second knob.
+const STATUS_DIR = process.env.OFFICE_STATUS_DIR || path.join(os.homedir(), '.claude')
+const STATUS_PATH = path.join(STATUS_DIR, 'office-status.json')
 
 // The project directory session files are matched against. This process is spawned with its
 // cwd set to the package root by bin/cli.js (and therefore by npx), so process.cwd() cannot
@@ -109,8 +127,29 @@ function atomicWrite(filePath, content) {
 const isWin = process.platform === 'win32'
 function pathsEqual(a, b) { return isWin ? a.toLowerCase() === b.toLowerCase() : a === b }
 
+// F1 (audit 2026-09-26): `new URL(req.url, base)` throws TypeError('Invalid URL') on a
+// malformed request-target (e.g. an absolute-form target with an invalid authority, or a
+// stray '['). That throw happens synchronously inside the http.createServer request-listener
+// callback — req/res 'error' listeners do NOT catch it — so an uncaught throw here crashes
+// the entire process on a single crafted request. Every call site that needs to parse
+// req.url MUST go through this helper instead of calling `new URL()` directly.
+function safeParseUrl(reqUrl) {
+  try { return new URL(reqUrl, 'http://x') } catch { return null }
+}
+
 // ─── SSE clients ──────────────────────────────────────────────────────────────
 const sseClients = new Set()
+
+// LOW-4 (review round 2, 2026-09-26): with the per-socket idle timeout now disabled on SSE
+// connections (F2 above), a client (or a `--host` LAN peer) can hold sockets open
+// indefinitely. Cap concurrent SSE clients so that can never grow unbounded; configurable
+// since the right ceiling depends on deployment (a single-operator localhost office vs. a
+// shared --host instance watched by a small team). Default is generous — this is a
+// resource-exhaustion backstop, not a normal-use limit.
+const MAX_SSE_CLIENTS = (() => {
+  const raw = parseInt(process.env.OFFICE_MAX_SSE_CLIENTS, 10)
+  return Number.isFinite(raw) && raw > 0 ? raw : 500
+})()
 
 function broadcastSSE(merged) {
   if (sseClients.size === 0) return
@@ -121,12 +160,18 @@ function broadcastSSE(merged) {
 }
 
 // M1: capture handle so gracefulShutdown can clear it; unref so it doesn't block exit alone
+//
+// F2 (audit 2026-09-26): kept well under both the 30s server.setTimeout below AND the 30s
+// proxy_read_timeout in docs/deployment/nginx.conf — a heartbeat byte resets an intermediary
+// proxy's own idle-read timer, so 15s keeps a fronting reverse proxy from dropping the stream
+// even though the direct-connection case is now handled by req.socket.setTimeout(0) on the
+// SSE route itself (see the /api/status/stream handler below).
 const _sseHeartbeat = setInterval(() => {
   if (sseClients.size === 0) return
   for (const client of [...sseClients]) {
     try { client.write(':heartbeat\n\n') } catch { sseClients.delete(client) }
   }
-}, 30_000)
+}, 15_000)
 _sseHeartbeat.unref()
 
 // ─── CORS + auth ─────────────────────────────────────────────────────────────
@@ -144,6 +189,90 @@ function getServerIPs() {
   return ips
 }
 const SERVER_IPS = getServerIPs()
+
+// F3 (audit 2026-09-26): DNS-rebinding guard. Without a Host-header check, a malicious page
+// can rebind an attacker-controlled hostname to 127.0.0.1 and issue a same-origin GET against
+// this server from the victim's browser — bypassing our Origin-based CORS entirely, since
+// CORS never restricts simple GETs, only whether the response is *readable* cross-origin by
+// script, and a top-level/rebound navigation IS same-origin from the browser's point of view.
+// Modeled on (NOT identical to) Vite's own `server.allowedHosts` semantics — dev is already
+// covered by Vite's internal hostValidationMiddleware; this closes the same class of gap in
+// the production server, but the two allowlists differ (see review round 2, 2026-09-26):
+//   - AVO supports a leading-dot suffix entry (`.example.com` matches `example.com` AND any
+//     `*.example.com` subdomain) — verified identical to Vite's own wildcard rule
+//     (`isHostAllowedInternal` in `node_modules/vite/dist/node/chunks/node.js`), which is
+//     exactly why `vite.config.mjs` can map `OFFICE_ALLOWED_HOSTS` straight into Vite's
+//     `server.allowedHosts` via the shared parser below with no translation step.
+//   - AVO strips a trailing `:port` from env entries (`mypc.local:5174` behaves the same as
+//     `mypc.local`), since the port a request arrives on is deployment-specific and shouldn't
+//     have to be duplicated into the allowlist.
+//   - A REQUEST WITH NO HOST HEADER, OR AN EMPTY `Host:` HEADER, IS ALLOWED THROUGH (see
+//     the comment on isAllowedHost below) — this matches Vite's behavior, but for a
+//     different, explicit reason specific to this server.
+//   - An UNBRACKETED IPv6 literal in Host (e.g. `Host: ::1`, no brackets) is REJECTED, not
+//     allowed. This is deliberate, not a bug: RFC 3986 §3.2.2 / RFC 7230 §5.4 require IPv6
+//     literals in a Host header to be bracket-delimited specifically so the address's own
+//     colons can't be confused with a `:port` separator — a compliant HTTP client never
+//     sends one unbracketed. Parsing an unbracketed form "leniently" would mean guessing
+//     where the address ends and the port begins, which is exactly the kind of ambiguity a
+//     Host-validation guard exists to refuse, not paper over.
+//   - A request whose Host is disallowed but carries a VALID `OFFICE_API_TOKEN` (see
+//     hasValidApiToken, defined further down) is allowed through anyway: a DNS-rebinding
+//     browser can send any Host it likes, but it has no way to know this server's secret
+//     token, so proof of the token is proof the caller isn't a rebinding browser.
+// Parsing (port/bracket stripping, leading-dot suffix survival, blank/bare-'.' filtering) now
+// lives in src/utils/hostAllowlist.mjs (parseAllowedHostsEnv), shared with vite.config.mjs.
+const ALLOWED_HOSTS_ENV = parseAllowedHostsEnv(process.env.OFFICE_ALLOWED_HOSTS)
+
+function isAllowedHost(hostHeader) {
+  const host = hostnameFromHeader(hostHeader)
+  // A request with NO Host header, or an EMPTY `Host:` header, cannot be the product of a
+  // DNS-rebinding attack: rebinding relies on the victim's BROWSER sending an
+  // attacker-chosen Host that resolves to this server's IP, and every browser HTTP/1.1
+  // request always includes a non-empty Host header. Either case here is either a
+  // deliberately-crafted raw/HTTP-1.0-style request (already on the least-privileged path —
+  // this check runs before any handler, so it still gets routed as an ordinary GET/POST with
+  // no elevated access) or a local health-check/proxy quirk. Rejecting it would only break
+  // those benign callers while adding no protection against the actual threat model, so both
+  // are allowed through — matching Vite's own choice, arrived at independently for this
+  // reason. `hostnameFromHeader` returns `null` for both `undefined` and `''`.
+  if (host === null) return true
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+  // net.isIP() only recognizes a BRACES-FREE v4 literal or an UNBRACKETED v6 literal — but by
+  // the time we get here, hostnameFromHeader has already stripped brackets from a bracketed
+  // v6 Host, so this correctly matches `[::1]` (passed in as `::1`). An actually-unbracketed
+  // v6 Host (e.g. raw `Host: ::1`) is misparsed upstream by the port-stripping heuristic in
+  // hostnameFromHeader (it sees a colon and guesses "port") and never reaches here looking
+  // like a clean IP — see the deliberate-rejection note on ALLOWED_HOSTS_ENV above.
+  if (net.isIP(host)) return true
+  for (const ip of SERVER_IPS) {
+    if (ip.replace(/^\[|\]$/g, '').toLowerCase() === host) return true
+  }
+  for (const entry of ALLOWED_HOSTS_ENV) {
+    if (entry.startsWith('.')) {
+      if (host === entry.slice(1) || host.endsWith(entry)) return true
+    } else if (entry === host) {
+      return true
+    }
+  }
+  return false
+}
+
+// Rejected-Host logging: one line per DISTINCT rejected hostname, capped at
+// REJECTED_HOST_LOG_CAP entries for the entire lifetime of this process — NOT a
+// time-windowed rate limit (there is no reset; once 50 distinct hostnames have been seen,
+// logging for any newly-seen hostname stops until the process restarts). This bounds a
+// scanner hammering random Host values from growing the set (or the log) without bound.
+// Existing 403 behavior is unaffected either way — this only bounds *logging*, never access
+// control.
+const REJECTED_HOST_LOG_CAP = 50
+const _loggedRejectedHosts = new Set()
+function logRejectedHostOnce(hostHeader) {
+  const key = typeof hostHeader === 'string' && hostHeader ? hostHeader : '(missing)'
+  if (_loggedRejectedHosts.has(key) || _loggedRejectedHosts.size >= REJECTED_HOST_LOG_CAP) return
+  _loggedRejectedHosts.add(key)
+  console.warn(`  403: rejected request with disallowed Host "${key}". Set OFFICE_ALLOWED_HOSTS to permit it (see docs/deployment/DEPLOYMENT.md#environment-variables).`)
+}
 
 const apiToken = process.env.OFFICE_API_TOKEN?.trim() || null
 const allowedOrigins = (process.env.OFFICE_API_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)
@@ -166,14 +295,29 @@ function safeEqual(a, b) {
   return timingSafeEqual(ha, hb)
 }
 
-function isAuthorized(req) {
-  if (!apiToken) return true
+// Whether THIS request carries a token that matches the configured OFFICE_API_TOKEN.
+// Distinct from isAuthorized() below: this returns false (never true) when no token is
+// configured at all, because "no secret is set" proves nothing about the caller — whereas
+// isAuthorized() treats an unset token as "endpoint doesn't require auth" and returns true.
+// Used by the F3 Host-check exemption (review round 3, MEDIUM-2): a DNS-rebinding browser
+// can issue same-origin requests with an attacker-chosen Host, but it CANNOT know this
+// server's secret token (it isn't same-origin-readable, isn't cookie-like, and the attacker
+// page never had it) — so proof of the token is proof the caller isn't a rebinding browser,
+// independent of what Host it sent. This lets a legitimate integration (e.g. the GitHub
+// Actions example in docs/INTEGRATIONS.md, POSTing by a bare hostname URL) work without also
+// needing OFFICE_ALLOWED_HOSTS, while a token-less request still gets the full Host check.
+function hasValidApiToken(req) {
+  if (!apiToken) return false
   const h = req.headers['x-office-token']
   const a = req.headers.authorization
   // Evaluate both before OR-ing — avoids timing oracle from short-circuit evaluation.
   const m1 = typeof h === 'string' && safeEqual(h, apiToken)
   const m2 = typeof a === 'string' && safeEqual(a, `Bearer ${apiToken}`)
   return m1 || m2
+}
+
+function isAuthorized(req) {
+  return !apiToken || hasValidApiToken(req)
 }
 
 // ─── Rate limiter (sliding window) ───────────────────────────────────────────
@@ -408,7 +552,9 @@ const MIME = {
 
 function serveStatic(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.setHeader('Allow', 'GET, HEAD'); res.statusCode = 405; return res.end() }
-  const urlPath = new URL(req.url, 'http://x').pathname
+  const parsedUrl = safeParseUrl(req.url)
+  if (!parsedUrl) { res.statusCode = 400; return res.end('Bad Request') }
+  const urlPath = parsedUrl.pathname
   // Reject NUL bytes which can cause filesystem misbehavior on some platforms.
   if (urlPath.includes('\0')) { res.statusCode = 400; return res.end('Bad Request') }
   let target = path.join(dist, urlPath)
@@ -460,7 +606,23 @@ const server = http.createServer((req, res) => {
   req.on('error', () => {})
   res.on('error', () => {})
   res.setHeader('X-Content-Type-Options', 'nosniff')
-  const url = new URL(req.url, 'http://x')
+
+  // F3: reject requests whose Host header doesn't resolve to an allowed host BEFORE any
+  // routing — closes the DNS-rebinding read across every route (API, SSE, and static assets
+  // alike; Vite's own dev-server host guard applies the same way for consistency). EXEMPT: a
+  // request carrying a valid OFFICE_API_TOKEN (see hasValidApiToken's comment) — a
+  // rebinding browser cannot know that token, so proof of it is proof the caller is a
+  // deliberate integration, not a victim's browser.
+  if (!isAllowedHost(req.headers.host) && !hasValidApiToken(req)) {
+    logRejectedHostOnce(req.headers.host)
+    res.statusCode = 403
+    return res.end('Forbidden: Host not allowed. Set OFFICE_ALLOWED_HOSTS to permit additional hostnames.')
+  }
+
+  // F1: never let a malformed request-target's `new URL()` throw escape this callback —
+  // req/res 'error' listeners above do not catch a synchronous throw in the listener body.
+  const url = safeParseUrl(req.url)
+  if (!url) { res.statusCode = 400; return res.end('Bad Request') }
   if (url.pathname.startsWith('/api/staff/')) return staffApi.handler(req, res)
   if (url.pathname.startsWith('/api/seo/')) return seoApi.handler(req, res)
   if (url.pathname.startsWith('/api/wordpress/')) return wordpressApi.handler(req, res)
@@ -469,6 +631,19 @@ const server = http.createServer((req, res) => {
     setCors(res, req.headers.origin, 'GET, OPTIONS')
     if (req.method === 'OPTIONS') return handlePreflight(req, res)
     if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); res.statusCode = 405; return res.end() }
+    if (sseClients.size >= MAX_SSE_CLIENTS) {
+      res.statusCode = 503
+      return res.end('Too many concurrent SSE clients. Set OFFICE_MAX_SSE_CLIENTS to raise the limit.')
+    }
+    // F2: SSE connections are long-lived by design. `server.setTimeout(30000)` below applies
+    // a 30s idle-socket timeout to every connection, and the heartbeat interval below also
+    // fires every 30s — the two clocks aren't phase-locked, so roughly every other heartbeat
+    // window the socket goes idle for the full 30s first and gets destroyed, dropping the
+    // stream ~every 60s (client then reconnects, briefly reporting degraded integration
+    // health — src/inference/inferStatus.js's onerror path). Disabling the per-socket
+    // timeout here is scoped to ONLY this route: headersTimeout/requestTimeout (slowloris
+    // guards) and the 30s default for every other request are untouched.
+    req.socket?.setTimeout(0)
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
     res.setHeader('X-Accel-Buffering', 'no')
@@ -528,6 +703,13 @@ server.listen(port, bindHost, () => {
 
   Use Ctrl+C to stop.
   `)
+
+  // Announce a redirected status directory: a forgotten OFFICE_STATUS_DIR would otherwise
+  // present an empty/stale office as if it were live, with nothing on screen saying why.
+  if (process.env.OFFICE_STATUS_DIR) {
+    console.log(`  Status directory overridden by OFFICE_STATUS_DIR: ${STATUS_DIR}
+`)
+  }
 
   if (bindHost === '0.0.0.0' && !apiToken) {
     console.warn('  WARNING: --host is set but OFFICE_API_TOKEN is not.')

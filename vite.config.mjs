@@ -5,8 +5,9 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { normalizePost, VALID_ROLES, VALID_STATUSES } from './src/utils/normalizePost.js'
-import { scanAndMerge, getSessionStats, resolveProjectRoot } from './src/server/scanSessions.mjs'
+import { normalizePost, nextSeq, VALID_ROLES, VALID_STATUSES } from './src/utils/statusContract.mjs'
+import { scanAndMerge, getSessionStats, resolveProjectRoot, STALE_MS } from './src/server/scanSessions.mjs'
+import { parseAllowedHostsEnv } from './src/utils/hostAllowlist.mjs'
 import staffApiModule from './scripts/staff-api.cjs'
 import seoApiModule from './scripts/seo-api.cjs'
 import wordpressApiModule from './scripts/wordpress-api.cjs'
@@ -51,12 +52,30 @@ const STATUS_DIR = process.env.OFFICE_STATUS_DIR || path.join(os.homedir(), '.cl
 const FILE_WATCHER_DISABLED = process.env.OFFICE_DISABLE_FILE_WATCHER === '1'
 const STATUS_PATH = path.join(STATUS_DIR, 'office-status.json')
 
+// Fallback overwrite-protection window for the BARE status file only (see writeStatus below).
+// Reuses scanSessions.mjs's STALE_MS so a fallback write can never clobber a webhook/API-set
+// status before scanAndMerge itself would call it stale (prod has no fallback at all and simply
+// leaves such a status in place until the real stale window elapses — this matches that).
+// NOT used for the separate "hooks are actively running" guard below, which stays short
+// (HOOK_ACTIVE_MS) — see that guard's comment for why.
+const FALLBACK_PROTECT_MS = STALE_MS
+
+// "Don't fabricate status while hooks are actively running" guard window (writeStatus below).
+// Short and deliberately NOT STALE_MS/FALLBACK_PROTECT_MS: this loop scans EVERY slugged hook
+// file in the shared status dir with no _cwd filter, so a long window means any OTHER project's
+// hook file — written on every tool call, from a Claude session that may be idle for minutes —
+// suppresses THIS project's fallback almost permanently. 10s is enough to detect "a hook is
+// live right now" without silencing the fallback for unrelated foreign sessions.
+const HOOK_ACTIVE_MS = 10_000
+
 // The project directory session files are matched against. Vite's own cwd is the package
 // root when launched via bin/cli.js (and therefore npx), so it cannot be used here —
 // see resolveProjectRoot() in src/server/scanSessions.mjs.
 const PROJECT_ROOT = resolveProjectRoot()
 
 const LOOPBACK_ORIGIN_RE = /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?$/i
+
+const isWin = process.platform === 'win32'
 
 // Auto-detect server's LAN IPs for CORS when --host is active
 function getServerIPs() {
@@ -76,14 +95,24 @@ function getServerIPs() {
 
 const SERVER_IPS = getServerIPs()
 
-// Monotonic _seq: plain integer string, identical implementation as server.mjs.
-// Number(_seq) and parseInt(_seq,10) both work identically; no suffix to truncate.
-let _seqLast = 0
-function nextSeq() {
-  const now = Date.now()
-  _seqLast = now > _seqLast ? now : _seqLast + 1
-  return String(_seqLast)
-}
+// fix/dev-allowed-hosts: OFFICE_ALLOWED_HOSTS (server.mjs's production Host allowlist, PR
+// #246) previously had no effect here — Vite 8 validates the Host header itself via its own
+// `server.allowedHosts`/hostValidationMiddleware, but this config never populated it, so a
+// developer reaching this dev server through a custom hostname or reverse proxy got Vite's
+// default 403 regardless of what OFFICE_ALLOWED_HOSTS said. Reuses the SAME env-parsing step
+// server.mjs uses (src/utils/hostAllowlist.mjs) so the two transports agree on what the env
+// var means: a bare entry matches exactly, a leading-dot entry (`.example.com`) matches that
+// host AND any subdomain — Vite's own `allowedHosts` wildcard shape (node_modules/vite/dist/
+// node/chunks/node.js: isHostAllowedInternal) already implements exactly this leading-dot
+// rule natively, and already always allows `localhost`/`*.localhost`/IP literals on its own,
+// so nothing else needs to be passed through here. Left unset (`[]`) when the env var is
+// empty, which is Vite's own default — this must never become `true` (that would disable
+// Vite's Host validation entirely).
+const ALLOWED_HOSTS_ENV = parseAllowedHostsEnv(process.env.OFFICE_ALLOWED_HOSTS)
+
+// Monotonic _seq: shared SINGLE counter imported from statusContract.mjs above.
+// /api/status (inside normalizePost) and /api/event (nextSeq) write the same status file and
+// must ride one clock, matching server.mjs.
 
 // Constant-time token comparison — prevents timing oracle attacks.
 function safeEqual(a, b) {
@@ -340,7 +369,10 @@ function officeStatusPlugin() {
         req.on('close', () => sseClients.delete(res))
         req.on('error', () => sseClients.delete(res))
         res.on('error', () => sseClients.delete(res))
-        const snapshot = scanAndMerge(path.dirname(statusPath), PROJECT_ROOT)
+        // try/catch: an uncaught scanAndMerge throw here would crash the dev server (mirrors
+        // server.mjs's SSE-connect guard).
+        let snapshot = null
+        try { snapshot = scanAndMerge(path.dirname(statusPath), PROJECT_ROOT) } catch {}
         if (snapshot) {
           try { res.write(`event: status\ndata: ${JSON.stringify(snapshot)}\n\n`) }
           catch { sseClients.delete(res) }
@@ -363,14 +395,26 @@ function officeStatusPlugin() {
         if (sseClients.size === 0) return
         clearTimeout(watchDebounce)
         watchDebounce = setTimeout(() => {
-          const merged = scanAndMerge(path.dirname(statusPath), PROJECT_ROOT)
-          if (merged) broadcastSSE(merged)
+          // try/catch: this runs in a timer callback with NO outer guard, so an uncaught
+          // throw would crash the whole Vite dev process. Mirrors server.mjs's watcher guard.
+          try {
+            const merged = scanAndMerge(path.dirname(statusPath), PROJECT_ROOT)
+            if (merged) broadcastSSE(merged)
+          } catch {}
         }, 80)
         if (watchDebounce.unref) watchDebounce.unref()
       }
+      // 'change' alone misses new sessions (add) and finished/removed ones (unlink) — the
+      // browser then waits for the next poll instead of getting an immediate SSE push.
+      // fs.watch (server.mjs's production watcher) fires on rename too, so this closes a
+      // dev-only gap rather than adding new behavior.
       server.watcher.on('change', onWatchChange)
+      server.watcher.on('add', onWatchChange)
+      server.watcher.on('unlink', onWatchChange)
       server.httpServer?.on('close', () => {
         server.watcher.off('change', onWatchChange)
+        server.watcher.off('add', onWatchChange)
+        server.watcher.off('unlink', onWatchChange)
         clearTimeout(watchDebounce)
       })
 
@@ -707,15 +751,19 @@ function fileWatcherFallbackPlugin() {
         if (!/^office-status-.+\.json$/.test(f)) continue
         try {
           const d = JSON.parse(fs.readFileSync(path.join(hookDir, f), 'utf-8'))
-          if (d.source !== 'file-watcher' && d._seq && now - parseInt(d._seq, 10) < 10_000) return
+          if (d.source !== 'file-watcher' && d._seq && now - parseInt(d._seq, 10) < HOOK_ACTIVE_MS) return
         } catch {}  // file may have been deleted/truncated between readdir and read
       }
     } catch {}
-    // Also skip if a recent non-file-watcher write was made to the bare file (curl/API/webhook)
+    // Also skip if a recent non-file-watcher write was made to the bare file (curl/API/webhook).
+    // Window matches FALLBACK_PROTECT_MS (not a short 10s) — a 10s window let this fallback
+    // overwrite a webhook/API-set status (e.g. a CI "build failed" blocked state) well before
+    // it actually went stale, since prod (server.mjs) has no fallback at all and simply leaves
+    // such a status in place until the real stale window elapses.
     try {
       const existing = JSON.parse(fs.readFileSync(statusPath, 'utf-8'))
       if (existing.source && existing.source !== 'file-watcher' && existing._seq
-          && now - parseInt(existing._seq, 10) < 10_000) return
+          && now - parseInt(existing._seq, 10) < FALLBACK_PROTECT_MS) return
     } catch {}
 
     recentEdits.set(role, { file, time: now })
@@ -750,10 +798,47 @@ function fileWatcherFallbackPlugin() {
     configureServer(server) {
       // Measurement runs opt out entirely: see OFFICE_DISABLE_FILE_WATCHER above.
       if (FILE_WATCHER_DISABLED) return
+      // officeStatusPlugin's server.watcher.add(watchDir) (above) extends this SAME shared
+      // chokidar watcher to also cover STATUS_DIR (~/.claude by default) — so without a
+      // project-root check here, any write under STATUS_DIR (a Claude Code transcript
+      // projects/**/<uuid>.jsonl, a debug/*.txt log, etc.) reaches this handler too and gets
+      // misread as a project source edit, fabricating a fake agent status with no `_cwd` that
+      // then shows up in ANY project's office (scanSessions.mjs's strict pass admits a bare,
+      // no-_cwd office-status.json unconditionally). Only react to edits actually inside the
+      // project this dev server is serving.
+      const projectRoot = path.resolve(server.config.root)
+      const projectRootLower = isWin ? projectRoot.toLowerCase() : projectRoot
+      function isUnderProjectRoot(file) {
+        const resolved = path.resolve(file)
+        const cmp = isWin ? resolved.toLowerCase() : resolved
+        return cmp === projectRootLower || cmp.startsWith(projectRootLower + path.sep)
+      }
+      // Also exclude STATUS_DIR explicitly, even when it happens to live INSIDE the project
+      // root (e.g. a relative OFFICE_STATUS_DIR) — isUnderProjectRoot alone would admit it.
+      const statusDirResolved = path.resolve(path.dirname(statusPath))
+      const statusDirLower = isWin ? statusDirResolved.toLowerCase() : statusDirResolved
+      function isUnderStatusDir(file) {
+        const resolved = path.resolve(file)
+        const cmp = isWin ? resolved.toLowerCase() : resolved
+        return cmp === statusDirLower || cmp.startsWith(statusDirLower + path.sep)
+      }
+      // Ignored path segments, matched against the path RELATIVE TO projectRoot (not the
+      // absolute path) — an absolute-path substring test false-matches any project whose
+      // ancestor directories happen to contain one of these names anywhere above the root
+      // (e.g. EVERY project checked out under a `.claude/worktrees/**` path, including this
+      // repo's own convention — the fallback was silently dead for all of them), and also
+      // false-matches a real source file like "distance.js" containing "dist" as a substring.
+      // Segment equality avoids both: only an exact path COMPONENT ('node_modules', 'dist',
+      // '.git', '.claude') inside the project is skipped.
+      const IGNORED_SEGMENTS = new Set(['node_modules', 'dist', '.git', '.claude'])
+      function hasIgnoredSegment(resolvedFile) {
+        return path.relative(projectRoot, resolvedFile).split(path.sep).some((seg) => IGNORED_SEGMENTS.has(seg))
+      }
       // Watch project source files for changes (Vite's watcher covers src/)
       const onFallbackChange = (file) => {
-        // Skip node_modules, dist, .git, and the status file itself
-        if (/node_modules|dist|\.git/.test(file)) return
+        if (!isUnderProjectRoot(file)) return
+        if (isUnderStatusDir(file)) return
+        if (hasIgnoredSegment(path.resolve(file))) return
         if (file.includes('office-status')) return
         const role = fileToRole(file)
         writeStatus(role, file)
@@ -768,10 +853,26 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), officeStatusPlugin(), fileWatcherFallbackPlugin()],
   server: {
     strictPort: true,
+    // Vite registers its own permissive-loopback CORS middleware BEFORE plugin middlewares,
+    // so it always answers OPTIONS preflights itself and unconditionally adds
+    // Access-Control-Allow-Origin for loopback GETs — both bypass this file's own
+    // isAllowedOrigin/OFFICE_API_ALLOWED_ORIGINS logic, which is the one that matches
+    // server.mjs (production). Disabling Vite's cors here makes the plugin logic the sole
+    // authority in dev too, same as prod.
+    cors: false,
+    // Maps OFFICE_ALLOWED_HOSTS into Vite's own Host-header check (see ALLOWED_HOSTS_ENV
+    // above). Omitted (not merely `[]`) when unset so Vite's own default is truly unchanged
+    // rather than an explicit empty array that happens to equal it.
+    ...(ALLOWED_HOSTS_ENV.length > 0 ? { allowedHosts: ALLOWED_HOSTS_ENV } : {}),
   },
   build: {
     rollupOptions: {
-      output: { inlineDynamicImports: true }
+      // One self-contained bundle: the office is embedded as a single <script>, so a
+      // code-split chunk graph would just add fetches. `inlineDynamicImports` was the old
+      // spelling of this and Rollup now warns that it is deprecated in favour of
+      // `codeSplitting: false`; the emitted output is identical (verified: same single
+      // dist/assets/index-*.js, same byte count).
+      output: { codeSplitting: false }
     }
   }
 })

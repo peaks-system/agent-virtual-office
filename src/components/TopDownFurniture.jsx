@@ -172,14 +172,22 @@ export const MeetingTable = React.memo(function MeetingTable({ x, y, w = 90, h =
 })
 
 // ─── Coffee / Vending Machine ─────────────────────────────────────────────
-export const CoffeeMachine = React.memo(function CoffeeMachine({ x, y }) {
+export const CoffeeMachine = React.memo(function CoffeeMachine({ x, y, busy = false, busyKey = 0, reducedMotion = false }) {
   useLocale()
   return (
     <g>
       <rect x={x} y={y} width={18} height={26} rx={2} fill="#9AA8AE" />
       <rect x={x + 2} y={y + 2} width={14} height={10} rx={1} fill="#222" />
       <rect x={x + 3} y={y + 3} width={12} height={8} rx={0.5} fill="#0a2a1a" />
-      <text x={x + 9} y={y + 9} textAnchor="middle" fontSize="4" fill="#0f0" fontFamily="monospace">{t('office.cafe', 'CAFE')}</text>
+      <text x={x + 9} y={y + 9} textAnchor="middle" fontSize="4" fill="#0f0" fontFamily="monospace">{busy ? 'BUSY' : t('office.cafe', 'CAFE')}</text>
+      {busy && (
+        <g key={busyKey} opacity="0.85" data-coffee-busy="1">
+          {[0, 1, 2].map((i) => (
+            <path key={i} d={`M${x + 5 + i * 4} ${y - 1} q -2 -4 0 -8 q 2 -4 0 -8`} fill="none" stroke="#FFFFFF" strokeWidth="1.3" strokeLinecap="round"
+              style={reducedMotion ? undefined : { animation: `coffee-steam 1.6s ease-out ${i * 0.15}s both` }} />
+          ))}
+        </g>
+      )}
       <circle cx={x + 9} cy={y + 18} r={3.5} fill="#E24B4A">
         <animate attributeName="opacity" values="0.6;1;0.6" dur="2.5s" repeatCount="indefinite" />
       </circle>

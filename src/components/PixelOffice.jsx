@@ -11,6 +11,7 @@ import { startWorkflowHandoffs } from '../inference/workflowHandoff'
 import { juiceForEvent } from '../systems/eventJuice'
 import { gateWaiting, GATE_SHEET_CAP } from '../systems/reviewGate'
 import { themeOverlay, cappedThemeOpacity } from '../systems/theme'
+import { SCENE, SIGNS } from '../systems/officePalette'
 import { eventName, charName, t, useLocale } from '../i18n'
 import { DESKS } from '../systems/officeLayout'
 import WhiteOfficeScene from './WhiteOfficeScene'
@@ -21,6 +22,7 @@ import HelperHuddles from './HelperHuddle'
 import OfficePet from './OfficePet'
 import NarrowRoster from './NarrowRoster'
 import AgentInspector from './AgentInspector'
+import OneShotSmil from './OneShotSmil.jsx'
 import {
   Clock, CoffeeCup, DeskLamp,
   moodToWeather,
@@ -681,6 +683,41 @@ function ScaledText({ x, y, scale, children, ...rest }) {
   )
 }
 
+// How long the machine's BUSY reply stays up. Covers the longest steam wisp (1.6s + 0.3s delay).
+const COFFEE_BUSY_MS = 2000
+
+// AVO-193: a tea-break click that cannot be served used to do nothing at all — `pickParticipants`
+// finds no honest cast (AVO-191), and unlike the deploy button and the whiteboard, `tea-break` has
+// no INTERACTION_REACTOR entry, so not even a bubble fired. The machine now answers for itself.
+// This does NOT alter the refusal: the feedback hangs off the falsy return, so no agent is moved,
+// no status is written and no activeEvent is invented — the machine just says it cannot serve you.
+function CoffeeCorner() {
+  const reducedMotion = useOfficeStore((s) => s.reducedMotion)
+  // One counter does both jobs: >0 means "showing", and the change remounts the steam so a second
+  // click restarts the animation instead of watching the first one finish.
+  const [busyKey, setBusyKey] = useState(0)
+
+  useEffect(() => {
+    if (!busyKey) return undefined
+    const timer = setTimeout(() => setBusyKey(0), COFFEE_BUSY_MS)
+    return () => clearTimeout(timer)
+  }, [busyKey])
+
+  const onClick = useCallback(() => {
+    if (triggerInteractiveEvent(useOfficeStore, 'tea-break')) {
+      setBusyKey(0) // a real break started — the set-piece is the feedback
+      return
+    }
+    setBusyKey((k) => k + 1)
+  }, [])
+
+  return (
+    <g style={{ cursor: 'pointer' }} onClick={onClick}>
+      <CoffeeMachine x={20} y={445} busy={busyKey > 0} busyKey={busyKey} reducedMotion={reducedMotion} />
+    </g>
+  )
+}
+
 // Small wall-mounted framed picture — pure decor (Slice 2 hallway gallery). Zero status signal.
 export default function PixelOffice({ animationQuality = 'full', mode = 'full', showConnectionHint = true }) {
   // Only re-render PixelOffice when agent IDs change, not on every property update.
@@ -895,14 +932,15 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full', 
   }, [isPanel, rosterMode, setSceneScale])
 
   const viewBox = isPanel ? panelViewBox : '0 0 800 560'
-  // #47: publish the active viewBox x-bounds (minX, width) so BehaviorBubble clamps speech bubbles
-  // to the VISIBLE edges in BOTH default (0..800) and panel (cropped) modes — a hardcoded 0..800
-  // clamp would target the wrong edges in panel mode and let bubbles clip the crop.
+  // #47: publish the active viewBox (minX, minY, width, height) so overlays stay inside the VISIBLE
+  // scene in BOTH default (0 0 800 560) and panel (cropped) modes — a hardcoded 800×560 clamp would
+  // target the wrong edges in panel mode: bubbles clip the crop's sides, and the inspector card and
+  // the bubble flip use the crop's top (2026-09-19 review, REV-01/02).
   const setSceneBounds = useOfficeStore((s) => s.setSceneBounds)
   useEffect(() => {
     const parts = viewBox.split(/\s+/).map(Number)
-    if (parts.length === 4 && Number.isFinite(parts[0]) && Number.isFinite(parts[2])) {
-      setSceneBounds(parts[0], parts[2])
+    if (parts.length === 4 && parts.every(Number.isFinite)) {
+      setSceneBounds(parts[0], parts[1], parts[2], parts[3])
     }
   }, [viewBox, setSceneBounds])
   // Full-office mode must fit the whole authored 800x560 scene inside the available pane.
@@ -1086,7 +1124,9 @@ export default function PixelOffice({ animationQuality = 'full', mode = 'full', 
             stroke={activeWorkflow ? '#4CAF50' : '#F5C842'}
             strokeWidth="1.5" opacity="0.95"
           >
-            <animate attributeName="opacity" values="0;0.95" dur="0.4s" fill="freeze" />
+            <OneShotSmil>
+              <animate attributeName="opacity" values="0;0.95" dur="0.4s" fill="freeze" />
+            </OneShotSmil>
           </rect>
           <circle cx={268} cy={15} r={4} fill={activeWorkflow ? '#4CAF50' : '#F5C842'}>
             <animate attributeName="r" values="3;5;3" dur="1.5s" repeatCount="indefinite" />
