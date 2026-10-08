@@ -12,6 +12,31 @@ export function queryNeedsScores(query) {
   return query.buyerIntent == null || query.commerceFit == null
 }
 
+export function videoReviewUrl(item) {
+  if (item?.sourceUrl) {
+    try {
+      const url = new URL(item.sourceUrl)
+      const host = url.hostname.toLowerCase()
+      if (url.protocol === 'https:' && (host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be')) return url.toString()
+    } catch {}
+  }
+  return item?.youtubeVideoId ? `https://www.youtube.com/watch?v=${encodeURIComponent(item.youtubeVideoId)}` : null
+}
+
+export function metricCount(value, missing = '—') {
+  if (value == null || !Number.isFinite(Number(value))) return missing
+  return new Intl.NumberFormat('ja-JP').format(Number(value))
+}
+
+export function publishedLabel(value) {
+  const date = new Date(value)
+  if (!value || Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat('ja-JP', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    timeZone: 'Asia/Tokyo',
+  }).format(date)
+}
+
 function QueryEditor({ query, busy, onSave }) {
   const [form, setForm] = useState({
     label: query.label,
@@ -52,11 +77,24 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onSave }) 
     {!state.config.configured && <section className="revenue-state revenue-config"><h3>接続設定が必要です</h3><p>サーバー側の環境変数を設定してください。</p><code>{state.config.missing.join(', ')}</code></section>}
     {state.config.configured && state.queries.length === 0 && <section className="revenue-state"><h3>検索テーマがありません</h3><p>Supabaseの初期seedを適用して、最大3件のテーマを設定してください。</p></section>}
     <section className="revenue-grid" aria-label="Opportunity TOP3">
-      {state.opportunities.map((item, index) => <article className="revenue-opportunity" key={item.id || item.youtubeVideoId}>
-        <span className="revenue-rank">#{index + 1}</span>
-        {item.thumbnailUrl && <img src={item.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />}
-        <div><p className="revenue-channel">{item.channelTitle || 'チャンネル不明'}</p><h3>{item.title}</h3><div className="revenue-score"><strong>{scoreLabel(item.opportunityScore)}</strong><span>Opportunity</span><b>{scoreLabel(item.breakoutScore)}</b><span>Breakout</span></div><p className="revenue-meta">{item.velocityMode === 'observed_delta' ? '実測増分' : '公開後推定'} · 母集団 {item.percentilePopulationSize}件</p></div>
-      </article>)}
+      {state.opportunities.map((item, index) => {
+        const reviewUrl = videoReviewUrl(item)
+        return <article className="revenue-opportunity" key={item.id || item.youtubeVideoId}>
+          <span className="revenue-rank">#{index + 1}</span>
+          {item.thumbnailUrl && <img src={item.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />}
+          <div><p className="revenue-channel">{item.channelTitle || 'チャンネル不明'}</p><h3>{item.title}</h3>
+            <dl className="revenue-review-metrics">
+              <div><dt>公開日時</dt><dd>{publishedLabel(item.publishedAt)}</dd></div>
+              <div><dt>再生数</dt><dd>{metricCount(item.viewCount)}</dd></div>
+              <div><dt>登録者数</dt><dd>{item.hiddenSubscriberCount ? '非公開' : metricCount(item.subscriberCount)}</dd></div>
+              <div><dt>Views/hour</dt><dd>{Number.isFinite(Number(item.viewsVelocity)) ? Number(item.viewsVelocity).toFixed(6) : '—'}</dd></div>
+            </dl>
+            <div className="revenue-score"><strong>{scoreLabel(item.opportunityScore)}</strong><span>Opportunity</span><b>{scoreLabel(item.breakoutScore)}</b><span>Breakout</span></div>
+            <p className="revenue-meta">{item.velocityMode === 'observed_delta' ? '実測増分' : '公開後推定'} · 母集団 {item.percentilePopulationSize}件</p>
+            {reviewUrl && <a className="revenue-youtube-link" href={reviewUrl} target="_blank" rel="noopener noreferrer">YouTubeで見る</a>}
+          </div>
+        </article>
+      })}
       {state.config.configured && state.opportunities.length === 0 && <div className="revenue-state"><h3>まだ候補がありません</h3><p>テーマのScore設定を保存して収集を実行してください。</p></div>}
     </section>
     <section className="revenue-settings">

@@ -140,11 +140,51 @@ function createSupabaseStore({
     return rpc('enqueue_youtube_job', { p_source_query_id: sourceQueryId, p_requested_day: requestedDay })
   }
 
+  const inFilter = values => encodeURIComponent([...new Set(values)].map(value => `"${String(value).replace(/["\\]/g, '')}"`).join(','))
+
+  async function enrichOpportunityReview(opportunities) {
+    if (!opportunities.length) return opportunities
+    const videoIds = opportunities.map(item => item.youtubeVideoId).filter(Boolean)
+    const videoItems = videoIds.length ? await request(
+      `source_items?item_type=eq.video&external_id=in.(${inFilter(videoIds)})&select=id,source_id,external_id,canonical_url`,
+    ) : []
+    const channelIds = opportunities.map(item => item.channelId).filter(Boolean)
+    const channelItems = channelIds.length ? await request(
+      `source_items?item_type=eq.channel&external_id=in.(${inFilter(channelIds)})&select=id,source_id,external_id`,
+    ) : []
+    const itemIds = [...videoItems, ...channelItems].map(item => item.id)
+    const snapshots = itemIds.length ? await request(
+      `source_item_snapshots?source_item_id=in.(${encodeURIComponent(itemIds.join(','))})&select=source_item_id,captured_at,view_count,subscriber_count,hidden_subscriber_count&order=captured_at.desc`,
+    ) : []
+    const videoByExternalId = new Map(videoItems.map(item => [item.external_id, item]))
+    const channelBySourceAndExternalId = new Map(channelItems.map(item => [`${item.source_id}:${item.external_id}`, item]))
+    const latestSnapshotByItemId = new Map()
+    for (const snapshot of snapshots || []) {
+      if (!latestSnapshotByItemId.has(snapshot.source_item_id)) latestSnapshotByItemId.set(snapshot.source_item_id, snapshot)
+    }
+    return opportunities.map(opportunity => {
+      const videoItem = videoByExternalId.get(opportunity.youtubeVideoId)
+      const channelItem = videoItem && opportunity.channelId
+        ? channelBySourceAndExternalId.get(`${videoItem.source_id}:${opportunity.channelId}`)
+        : null
+      const videoSnapshot = videoItem ? latestSnapshotByItemId.get(videoItem.id) : null
+      const channelSnapshot = channelItem ? latestSnapshotByItemId.get(channelItem.id) : null
+      return {
+        ...opportunity,
+        sourceUrl: videoItem?.canonical_url || null,
+        viewCount: videoSnapshot?.view_count == null ? null : Number(videoSnapshot.view_count),
+        subscriberCount: channelSnapshot?.subscriber_count == null ? null : Number(channelSnapshot.subscriber_count),
+        hiddenSubscriberCount: channelSnapshot?.hidden_subscriber_count === true,
+      }
+    })
+  }
+
   async function dashboard(limit = 3) {
     const data = await rpc('dashboard_snapshot', { p_limit: limit })
+    const opportunities = await enrichOpportunityReview((data?.opportunities || []).map(opportunityFromRow))
     return {
       queries: (data?.queries || []).map(queryFromRow),
-      opportunities: (data?.opportunities || []).map(opportunityFromRow),
+      opportunities,
       latestJob: data?.latest_job ? {
         id: data.latest_job.id,
         jobType: data.latest_job.job_type,

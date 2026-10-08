@@ -75,4 +75,43 @@ describe('Revenue Lab Supabase store snapshots', () => {
       providerMessage: 'All object keys must match',
     })
   })
+
+  it('enriches dashboard opportunities from canonical URLs and latest snapshots', async () => {
+    const fetchImpl = vi.fn(async (url, options) => {
+      if (url.includes('/rpc/dashboard_snapshot')) return response({
+        queries: [], latest_job: null, opportunities: [{
+          id: 'opportunity-1', source_query_id: 'query-1', youtube_video_id: 'video-1',
+          channel_id: 'channel-1', title: '動画', channel_title: 'チャンネル', published_at: '2026-10-07T00:00:00Z',
+          score_version: 'youtube-v1', velocity_mode: 'estimated_lifetime', views_velocity: 12.5,
+          channel_ratio: 2, engagement_rate: 0.1, freshness: 90, velocity_percentile: 50,
+          channel_ratio_percentile: 50, engagement_percentile: 50, buyer_intent: 90,
+          commerce_fit: 95, breakout_score: 60, opportunity_score: 69.75,
+          percentile_population_size: 1, created_at: '2026-10-08T00:00:00Z',
+        }],
+      })
+      if (url.includes('source_items?item_type=eq.video')) return response([{
+        id: 'video-item', source_id: 'source-1', external_id: 'video-1',
+        canonical_url: 'https://www.youtube.com/watch?v=video-1',
+      }])
+      if (url.includes('source_items?item_type=eq.channel')) return response([{
+        id: 'channel-item', source_id: 'source-1', external_id: 'channel-1',
+      }])
+      if (url.includes('/source_item_snapshots?')) return response([
+        { source_item_id: 'video-item', captured_at: '2026-10-08T00:00:00Z', view_count: 1234, subscriber_count: null, hidden_subscriber_count: false },
+        { source_item_id: 'channel-item', captured_at: '2026-10-08T00:00:00Z', view_count: null, subscriber_count: 567, hidden_subscriber_count: false },
+      ])
+      throw new Error(`Unexpected request: ${url} ${options?.method}`)
+    })
+    const store = createSupabaseStore({
+      url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl,
+    })
+    const dashboard = await store.dashboard(3)
+    expect(dashboard.opportunities[0]).toMatchObject({
+      sourceUrl: 'https://www.youtube.com/watch?v=video-1',
+      viewCount: 1234,
+      subscriberCount: 567,
+      hiddenSubscriberCount: false,
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(4)
+  })
 })
