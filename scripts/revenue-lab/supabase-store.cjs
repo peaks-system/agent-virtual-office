@@ -3,14 +3,19 @@
 const PROFILE = 'revenue_lab'
 
 class RevenueStoreError extends Error {
-  constructor(code, message, status = null) {
+  constructor(code, message, status = null, provider = null) {
     super(message)
     this.name = 'RevenueStoreError'
     this.code = code
     this.status = status
+    this.providerCode = typeof provider?.code === 'string' ? provider.code.slice(0, 80) : null
+    this.providerMessage = typeof provider?.message === 'string' ? provider.message.slice(0, 300) : null
   }
 
-  toJSON() { return { name: this.name, code: this.code, message: this.message, status: this.status } }
+  toJSON() {
+    return { name: this.name, code: this.code, message: this.message, status: this.status,
+      providerCode: this.providerCode, providerMessage: this.providerMessage }
+  }
 }
 
 function queryFromRow(row) {
@@ -100,8 +105,14 @@ function createSupabaseStore({
       }
     }
     if (!response.ok) {
-      console.error('[revenue-lab] Supabase request rejected', { method, resource: path.split('?')[0], status: response.status })
-      throw new RevenueStoreError('SUPABASE_HTTP_ERROR', 'Revenue Lab storage request was rejected', response.status)
+      const providerCode = typeof parsed?.code === 'string' ? parsed.code.slice(0, 80) : null
+      const providerMessage = typeof parsed?.message === 'string' ? parsed.message.slice(0, 300) : null
+      console.error('[revenue-lab] Supabase request rejected', {
+        method, resource: path.split('?')[0], status: response.status,
+        ...(providerCode ? { providerCode } : {}),
+        ...(providerMessage ? { providerMessage } : {}),
+      })
+      throw new RevenueStoreError('SUPABASE_HTTP_ERROR', 'Revenue Lab storage request was rejected', response.status, parsed)
     }
     return parsed
   }
@@ -226,15 +237,25 @@ function createSupabaseStore({
     const channelSeen = new Set()
     for (const video of videos) {
       snapshotRows.push({
-        source_item_id: itemIds.get(`video:${video.youtubeVideoId}`), captured_at: video.capturedAt,
-        view_count: video.viewCount, like_count: video.likeCount, comment_count: video.commentCount,
+        source_item_id: itemIds.get(`video:${video.youtubeVideoId}`),
+        captured_at: video.capturedAt,
+        view_count: video.viewCount ?? null,
+        like_count: video.likeCount ?? null,
+        comment_count: video.commentCount ?? null,
+        subscriber_count: null,
+        hidden_subscriber_count: false,
         metrics: { search_position: video.searchPosition },
       })
       if (video.channelId && !channelSeen.has(video.channelId)) {
         channelSeen.add(video.channelId)
         snapshotRows.push({
-          source_item_id: itemIds.get(`channel:${video.channelId}`), captured_at: video.capturedAt,
-          subscriber_count: video.subscriberCount, hidden_subscriber_count: video.hiddenSubscriberCount,
+          source_item_id: itemIds.get(`channel:${video.channelId}`),
+          captured_at: video.capturedAt,
+          view_count: null,
+          like_count: null,
+          comment_count: null,
+          subscriber_count: video.subscriberCount ?? null,
+          hidden_subscriber_count: video.hiddenSubscriberCount === true,
           metrics: {},
         })
       }
