@@ -16,6 +16,7 @@
     "smoke": "node scripts/render-smoke.mjs",
     "smoke:panel": "node scripts/panel-features-verify.mjs",
     "smoke:pack": "node scripts/pack-smoke.mjs",
+    "revenue:worker": "node scripts/revenue-worker.cjs",
     "soak": "node scripts/sim-soak.mjs",
     "soak:spawn": "node scripts/sim-soak.mjs --spawn",
     "rhythm": "node scripts/office-rhythm.mjs",
@@ -63,6 +64,7 @@
     "vite.config.mjs",
     "server.mjs",
     "package.json",
+    "supabase/",
     "Dockerfile",
     "docker-compose.yml",
     "docs/deployment/"

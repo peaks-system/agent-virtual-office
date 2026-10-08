@@ -24,6 +24,8 @@ import { scanAndMerge, getSessionStats, resolveProjectRoot } from './src/server/
 import staffApiModule from './scripts/staff-api.cjs'
 import seoApiModule from './scripts/seo-api.cjs'
 import wordpressApiModule from './scripts/wordpress-api.cjs'
+import revenueApiModule from './scripts/revenue-api.cjs'
+import revenueRuntimeModule from './scripts/revenue-lab/runtime.cjs'
 // AVO-146: replaced inline normalizePost copy with the canonical src module.
 // This also fixes the #52 divergence: the old inline copy dropped agents with
 // invalid status; the canonical src module coerces them to 'idle' instead.
@@ -600,6 +602,9 @@ const SERVER_START = Date.now()
 const staffApi = staffApiModule.createStaffApi({ root: __dirname, authorize: isAuthorized })
 const seoApi = seoApiModule.createSeoApi({ root: __dirname, authorize: isAuthorized })
 const wordpressApi = wordpressApiModule.createWordPressApi({ root: __dirname, authorize: isAuthorized })
+const revenueRuntime = revenueRuntimeModule.createRevenueRuntime()
+const revenueApi = revenueApiModule.createRevenueApi({ authorize: isAuthorized, store: revenueRuntime.store || undefined })
+revenueRuntime.start()
 
 const server = http.createServer((req, res) => {
   // Swallow client-abort / ECONNRESET so they don't crash the process.
@@ -627,6 +632,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname.startsWith('/api/seo/')) return seoApi.handler(req, res)
   if (url.pathname.startsWith('/api/wordpress/')) return wordpressApi.handler(req, res)
   if (url.pathname === '/api/status') return handleStatus(req, res)
+  if (url.pathname.startsWith('/api/revenue/')) return revenueApi.handler(req, res)
   if (url.pathname === '/api/status/stream') {
     setCors(res, req.headers.origin, 'GET, OPTIONS')
     if (req.method === 'OPTIONS') return handlePreflight(req, res)
@@ -687,6 +693,8 @@ server.maxHeadersCount = 100
 server.once('close', () => { Promise.resolve(staffApi.close()).catch(() => console.error('スタッフ実行の終了処理に失敗しました。')) })
 server.once('close', () => { Promise.resolve(seoApi.close()).catch(() => console.error('SEO診断の終了処理に失敗しました。')) })
 server.once('close', () => wordpressApi.close())
+server.once('close', () => revenueApi.close())
+server.once('close', () => revenueRuntime.close())
 server.listen(port, bindHost, () => {
   const displayHost = bindHost === '0.0.0.0' ? 'localhost' : bindHost
   const url = `http://${displayHost}:${port}${lang ? `?lang=${lang}` : ''}`

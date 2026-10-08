@@ -1,0 +1,300 @@
+'use strict'
+
+const PROFILE = 'revenue_lab'
+
+class RevenueStoreError extends Error {
+  constructor(code, message, status = null) {
+    super(message)
+    this.name = 'RevenueStoreError'
+    this.code = code
+    this.status = status
+  }
+
+  toJSON() { return { name: this.name, code: this.code, message: this.message, status: this.status } }
+}
+
+function queryFromRow(row) {
+  if (!row) return null
+  const source = Array.isArray(row.sources) ? row.sources[0] : row.sources
+  return {
+    id: row.id,
+    sourceId: row.source_id,
+    projectId: source?.project_id ?? row.project_id ?? null,
+    label: row.label,
+    queryText: row.query_text,
+    buyerIntent: row.buyer_intent,
+    commerceFit: row.commerce_fit,
+    enabled: row.enabled,
+    maxResults: row.max_results,
+    lookbackDays: row.lookback_days,
+    regionCode: row.region_code,
+    relevanceLanguage: row.relevance_language,
+    updatedAt: row.updated_at,
+  }
+}
+
+function opportunityFromRow(row) {
+  return {
+    id: row.id,
+    sourceQueryId: row.source_query_id,
+    youtubeVideoId: row.youtube_video_id,
+    title: row.title,
+    channelId: row.channel_id,
+    channelTitle: row.channel_title,
+    thumbnailUrl: row.thumbnail_url,
+    publishedAt: row.published_at,
+    scoreVersion: row.score_version,
+    velocityMode: row.velocity_mode,
+    viewsVelocity: Number(row.views_velocity),
+    channelRatio: row.channel_ratio == null ? null : Number(row.channel_ratio),
+    engagementRate: Number(row.engagement_rate),
+    freshness: Number(row.freshness),
+    velocityPercentile: Number(row.velocity_percentile),
+    channelRatioPercentile: row.channel_ratio_percentile == null ? null : Number(row.channel_ratio_percentile),
+    engagementPercentile: Number(row.engagement_percentile),
+    buyerIntent: row.buyer_intent,
+    commerceFit: row.commerce_fit,
+    breakoutScore: Number(row.breakout_score),
+    opportunityScore: Number(row.opportunity_score),
+    percentilePopulationSize: row.percentile_population_size,
+    createdAt: row.created_at,
+  }
+}
+
+function createSupabaseStore({
+  url = process.env.SUPABASE_URL,
+  serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (!url || !serviceRoleKey) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required')
+  if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required')
+  const base = String(url).replace(/\/+$/, '')
+
+  async function request(path, { method = 'GET', body, prefer } = {}) {
+    let response
+    try {
+      response = await fetchImpl(`${base}/rest/v1/${path}`, {
+        method,
+        headers: {
+          accept: 'application/json',
+          apikey: serviceRoleKey,
+          authorization: `Bearer ${serviceRoleKey}`,
+          'accept-profile': PROFILE,
+          'content-profile': PROFILE,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          ...(prefer ? { prefer } : {}),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      })
+    } catch {
+      console.error('[revenue-lab] Supabase transport failure', { method, resource: path.split('?')[0] })
+      throw new RevenueStoreError('SUPABASE_TRANSPORT_ERROR', 'Revenue Lab storage request failed')
+    }
+    const text = response.status === 204 ? '' : await response.text()
+    let parsed = null
+    if (text) {
+      try { parsed = JSON.parse(text) }
+      catch {
+        console.error('[revenue-lab] Supabase returned invalid JSON', { method, resource: path.split('?')[0], status: response.status })
+        throw new RevenueStoreError('SUPABASE_INVALID_RESPONSE', 'Revenue Lab storage response was invalid', response.status)
+      }
+    }
+    if (!response.ok) {
+      console.error('[revenue-lab] Supabase request rejected', { method, resource: path.split('?')[0], status: response.status })
+      throw new RevenueStoreError('SUPABASE_HTTP_ERROR', 'Revenue Lab storage request was rejected', response.status)
+    }
+    return parsed
+  }
+
+  const rpc = (name, body) => request(`rpc/${name}`, { method: 'POST', body })
+
+  async function getQuery(id) {
+    const rows = await request(`source_queries?id=eq.${encodeURIComponent(id)}&select=*,sources(project_id)&limit=1`)
+    return queryFromRow(rows?.[0])
+  }
+
+  async function listQueries() {
+    const rows = await request('source_queries?select=*,sources(project_id)&order=created_at.asc&limit=3')
+    return (rows || []).map(queryFromRow)
+  }
+
+  async function updateQuery(id, patch) {
+    const rows = await request(`source_queries?id=eq.${encodeURIComponent(id)}&select=*`, {
+      method: 'PATCH', body: patch, prefer: 'return=representation',
+    })
+    return queryFromRow(rows?.[0])
+  }
+
+  async function enqueueQuery(sourceQueryId, requestedDay) {
+    return rpc('enqueue_youtube_job', { p_source_query_id: sourceQueryId, p_requested_day: requestedDay })
+  }
+
+  async function dashboard(limit = 3) {
+    const data = await rpc('dashboard_snapshot', { p_limit: limit })
+    return {
+      queries: (data?.queries || []).map(queryFromRow),
+      opportunities: (data?.opportunities || []).map(opportunityFromRow),
+      latestJob: data?.latest_job ? {
+        id: data.latest_job.id,
+        jobType: data.latest_job.job_type,
+        status: data.latest_job.status,
+        attempts: data.latest_job.attempts,
+        errorCode: data.latest_job.error_code,
+        errorMessage: data.latest_job.error_message,
+        createdAt: data.latest_job.created_at,
+        updatedAt: data.latest_job.updated_at,
+        completedAt: data.latest_job.completed_at,
+      } : null,
+    }
+  }
+
+  async function claimNext(workerId, leaseSeconds) {
+    const rows = await rpc('claim_next_job', { p_worker_id: workerId, p_lease_seconds: leaseSeconds })
+    const row = Array.isArray(rows) ? rows[0] : rows
+    return row ? {
+      id: row.id,
+      projectId: row.project_id,
+      jobType: row.job_type,
+      payload: row.payload || {},
+      attempts: row.attempts,
+      maxAttempts: row.max_attempts,
+    } : null
+  }
+
+  function finishJob(jobId, workerId, succeeded, error = null) {
+    return rpc('finish_job', {
+      p_job_id: jobId,
+      p_worker_id: workerId,
+      p_succeeded: succeeded,
+      p_error_code: error?.code || null,
+      p_error_message: error?.message || null,
+    })
+  }
+
+  async function startRun(queryId, jobId, capturedAt) {
+    const rows = await request('collection_runs?select=id', {
+      method: 'POST',
+      body: { source_query_id: queryId, job_id: jobId, captured_at: capturedAt, status: 'running' },
+      prefer: 'return=representation',
+    })
+    return rows[0].id
+  }
+
+  async function previousVideoSnapshots(sourceId, externalIds) {
+    if (!externalIds.length) return new Map()
+    const encodedIds = externalIds.map(id => `"${String(id).replace(/["\\]/g, '')}"`).join(',')
+    const items = await request(`source_items?source_id=eq.${encodeURIComponent(sourceId)}&item_type=eq.video&external_id=in.(${encodeURIComponent(encodedIds)})&select=id,external_id`)
+    if (!items?.length) return new Map()
+    const itemIds = items.map(item => item.id).join(',')
+    const snapshots = await request(`source_item_snapshots?source_item_id=in.(${encodeURIComponent(itemIds)})&select=source_item_id,captured_at,view_count&order=captured_at.desc`)
+    const externalByItem = new Map(items.map(item => [item.id, item.external_id]))
+    const result = new Map()
+    for (const snapshot of snapshots || []) {
+      const externalId = externalByItem.get(snapshot.source_item_id)
+      if (externalId && !result.has(externalId)) result.set(externalId, { capturedAt: snapshot.captured_at, viewCount: Number(snapshot.view_count) })
+    }
+    return result
+  }
+
+  async function upsertItems(sourceId, videos) {
+    const itemRows = []
+    const channelSeen = new Set()
+    for (const video of videos) {
+      itemRows.push({
+        source_id: sourceId, item_type: 'video', external_id: video.youtubeVideoId,
+        title: video.title, canonical_url: `https://www.youtube.com/watch?v=${video.youtubeVideoId}`,
+        metadata: { channel_id: video.channelId, channel_title: video.channelTitle, published_at: video.publishedAt, thumbnail_url: video.thumbnailUrl },
+      })
+      if (video.channelId && !channelSeen.has(video.channelId)) {
+        channelSeen.add(video.channelId)
+        itemRows.push({
+          source_id: sourceId, item_type: 'channel', external_id: video.channelId,
+          title: video.channelTitle, canonical_url: `https://www.youtube.com/channel/${video.channelId}`,
+          metadata: {},
+        })
+      }
+    }
+    const rows = await request('source_items?on_conflict=source_id,item_type,external_id&select=id,item_type,external_id', {
+      method: 'POST', body: itemRows, prefer: 'resolution=merge-duplicates,return=representation',
+    })
+    return new Map(rows.map(row => [`${row.item_type}:${row.external_id}`, row.id]))
+  }
+
+  async function persistCollection({ runId, query, videos, opportunities, excludedReason }) {
+    const itemIds = await upsertItems(query.sourceId, videos)
+    const snapshotRows = []
+    const channelSeen = new Set()
+    for (const video of videos) {
+      snapshotRows.push({
+        source_item_id: itemIds.get(`video:${video.youtubeVideoId}`), captured_at: video.capturedAt,
+        view_count: video.viewCount, like_count: video.likeCount, comment_count: video.commentCount,
+        metrics: { search_position: video.searchPosition },
+      })
+      if (video.channelId && !channelSeen.has(video.channelId)) {
+        channelSeen.add(video.channelId)
+        snapshotRows.push({
+          source_item_id: itemIds.get(`channel:${video.channelId}`), captured_at: video.capturedAt,
+          subscriber_count: video.subscriberCount, hidden_subscriber_count: video.hiddenSubscriberCount,
+          metrics: {},
+        })
+      }
+    }
+    const snapshots = snapshotRows.length ? await request('source_item_snapshots?select=id,source_item_id', {
+      method: 'POST', body: snapshotRows, prefer: 'return=representation',
+    }) : []
+    const snapshotByItem = new Map(snapshots.map(row => [row.source_item_id, row.id]))
+    const runItems = videos.map(video => {
+      const itemId = itemIds.get(`video:${video.youtubeVideoId}`)
+      return { collection_run_id: runId, source_item_id: itemId, snapshot_id: snapshotByItem.get(itemId), search_position: video.searchPosition }
+    })
+    if (runItems.length) await request('collection_run_items', { method: 'POST', body: runItems, prefer: 'return=minimal' })
+    if (opportunities.length) {
+      await request('opportunities', { method: 'POST', body: opportunities.map((item, index) => ({
+        collection_run_id: runId,
+        source_query_id: query.id,
+        source_item_id: itemIds.get(`video:${item.youtubeVideoId}`),
+        youtube_video_id: item.youtubeVideoId,
+        title: item.title,
+        channel_id: item.channelId,
+        channel_title: item.channelTitle,
+        thumbnail_url: item.thumbnailUrl,
+        published_at: item.publishedAt,
+        score_version: item.scoreVersion,
+        velocity_mode: item.velocityMode,
+        views_velocity: item.viewsVelocity,
+        channel_ratio: item.channelRatio,
+        engagement_rate: item.engagementRate,
+        freshness: item.freshness,
+        velocity_percentile: item.velocityPercentile,
+        channel_ratio_percentile: item.channelRatioPercentile,
+        engagement_percentile: item.engagementPercentile,
+        buyer_intent: item.buyerIntent,
+        commerce_fit: item.commerceFit,
+        breakout_score: item.breakoutScore,
+        opportunity_score: item.opportunityScore,
+        breakout_score_raw: item._breakoutRaw,
+        opportunity_score_raw: item._opportunityRaw,
+        percentile_population_size: item.percentilePopulationSize,
+        score_parameters: item.scoreParameters,
+        rank_position: index + 1,
+      })), prefer: 'return=minimal' })
+    }
+    await request(`collection_runs?id=eq.${encodeURIComponent(runId)}`, {
+      method: 'PATCH',
+      body: { status: excludedReason ? 'skipped' : 'succeeded', requested_count: query.maxResults, received_count: videos.length, scored_count: opportunities.length, excluded_reason: excludedReason, completed_at: new Date().toISOString() },
+      prefer: 'return=minimal',
+    })
+  }
+
+  async function failRun(runId, error) {
+    await request(`collection_runs?id=eq.${encodeURIComponent(runId)}`, {
+      method: 'PATCH',
+      body: { status: 'failed', error_code: String(error?.code || 'COLLECTION_FAILED').slice(0, 80), completed_at: new Date().toISOString() },
+      prefer: 'return=minimal',
+    })
+  }
+
+  return { claimNext, dashboard, enqueueQuery, failRun, finishJob, getQuery, listQueries, persistCollection, previousVideoSnapshots, startRun, updateQuery }
+}
+
+module.exports = { PROFILE, RevenueStoreError, createSupabaseStore, opportunityFromRow, queryFromRow }

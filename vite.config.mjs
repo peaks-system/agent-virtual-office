@@ -11,6 +11,8 @@ import { parseAllowedHostsEnv } from './src/utils/hostAllowlist.mjs'
 import staffApiModule from './scripts/staff-api.cjs'
 import seoApiModule from './scripts/seo-api.cjs'
 import wordpressApiModule from './scripts/wordpress-api.cjs'
+import revenueApiModule from './scripts/revenue-api.cjs'
+import revenueRuntimeModule from './scripts/revenue-lab/runtime.cjs'
 
 // Middleware: Universal status API
 //   GET  /api/status → read current status (browser polls this)
@@ -218,9 +220,15 @@ function officeStatusPlugin() {
       server.middlewares.use('/api/seo', seoApi.handler)
       const wordpressApi = wordpressApiModule.createWordPressApi({ root: server.config.root, authorize: req => isAuthorizedOfficeRequest(req, apiConfig) })
       server.middlewares.use('/api/wordpress', wordpressApi.handler)
+      const revenueRuntime = revenueRuntimeModule.createRevenueRuntime()
+      const revenueApi = revenueApiModule.createRevenueApi({ authorize: req => isAuthorizedOfficeRequest(req, apiConfig), store: revenueRuntime.store || undefined })
+      server.middlewares.use('/api/revenue', revenueApi.handler)
+      revenueRuntime.start()
       server.httpServer?.once('close', () => wordpressApi.close())
       server.httpServer?.once('close', () => { Promise.resolve(seoApi.close()).catch(() => console.error('SEO診断の終了処理に失敗しました。')) })
       server.httpServer?.once('close', () => { Promise.resolve(staffApi.close()).catch(() => console.error('スタッフ実行の終了処理に失敗しました。')) })
+      server.httpServer?.once('close', () => revenueApi.close())
+      server.httpServer?.once('close', () => revenueRuntime.close())
       server.middlewares.use('/api/status', (req, res, next) => {
         // Pass sub-paths (e.g. /stream) to their own handlers registered below.
         // Gate on pathname only — connect strips the mount prefix so /api/status?t=1

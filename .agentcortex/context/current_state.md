@@ -16,6 +16,7 @@
 - **Last Verified**: 2026-10-07
 - **Update Sequence**: 146
 - **ADR Index**:
+  - docs/adr/ADR-011-revenue-lab-job-boundary.md — Revenue Lab durable queue, replaceable worker, and server-only secret boundary · applies_to: scripts/revenue-*, scripts/revenue-lab/*, supabase/migrations/*revenue_lab*, src/components/RevenueLabDashboard*
   - docs/adr/ADR-001-vnext-self-managed-architecture.md — vNext self-managed AI architecture
   - docs/adr/ADR-002-multi-worktree-session-design.md — multi-worktree session isolation design
   - docs/adr/ADR-003-status-source-parity-for-codex.md — status-source parity for Codex

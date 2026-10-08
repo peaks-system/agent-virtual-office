@@ -12,6 +12,7 @@ import SeoPanel from './SeoPanel'
 import WordPressPanel from './WordPressPanel'
 import SiteSettingsPanel from './SiteSettingsPanel'
 import ProjectSetupGuide from './ProjectSetupGuide'
+import RevenueLabDashboard from './RevenueLabDashboard'
 
 export function receivedStatus(externalStatus, now) {
   return Object.entries(externalStatus).filter(([,value]) => value && (!value.expiresAt || value.expiresAt > now))
@@ -79,6 +80,7 @@ export default function CorporationDashboard({ children }) {
   const [exportError, setExportError] = useState('')
   const [workspace, setWorkspace] = useState('diagnosis')
   const [siteSettings, setSiteSettings] = useState(null)
+  const [department, setDepartment] = useState('office')
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
   const actual = executableReceivedStatus({ ...externalStatus, ...runStatuses }, now)
   const live = rosterStatusByRole(actual)
@@ -95,6 +97,10 @@ export default function CorporationDashboard({ children }) {
   return <div className="corp-dashboard">
     <header className="corp-header">
       <div className="corp-brand"><span className="corp-monogram" aria-hidden="true">AI</span><div><h1>AI CORPORATION</h1><p>{d('subtitle')}</p></div></div>
+      <nav className="corp-departments" aria-label="部門切り替え">
+        <button aria-pressed={department === 'office'} onClick={() => setDepartment('office')}>AI Office</button>
+        <button aria-pressed={department === 'revenue'} onClick={() => setDepartment('revenue')}>Revenue Lab</button>
+      </nav>
       <div className="corp-metrics">
         <div><strong>{actual.filter(([,s]) => s.status === 'working').length}</strong><span>{d('working')}</span></div>
         <div><strong>{actual.filter(([,s]) => ['blocked','awaiting-approval'].includes(s.status)).length}</strong><span>{d('attention')}</span></div>
@@ -103,6 +109,7 @@ export default function CorporationDashboard({ children }) {
       <div className="corp-clock"><time aria-label={d('date')}>{new Date(now).toLocaleTimeString(locale(), {hour:'2-digit',minute:'2-digit'})}</time><span>{actual.length ? d('online') : d('waiting')}</span></div>
     </header>
     {(board.storageError || exportError) && <div className="corp-error" role="alert">{board.storageError || exportError}</div>}
+    {department === 'revenue' ? <RevenueLabDashboard /> :
     <div className="corp-layout">
       <aside className="corp-left corp-card">
         <div className="corp-section-title"><h2>{d('projects')}</h2><button onClick={() => setAdding(!adding)} aria-expanded={adding}>{adding ? d('cancel') : `＋ ${d('add')}`}</button></div>
@@ -153,6 +160,6 @@ export default function CorporationDashboard({ children }) {
           {!actual.length ? <p className="corp-muted">{d('noWork')}</p> : actual.map(([id,status]) => <article key={id}><strong>{charName(id)}</strong><span>{t(`statusLabels.${status.status}`, status.status)}</span><p>{status.task || status.label || d('noTask')}</p></article>)}
         </section>
       </aside>
-    </div>
+    </div>}
   </div>
 }

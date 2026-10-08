@@ -1,0 +1,16 @@
+{
+  "scoreVersion": "youtube-v1",
+  "provider": "youtube",
+  "maxEnabledQueries": 3,
+  "maxResultsPerQuery": 25,
+  "lookbackDays": 7,
+  "dailyScheduleUtc": "15 20 * * *",
+  "regionCode": "JP",
+  "relevanceLanguage": "ja",
+  "job": {
+    "type": "youtube.collect",
+    "defaultPollIntervalMs": 30000,
+    "defaultLeaseSeconds": 300,
+    "maxAttempts": 3
+  }
+}

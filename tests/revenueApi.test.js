@@ -1,0 +1,78 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import http from 'node:http'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { configurationStatus, createRevenueApi } = require('../scripts/revenue-api.cjs')
+const uuid = '11111111-1111-4111-8111-111111111111'
+const servers = []
+const jsonHeaders = { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => new Promise(resolve => server.close(resolve))))
+})
+
+async function fixture({ authorize = () => true, env, store } = {}) {
+  const api = createRevenueApi({ authorize, permit: () => true, env: env || { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-only', YOUTUBE_API_KEY: 'test-only' }, store, today: () => '2026-10-08' })
+  const server = http.createServer(api.handler)
+  servers.push(server)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  return `http://127.0.0.1:${server.address().port}`
+}
+
+describe('Revenue Lab API', () => {
+  it('reports missing environment names without values or constructing storage', async () => {
+    const status = configurationStatus({ SUPABASE_URL: 'https://safe.test' })
+    expect(status).toEqual({ configured: false, missing: ['SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY'] })
+    const origin = await fixture({ env: { SUPABASE_URL: 'https://safe.test' } })
+    const response = await fetch(`${origin}/api/revenue/dashboard`)
+    expect(response.status).toBe(200)
+    const text = await response.text()
+    expect(text).toContain('SUPABASE_SERVICE_ROLE_KEY')
+    expect(text).not.toContain('https://safe.test')
+  })
+
+  it('returns bounded dashboard data through the isolated namespace', async () => {
+    const store = { dashboard: vi.fn(async () => ({ queries: [{ id: uuid }], opportunities: [{ youtubeVideoId: 'v1' }], latestJob: null })) }
+    const origin = await fixture({ store })
+    const response = await fetch(`${origin}/api/revenue/dashboard?limit=99`)
+    expect(response.status).toBe(200)
+    expect((await response.json()).data.opportunities).toHaveLength(1)
+    expect(store.dashboard).toHaveBeenCalledWith(3)
+  })
+
+  it('validates and authorizes query updates before storage', async () => {
+    const store = { updateQuery: vi.fn(async (id, patch) => ({ id, ...patch })) }
+    const deniedOrigin = await fixture({ store, authorize: () => false })
+    expect((await fetch(`${deniedOrigin}/api/revenue/queries/${uuid}`, { method: 'PUT', headers: jsonHeaders, body: '{}' })).status).toBe(401)
+    expect(store.updateQuery).not.toHaveBeenCalled()
+
+    const origin = await fixture({ store })
+    const invalid = await fetch(`${origin}/api/revenue/queries/${uuid}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ buyerIntent: 101 }) })
+    expect(invalid.status).toBe(400)
+    const valid = await fetch(`${origin}/api/revenue/queries/${uuid}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ label: '  デスク用品  ', queryText: '机 ガジェット', buyerIntent: 80, commerceFit: null, enabled: true }) })
+    expect(valid.status).toBe(200)
+    expect(store.updateQuery).toHaveBeenCalledWith(uuid, { label: 'デスク用品', query_text: '机 ガジェット', buyer_intent: 80, commerce_fit: null, enabled: true })
+  })
+
+  it('enqueues a manual run and does not execute YouTube in the request', async () => {
+    const store = { enqueueQuery: vi.fn(async () => ({ id: 'job1', created: true, status: 'pending' })) }
+    const origin = await fixture({ store })
+    const response = await fetch(`${origin}/api/revenue/jobs`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ sourceQueryId: uuid }) })
+    expect(response.status).toBe(201)
+    expect(store.enqueueQuery).toHaveBeenCalledWith(uuid, '2026-10-08')
+    expect((await response.json()).data.status).toBe('pending')
+  })
+
+  it('uses a consistent safe error envelope for malformed JSON and service failures', async () => {
+    const store = { dashboard: vi.fn(async () => { throw Object.assign(new Error('db secret details'), { code: 'SUPABASE_HTTP_ERROR' }) }) }
+    const origin = await fixture({ store })
+    const malformed = await fetch(`${origin}/api/revenue/jobs`, { method: 'POST', headers: jsonHeaders, body: '{' })
+    expect(await malformed.json()).toEqual({ error: { code: 'VALIDATION_ERROR', message: '入力内容を確認してください。' } })
+    const failed = await fetch(`${origin}/api/revenue/dashboard`)
+    const text = await failed.text()
+    expect(failed.status).toBe(502)
+    expect(text).toContain('REVENUE_SERVICE_ERROR')
+    expect(text).not.toContain('db secret details')
+  })
+})
