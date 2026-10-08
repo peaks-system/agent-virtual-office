@@ -23,12 +23,19 @@ AI Office remains the default and retains its existing layout without behavioral
 | [Theme label] [Search query] [Buyer 0-100] [Fit 0-100] [Enabled]  |
 |                                              [Save theme settings] |
 +--------------------------------------------------------------------+
-| TODAY'S TOP 3                                                     |
-| #1  title                                  Opportunity 88.42       |
-|     theme · channel · views · age          Breakout 84.21          |
-|     velocity mode · score version                                  |
+| RESEARCH OVERVIEW                                                  |
+| Theme / last collection JST / 7-day window / fetched / scored     |
+| score version / latest job / next run at 05:15 JST                |
++--------------------------------------------------------------------+
+| TODAY'S TOP 3                                                      |
+| #1  title                       Opportunity 88.42 [strong]          |
+|     channel · views · subs · views/sub · Views/hour                |
+|     [observed | estimated] explanation · deterministic reasons     |
+|     [Show details: percentiles / raw components / human inputs]    |
 | #2 ...                                                             |
 | #3 ...                                                             |
++--------------------------------------------------------------------+
+| [About scores: concise definitions for six ranking terms]          |
 +--------------------------------------------------------------------+
 ```
 
@@ -37,6 +44,8 @@ AI Office remains the default and retains its existing layout without behavioral
 - Reuse the existing calm white-office background, card radius, border, typography, and focus ring.
 - Department accent: muted amber (`#9a6a2f`) to distinguish revenue experiments without altering existing green AI Office semantics.
 - Opportunity score is the primary number; Breakout is secondary.
+- Observed velocity uses a green badge; estimated lifetime velocity uses an amber badge.
+- Summary and decision metrics remain visible; diagnostic components are disclosed on demand.
 - No charts in Phase 1.
 
 ## Responsive Behavior

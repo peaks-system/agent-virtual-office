@@ -2,10 +2,42 @@ import React, { useEffect, useState } from 'react'
 import { enqueueEnabledRevenueQueries, loadRevenueDashboard, updateRevenueQuery } from '../services/revenueLabApi'
 import './revenueLabDashboard.css'
 
-const EMPTY = { config: { configured: false, missing: [] }, queries: [], opportunities: [], latestJob: null }
+const EMPTY = { config: { configured: false, missing: [] }, queries: [], opportunities: [], latestJob: null, latestRun: null }
 
 export function scoreLabel(value) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—'
+}
+
+export function scoreStrength(value) {
+  const score = Number(value)
+  if (score >= 90) return '非常に強い'
+  if (score >= 75) return '強い'
+  if (score >= 60) return '注目'
+  if (score >= 40) return '普通'
+  return '弱い'
+}
+
+export function velocityPresentation(mode) {
+  return mode === 'observed_delta'
+    ? { label: '実測', tone: 'observed', description: '前回取得から今回取得までの実際の再生増加速度です。' }
+    : { label: '公開後推定', tone: 'estimated', description: '初回取得のため、公開から現在までの平均再生速度です。' }
+}
+
+export function opportunityReasons(item) {
+  const reasons = []
+  if (Number(item.velocityPercentile) >= 75) reasons.push('再生速度が母集団上位')
+  if (item.channelRatioPercentile != null && Number(item.channelRatioPercentile) >= 75) reasons.push('チャンネル規模に対して再生数が多い')
+  if (Number(item.engagementPercentile) >= 75) reasons.push('engagementが高い')
+  if (Number(item.freshness) >= 75) reasons.push('公開直後で鮮度が高い')
+  if (reasons.length) return reasons
+  const candidates = [
+    [Number(item.velocityPercentile), '母集団内の再生速度を評価'],
+    [Number(item.channelRatioPercentile), 'チャンネル規模に対する再生数を評価'],
+    [Number(item.engagementPercentile), 'engagementを評価'],
+    [Number(item.freshness), '公開後の鮮度を評価'],
+  ].filter(([value]) => Number.isFinite(value))
+  candidates.sort((left, right) => right[0] - left[0])
+  return [candidates[0]?.[1] || '保存済みScore componentsで順位を決定']
 }
 
 export function queryNeedsScores(query) {
@@ -35,6 +67,21 @@ export function publishedLabel(value) {
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
     timeZone: 'Asia/Tokyo',
   }).format(date)
+}
+
+export function nextCollectionLabel(value = new Date()) {
+  const now = new Date(value)
+  if (Number.isNaN(now.getTime())) return '—'
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Tokyo',
+  }).formatToParts(now).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]))
+  const next = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, -4, 15))
+  if (next <= now) next.setUTCDate(next.getUTCDate() + 1)
+  return `${publishedLabel(next)}（毎日 05:15 JST）`
+}
+
+function jobStatusLabel(status) {
+  return ({ queued: '待機中', running: '実行中', succeeded: '成功', failed: '失敗', skipped: '対象外' })[status] || status || '—'
 }
 
 function QueryEditor({ query, busy, onSave }) {
@@ -68,6 +115,10 @@ function QueryEditor({ query, busy, onSave }) {
 export function RevenueLabView({ state, error, busy, onReload, onRun, onSave }) {
   if (!state) return <main className="revenue-shell" aria-busy="true"><div className="revenue-state"><h2>Revenue Lab</h2><p>収益機会を読み込んでいます…</p></div></main>
   const eligible = state.queries.filter(query => query.enabled && !queryNeedsScores(query))
+  const enabledQueries = state.queries.filter(query => query.enabled)
+  const lookbackDays = [...new Set(enabledQueries.map(query => query.lookbackDays).filter(Boolean))]
+  const latestRun = state.latestRun
+  const scoreVersion = state.opportunities[0]?.scoreVersion || 'youtube-v1'
   return <main className="revenue-shell">
     <section className="revenue-hero">
       <div><p className="revenue-kicker">YOUTUBE COMMERCE · PHASE 1</p><h2>今日検討すべきTOP3</h2><p>直近7日・日本語圏の動画を、再現可能な youtube-v1 で順位付けします。</p></div>
@@ -76,9 +127,24 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onSave }) 
     {error && <div className="revenue-alert" role="alert">{error}</div>}
     {!state.config.configured && <section className="revenue-state revenue-config"><h3>接続設定が必要です</h3><p>サーバー側の環境変数を設定してください。</p><code>{state.config.missing.join(', ')}</code></section>}
     {state.config.configured && state.queries.length === 0 && <section className="revenue-state"><h3>検索テーマがありません</h3><p>Supabaseの初期seedを適用して、最大3件のテーマを設定してください。</p></section>}
+    <section className="revenue-research-summary" aria-labelledby="revenue-research-heading">
+      <div className="revenue-section-heading"><div><p className="revenue-kicker">RESEARCH OVERVIEW</p><h2 id="revenue-research-heading">リサーチ概要</h2></div></div>
+      <dl>
+        <div className="revenue-summary-wide"><dt>検索テーマ</dt><dd>{enabledQueries.map(query => query.queryText).join(' / ') || '—'}</dd></div>
+        <div><dt>最終収集日時（JST）</dt><dd>{publishedLabel(latestRun?.capturedAt)}</dd></div>
+        <div><dt>対象期間</dt><dd>{lookbackDays.length ? lookbackDays.map(days => `直近${days}日`).join(' / ') : '—'}</dd></div>
+        <div><dt>取得動画数</dt><dd>{metricCount(latestRun?.receivedCount)}</dd></div>
+        <div><dt>Score対象動画数</dt><dd>{metricCount(latestRun?.scoredCount)}</dd></div>
+        <div><dt>score_version</dt><dd>{scoreVersion}</dd></div>
+        <div><dt>最新job状態</dt><dd><span className={`revenue-status is-${state.latestJob?.status || 'unknown'}`}>{jobStatusLabel(state.latestJob?.status)}</span></dd></div>
+        <div className="revenue-summary-wide"><dt>次回予定収集時刻</dt><dd>{nextCollectionLabel()}</dd></div>
+      </dl>
+    </section>
     <section className="revenue-grid" aria-label="Opportunity TOP3">
       {state.opportunities.map((item, index) => {
         const reviewUrl = videoReviewUrl(item)
+        const velocity = velocityPresentation(item.velocityMode)
+        const reasons = opportunityReasons(item)
         return <article className="revenue-opportunity" key={item.id || item.youtubeVideoId}>
           <span className="revenue-rank">#{index + 1}</span>
           {item.thumbnailUrl && <img src={item.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />}
@@ -87,16 +153,44 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onSave }) 
               <div><dt>公開日時</dt><dd>{publishedLabel(item.publishedAt)}</dd></div>
               <div><dt>再生数</dt><dd>{metricCount(item.viewCount)}</dd></div>
               <div><dt>登録者数</dt><dd>{item.hiddenSubscriberCount ? '非公開' : metricCount(item.subscriberCount)}</dd></div>
+              <div><dt>登録者数に対する再生倍率</dt><dd>{item.channelRatio == null ? '—' : `${Number(item.channelRatio).toFixed(2)}倍`}</dd></div>
               <div><dt>Views/hour</dt><dd>{Number.isFinite(Number(item.viewsVelocity)) ? Number(item.viewsVelocity).toFixed(6) : '—'}</dd></div>
             </dl>
-            <div className="revenue-score"><strong>{scoreLabel(item.opportunityScore)}</strong><span>Opportunity</span><b>{scoreLabel(item.breakoutScore)}</b><span>Breakout</span></div>
-            <p className="revenue-meta">{item.velocityMode === 'observed_delta' ? '実測増分' : '公開後推定'} · 母集団 {item.percentilePopulationSize}件</p>
+            <div className="revenue-score"><strong>{scoreLabel(item.opportunityScore)}</strong><span>Opportunity<br />{scoreStrength(item.opportunityScore)}</span><b>{scoreLabel(item.breakoutScore)}</b><span>Breakout<br />{scoreStrength(item.breakoutScore)}</span></div>
+            <div className={`revenue-velocity is-${velocity.tone}`}><span>{velocity.label}</span><p>{velocity.description}</p></div>
+            {item.velocityMode === 'observed_delta' && item.previousViewCount != null && <dl className="revenue-observed-details">
+              <div><dt>前回再生数</dt><dd>{metricCount(item.previousViewCount)}</dd></div>
+              <div><dt>現在再生数</dt><dd>{metricCount(item.viewCount)}</dd></div>
+              <div><dt>増加再生数</dt><dd>+{metricCount(item.viewIncrease, '0')}</dd></div>
+              <div><dt>経過時間</dt><dd>{Number(item.velocityElapsedHours).toFixed(2)}時間</dd></div>
+              <div><dt>実測Views/hour</dt><dd>{Number(item.viewsVelocity).toFixed(6)}</dd></div>
+            </dl>}
+            <div className="revenue-reasons"><strong>なぜ上位なのか</strong><ul>{reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></div>
+            <p className="revenue-meta">母集団 {item.percentilePopulationSize}件 · {item.scoreVersion}</p>
+            <details className="revenue-score-details"><summary>詳細を見る</summary><dl>
+              <div><dt>再生速度 percentile</dt><dd>{scoreLabel(item.velocityPercentile)}</dd></div>
+              <div><dt>チャンネル倍率 percentile</dt><dd>{scoreLabel(item.channelRatioPercentile)}</dd></div>
+              <div><dt>engagement percentile</dt><dd>{scoreLabel(item.engagementPercentile)}</dd></div>
+              <div><dt>channel_ratio</dt><dd>{item.channelRatio == null ? '—' : Number(item.channelRatio).toFixed(6)}</dd></div>
+              <div><dt>engagement_rate</dt><dd>{scoreLabel(item.engagementRate)}</dd></div>
+              <div><dt>freshness</dt><dd>{scoreLabel(item.freshness)}</dd></div>
+              <div><dt>Buyer Intent</dt><dd>{metricCount(item.buyerIntent)}</dd></div>
+              <div><dt>Commerce Fit</dt><dd>{metricCount(item.commerceFit)}</dd></div>
+            </dl></details>
             {reviewUrl && <a className="revenue-youtube-link" href={reviewUrl} target="_blank" rel="noopener noreferrer">YouTubeで見る</a>}
           </div>
         </article>
       })}
       {state.config.configured && state.opportunities.length === 0 && <div className="revenue-state"><h3>まだ候補がありません</h3><p>テーマのScore設定を保存して収集を実行してください。</p></div>}
     </section>
+    <details className="revenue-score-guide"><summary>スコアについて</summary><dl>
+      <div><dt>Breakout Score</dt><dd>再生速度、チャンネル規模比、反応率、鮮度から「通常より勢いがあるか」を示します。</dd></div>
+      <div><dt>Opportunity Score</dt><dd>Breakout Scoreを70%、Buyer IntentとCommerce Fitを各15%で補正した企画候補順位です。</dd></div>
+      <div><dt>Views/hour</dt><dd>1時間あたりの再生増加速度です。初回は公開後平均、2回目以降は前回との差分を使います。</dd></div>
+      <div><dt>Buyer Intent</dt><dd>検索テーマに「買う意図」がどれくらい含まれるかを人間が0〜100で設定します。</dd></div>
+      <div><dt>Commerce Fit</dt><dd>検索テーマが商品紹介にどれくらい適しているかを人間が0〜100で設定します。</dd></div>
+      <div><dt>母集団</dt><dd>同じ検索テーマ・同じ収集runで取得とScore算出に成功した動画群です。</dd></div>
+    </dl></details>
     <section className="revenue-settings">
       <div className="revenue-section-heading"><div><p className="revenue-kicker">QUERY SETTINGS</p><h2>検索テーマ</h2></div><span>有効 {state.queries.filter(query => query.enabled).length} / 3</span></div>
       <div className="revenue-query-grid">{state.queries.map(query => <QueryEditor key={query.id} query={query} busy={busy} onSave={onSave} />)}</div>

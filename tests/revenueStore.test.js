@@ -98,8 +98,13 @@ describe('Revenue Lab Supabase store snapshots', () => {
       }])
       if (url.includes('/source_item_snapshots?')) return response([
         { source_item_id: 'video-item', captured_at: '2026-10-08T00:00:00Z', view_count: 1234, subscriber_count: null, hidden_subscriber_count: false },
+        { source_item_id: 'video-item', captured_at: '2026-10-07T22:00:00Z', view_count: 1000, subscriber_count: null, hidden_subscriber_count: false },
         { source_item_id: 'channel-item', captured_at: '2026-10-08T00:00:00Z', view_count: null, subscriber_count: 567, hidden_subscriber_count: false },
       ])
+      if (url.includes('/collection_runs?')) return response([{
+        id: 'run-1', source_query_id: 'query-1', status: 'succeeded', captured_at: '2026-10-08T00:00:00Z',
+        requested_count: 25, received_count: 25, scored_count: 24, completed_at: '2026-10-08T00:01:00Z',
+      }])
       throw new Error(`Unexpected request: ${url} ${options?.method}`)
     })
     const store = createSupabaseStore({
@@ -111,7 +116,13 @@ describe('Revenue Lab Supabase store snapshots', () => {
       viewCount: 1234,
       subscriberCount: 567,
       hiddenSubscriberCount: false,
+      previousViewCount: 1000,
+      viewIncrease: 234,
+      velocityElapsedHours: 2,
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(4)
+    expect(dashboard.latestRun).toMatchObject({
+      id: 'run-1', sourceQueryId: 'query-1', status: 'succeeded', receivedCount: 25, scoredCount: 24,
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(5)
   })
 })

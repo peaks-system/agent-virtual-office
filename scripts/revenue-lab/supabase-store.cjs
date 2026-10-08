@@ -158,21 +158,36 @@ function createSupabaseStore({
     ) : []
     const videoByExternalId = new Map(videoItems.map(item => [item.external_id, item]))
     const channelBySourceAndExternalId = new Map(channelItems.map(item => [`${item.source_id}:${item.external_id}`, item]))
-    const latestSnapshotByItemId = new Map()
+    const snapshotsByItemId = new Map()
     for (const snapshot of snapshots || []) {
-      if (!latestSnapshotByItemId.has(snapshot.source_item_id)) latestSnapshotByItemId.set(snapshot.source_item_id, snapshot)
+      const itemSnapshots = snapshotsByItemId.get(snapshot.source_item_id) || []
+      if (itemSnapshots.length < 2) itemSnapshots.push(snapshot)
+      snapshotsByItemId.set(snapshot.source_item_id, itemSnapshots)
     }
     return opportunities.map(opportunity => {
       const videoItem = videoByExternalId.get(opportunity.youtubeVideoId)
       const channelItem = videoItem && opportunity.channelId
         ? channelBySourceAndExternalId.get(`${videoItem.source_id}:${opportunity.channelId}`)
         : null
-      const videoSnapshot = videoItem ? latestSnapshotByItemId.get(videoItem.id) : null
-      const channelSnapshot = channelItem ? latestSnapshotByItemId.get(channelItem.id) : null
+      const videoSnapshots = videoItem ? snapshotsByItemId.get(videoItem.id) || [] : []
+      const videoSnapshot = videoSnapshots[0]
+      const previousVideoSnapshot = videoSnapshots[1]
+      const channelSnapshot = channelItem ? snapshotsByItemId.get(channelItem.id)?.[0] : null
+      const viewCount = videoSnapshot?.view_count == null ? null : Number(videoSnapshot.view_count)
+      const previousViewCount = previousVideoSnapshot?.view_count == null ? null : Number(previousVideoSnapshot.view_count)
+      const elapsedMilliseconds = new Date(videoSnapshot?.captured_at).getTime() - new Date(previousVideoSnapshot?.captured_at).getTime()
+      const velocityElapsedHours = Number.isFinite(elapsedMilliseconds) && elapsedMilliseconds >= 0
+        ? Math.max(elapsedMilliseconds / 3_600_000, 1)
+        : null
       return {
         ...opportunity,
         sourceUrl: videoItem?.canonical_url || null,
-        viewCount: videoSnapshot?.view_count == null ? null : Number(videoSnapshot.view_count),
+        viewCount,
+        currentCapturedAt: videoSnapshot?.captured_at || null,
+        previousViewCount,
+        previousCapturedAt: previousVideoSnapshot?.captured_at || null,
+        viewIncrease: viewCount == null || previousViewCount == null ? null : Math.max(viewCount - previousViewCount, 0),
+        velocityElapsedHours,
         subscriberCount: channelSnapshot?.subscriber_count == null ? null : Number(channelSnapshot.subscriber_count),
         hiddenSubscriberCount: channelSnapshot?.hidden_subscriber_count === true,
       }
@@ -181,7 +196,11 @@ function createSupabaseStore({
 
   async function dashboard(limit = 3) {
     const data = await rpc('dashboard_snapshot', { p_limit: limit })
-    const opportunities = await enrichOpportunityReview((data?.opportunities || []).map(opportunityFromRow))
+    const [opportunities, runs] = await Promise.all([
+      enrichOpportunityReview((data?.opportunities || []).map(opportunityFromRow)),
+      request('collection_runs?select=id,source_query_id,status,captured_at,requested_count,received_count,scored_count,excluded_reason,error_code,completed_at&order=captured_at.desc&limit=1'),
+    ])
+    const latestRun = runs?.[0]
     return {
       queries: (data?.queries || []).map(queryFromRow),
       opportunities,
@@ -195,6 +214,18 @@ function createSupabaseStore({
         createdAt: data.latest_job.created_at,
         updatedAt: data.latest_job.updated_at,
         completedAt: data.latest_job.completed_at,
+      } : null,
+      latestRun: latestRun ? {
+        id: latestRun.id,
+        sourceQueryId: latestRun.source_query_id,
+        status: latestRun.status,
+        capturedAt: latestRun.captured_at,
+        requestedCount: latestRun.requested_count,
+        receivedCount: latestRun.received_count,
+        scoredCount: latestRun.scored_count,
+        excludedReason: latestRun.excluded_reason,
+        errorCode: latestRun.error_code,
+        completedAt: latestRun.completed_at,
       } : null,
     }
   }
