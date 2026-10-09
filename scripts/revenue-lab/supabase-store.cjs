@@ -23,8 +23,6 @@ function queryFromRow(row) {
   const source = Array.isArray(row.sources) ? row.sources[0] : row.sources
   return {
     id: row.id,
-    sourceItemId: row.source_item_id,
-    trackingRunId: row.tracking_run_id,
     sourceId: row.source_id,
     projectId: source?.project_id ?? row.project_id ?? null,
     label: row.label,
@@ -43,6 +41,8 @@ function queryFromRow(row) {
 function opportunityFromRow(row) {
   return {
     id: row.id,
+    sourceItemId: row.source_item_id,
+    trackingRunId: row.tracking_run_id,
     sourceQueryId: row.source_query_id,
     youtubeVideoId: row.youtube_video_id,
     title: row.title,

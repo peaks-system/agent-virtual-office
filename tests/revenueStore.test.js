@@ -2,7 +2,7 @@ import { createRequire } from 'node:module'
 import { describe, expect, it, vi } from 'vitest'
 
 const require = createRequire(import.meta.url)
-const { createSupabaseStore } = require('../scripts/revenue-lab/supabase-store.cjs')
+const { createSupabaseStore, opportunityFromRow, queryFromRow } = require('../scripts/revenue-lab/supabase-store.cjs')
 
 function response(body, status = 200) {
   return new Response(body == null ? null : JSON.stringify(body), {
@@ -12,6 +12,13 @@ function response(body, status = 200) {
 }
 
 describe('Revenue Lab Supabase store snapshots', () => {
+  it('keeps tracking relation IDs on opportunities instead of query records', () => {
+    expect(opportunityFromRow({ source_item_id: 'item-1', tracking_run_id: 'tracking-run-1' })).toMatchObject({
+      sourceItemId: 'item-1', trackingRunId: 'tracking-run-1',
+    })
+    expect(queryFromRow({ source_item_id: 'wrong-item', tracking_run_id: 'wrong-run' })).not.toHaveProperty('sourceItemId')
+  })
+
   it('uses one uniform key set for mixed video and channel bulk inserts', async () => {
     const calls = []
     const fetchImpl = vi.fn(async (url, options) => {
