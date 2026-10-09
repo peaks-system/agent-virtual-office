@@ -27,13 +27,17 @@ AI Office remains the default and retains its existing layout without behavioral
 | Theme / last collection JST / 7-day window / fetched / scored     |
 | score version / latest job / next run at 05:15 JST                |
 +--------------------------------------------------------------------+
-| TODAY'S TOP 3                                                      |
+| TODAY'S DISCOVERY TOP 3                                            |
 | #1  title                       Opportunity 88.42 [strong]          |
 |     channel · views · subs · views/sub · Views/hour                |
 |     [observed | estimated] explanation · deterministic reasons     |
 |     [Show details: percentiles / raw components / human inputs]    |
 | #2 ...                                                             |
 | #3 ...                                                             |
++--------------------------------------------------------------------+
+| CONTINUOUS TRACKING / BREAKOUT TOP 3                               |
+| #1 title · observed badge · previous/current/delta · elapsed       |
+|    Views/hour · growth ratio (display-only) · tracking score       |
 +--------------------------------------------------------------------+
 | [About scores: concise definitions for six ranking terms]          |
 +--------------------------------------------------------------------+
@@ -46,6 +50,8 @@ AI Office remains the default and retains its existing layout without behavioral
 - Opportunity score is the primary number; Breakout is secondary.
 - Observed velocity uses a green badge; estimated lifetime velocity uses an amber badge.
 - Summary and decision metrics remain visible; diagnostic components are disclosed on demand.
+- Discovery is titled `本日の発掘TOP3`; it does not claim database-level novelty.
+- Tracking is titled `継続観測・急伸TOP3` and always represents a six-hour-or-longer observed interval.
 - No charts in Phase 1.
 
 ## Responsive Behavior

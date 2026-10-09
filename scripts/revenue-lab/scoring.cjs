@@ -1,6 +1,7 @@
 'use strict'
 
 const SCORE_VERSION = 'youtube-v1'
+const TRACKING_SCORE_VERSION = 'youtube-tracking-v1'
 
 const SCORE_PARAMETERS = Object.freeze({
   breakout: Object.freeze({
@@ -165,6 +166,34 @@ function scoreYouTubePopulation(videos, { buyerIntent, commerceFit } = {}) {
   return { scoreVersion: SCORE_VERSION, excludedReason: null, opportunities }
 }
 
+function scoreYouTubeTrackingPopulation(videos, inputs = {}) {
+  const observedVideos = videos.filter(video => (
+    finite(video.previousSnapshot?.viewCount) != null
+    && Number.isFinite(Date.parse(video.previousSnapshot?.capturedAt))
+  ))
+  const scored = scoreYouTubePopulation(observedVideos, inputs)
+  return {
+    ...scored,
+    scoreVersion: TRACKING_SCORE_VERSION,
+    opportunities: scored.opportunities.map(opportunity => ({
+      ...opportunity,
+      scoreVersion: TRACKING_SCORE_VERSION,
+      scoreParameters: {
+        ...opportunity.scoreParameters,
+        percentile: {
+          ...opportunity.scoreParameters.percentile,
+          population: 'same source_query and tracking_run successfully observed videos',
+        },
+        tracking: {
+          minimum_elapsed_hours: 6,
+          velocity_mode: 'observed_delta',
+          growth_ratio_and_percent: 'display_only_not_scored',
+        },
+      },
+    })),
+  }
+}
+
 function toStoredOpportunity(opportunity) {
   const { _breakoutRaw, _opportunityRaw, ...stored } = opportunity
   return stored
@@ -173,11 +202,13 @@ function toStoredOpportunity(opportunity) {
 module.exports = {
   SCORE_PARAMETERS,
   SCORE_VERSION,
+  TRACKING_SCORE_VERSION,
   compareOpportunities,
   deriveMetrics,
   percentileRanks,
   roundForStorage,
   scoreYouTubePopulation,
+  scoreYouTubeTrackingPopulation,
   toStoredOpportunity,
   validHumanScore,
 }

@@ -33,6 +33,7 @@ describe('Revenue Lab runtime', () => {
     await Promise.resolve()
     expect(run).toHaveBeenCalledTimes(1)
     expect(workerFactory.mock.calls[0][0].handlers.get('youtube.collect')).toBeTypeOf('function')
+    expect(workerFactory.mock.calls[0][0].handlers.get('youtube.track')).toBeTypeOf('function')
     runtime.close()
     expect(stop).toHaveBeenCalledTimes(1)
   })

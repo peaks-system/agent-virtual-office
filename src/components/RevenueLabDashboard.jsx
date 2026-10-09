@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { enqueueEnabledRevenueQueries, loadRevenueDashboard, updateRevenueQuery } from '../services/revenueLabApi'
+import { enqueueEnabledRevenueQueries, enqueueRevenueTracking, loadRevenueDashboard, updateRevenueQuery } from '../services/revenueLabApi'
 import './revenueLabDashboard.css'
 
-const EMPTY = { config: { configured: false, missing: [] }, queries: [], opportunities: [], latestJob: null, latestRun: null }
+const EMPTY = { config: { configured: false, missing: [] }, queries: [], opportunities: [], trackingOpportunities: [], latestJob: null, latestRun: null, latestTrackingRun: null }
 
 export function scoreLabel(value) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—'
@@ -112,7 +112,59 @@ function QueryEditor({ query, busy, onSave }) {
   </form>
 }
 
-export function RevenueLabView({ state, error, busy, onReload, onRun, onSave }) {
+function OpportunityCard({ item, index, tracking = false }) {
+  const reviewUrl = videoReviewUrl(item)
+  const velocity = velocityPresentation(item.velocityMode)
+  const reasons = opportunityReasons(item)
+  return <article className="revenue-opportunity">
+    <span className="revenue-rank">#{index + 1}</span>
+    {item.thumbnailUrl && <img src={item.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />}
+    <div><p className="revenue-channel">{item.channelTitle || 'チャンネル不明'}</p><h3>{item.title}</h3>
+      <dl className="revenue-review-metrics">
+        <div><dt>公開日時</dt><dd>{publishedLabel(item.publishedAt)}</dd></div>
+        <div><dt>再生数</dt><dd>{metricCount(item.viewCount)}</dd></div>
+        <div><dt>登録者数</dt><dd>{item.hiddenSubscriberCount ? '非公開' : metricCount(item.subscriberCount)}</dd></div>
+        <div><dt>登録者数に対する再生倍率</dt><dd>{item.channelRatio == null ? '—' : `${Number(item.channelRatio).toFixed(2)}倍`}</dd></div>
+        <div><dt>Views/hour</dt><dd>{Number.isFinite(Number(item.viewsVelocity)) ? Number(item.viewsVelocity).toFixed(6) : '—'}</dd></div>
+        {tracking && <div><dt>前回比</dt><dd>{item.growthRatio == null ? '—' : `${Number(item.growthRatio).toFixed(3)}倍（+${Number(item.growthPercent).toFixed(2)}%）`}</dd></div>}
+      </dl>
+      <div className="revenue-score"><strong>{scoreLabel(item.opportunityScore)}</strong><span>Opportunity<br />{scoreStrength(item.opportunityScore)}</span><b>{scoreLabel(item.breakoutScore)}</b><span>Breakout<br />{scoreStrength(item.breakoutScore)}</span></div>
+      <div className={`revenue-velocity is-${velocity.tone}`}><span>{velocity.label}</span><p>{velocity.description}</p></div>
+      {item.velocityMode === 'observed_delta' && item.previousViewCount != null && <dl className="revenue-observed-details">
+        <div><dt>前回再生数</dt><dd>{metricCount(item.previousViewCount)}</dd></div>
+        <div><dt>現在再生数</dt><dd>{metricCount(item.viewCount)}</dd></div>
+        <div><dt>増加再生数</dt><dd>+{metricCount(item.viewIncrease, '0')}</dd></div>
+        <div><dt>経過時間</dt><dd>{Number(item.velocityElapsedHours).toFixed(2)}時間</dd></div>
+        <div><dt>実測Views/hour</dt><dd>{Number(item.viewsVelocity).toFixed(6)}</dd></div>
+      </dl>}
+      <div className="revenue-reasons"><strong>なぜ上位なのか</strong><ul>{reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></div>
+      <p className="revenue-meta">母集団 {item.percentilePopulationSize}件 · {item.scoreVersion}</p>
+      <details className="revenue-score-details"><summary>詳細を見る</summary><dl>
+        <div><dt>再生速度 percentile</dt><dd>{scoreLabel(item.velocityPercentile)}</dd></div>
+        <div><dt>チャンネル倍率 percentile</dt><dd>{scoreLabel(item.channelRatioPercentile)}</dd></div>
+        <div><dt>engagement percentile</dt><dd>{scoreLabel(item.engagementPercentile)}</dd></div>
+        <div><dt>channel_ratio</dt><dd>{item.channelRatio == null ? '—' : Number(item.channelRatio).toFixed(6)}</dd></div>
+        <div><dt>engagement_rate</dt><dd>{scoreLabel(item.engagementRate)}</dd></div>
+        <div><dt>freshness</dt><dd>{scoreLabel(item.freshness)}</dd></div>
+        <div><dt>Buyer Intent</dt><dd>{metricCount(item.buyerIntent)}</dd></div>
+        <div><dt>Commerce Fit</dt><dd>{metricCount(item.commerceFit)}</dd></div>
+      </dl></details>
+      {reviewUrl && <a className="revenue-youtube-link" href={reviewUrl} target="_blank" rel="noopener noreferrer">YouTubeで見る</a>}
+    </div>
+  </article>
+}
+
+function OpportunitySection({ title, description, items, tracking = false, configured }) {
+  return <section className="revenue-ranking-section">
+    <div className="revenue-section-heading"><div><p className="revenue-kicker">{tracking ? 'OBSERVED TRACKING' : 'DAILY DISCOVERY'}</p><h2>{title}</h2><p>{description}</p></div></div>
+    <div className="revenue-grid" aria-label={title}>
+      {items.map((item, index) => <OpportunityCard key={item.id || item.youtubeVideoId} item={item} index={index} tracking={tracking} />)}
+      {configured && items.length === 0 && <div className="revenue-state"><h3>まだ候補がありません</h3><p>{tracking ? '6時間以上の間隔がある継続観測データを待っています。' : 'テーマのScore設定を保存して収集を実行してください。'}</p></div>}
+    </div>
+  </section>
+}
+
+export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, onSave }) {
   if (!state) return <main className="revenue-shell" aria-busy="true"><div className="revenue-state"><h2>Revenue Lab</h2><p>収益機会を読み込んでいます…</p></div></main>
   const eligible = state.queries.filter(query => query.enabled && !queryNeedsScores(query))
   const enabledQueries = state.queries.filter(query => query.enabled)
@@ -121,8 +173,8 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onSave }) 
   const scoreVersion = state.opportunities[0]?.scoreVersion || 'youtube-v1'
   return <main className="revenue-shell">
     <section className="revenue-hero">
-      <div><p className="revenue-kicker">YOUTUBE COMMERCE · PHASE 1</p><h2>今日検討すべきTOP3</h2><p>直近7日・日本語圏の動画を、再現可能な youtube-v1 で順位付けします。</p></div>
-      <div className="revenue-actions"><button onClick={onReload} disabled={busy}>再読込</button><button className="corp-primary" onClick={() => onRun(eligible)} disabled={busy || eligible.length === 0}>今すぐ収集</button></div>
+      <div><p className="revenue-kicker">YOUTUBE COMMERCE · PHASE 1</p><h2>今日検討すべき候補</h2><p>本日の発掘と、過去候補の実測成長を分けて確認します。</p></div>
+      <div className="revenue-actions"><button onClick={onReload} disabled={busy}>再読込</button><button onClick={onTrack} disabled={busy}>Tracking実行</button><button className="corp-primary" onClick={() => onRun(eligible)} disabled={busy || eligible.length === 0}>Discovery実行</button></div>
     </section>
     {error && <div className="revenue-alert" role="alert">{error}</div>}
     {!state.config.configured && <section className="revenue-state revenue-config"><h3>接続設定が必要です</h3><p>サーバー側の環境変数を設定してください。</p><code>{state.config.missing.join(', ')}</code></section>}
@@ -140,49 +192,8 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onSave }) 
         <div className="revenue-summary-wide"><dt>次回予定収集時刻</dt><dd>{nextCollectionLabel()}</dd></div>
       </dl>
     </section>
-    <section className="revenue-grid" aria-label="Opportunity TOP3">
-      {state.opportunities.map((item, index) => {
-        const reviewUrl = videoReviewUrl(item)
-        const velocity = velocityPresentation(item.velocityMode)
-        const reasons = opportunityReasons(item)
-        return <article className="revenue-opportunity" key={item.id || item.youtubeVideoId}>
-          <span className="revenue-rank">#{index + 1}</span>
-          {item.thumbnailUrl && <img src={item.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />}
-          <div><p className="revenue-channel">{item.channelTitle || 'チャンネル不明'}</p><h3>{item.title}</h3>
-            <dl className="revenue-review-metrics">
-              <div><dt>公開日時</dt><dd>{publishedLabel(item.publishedAt)}</dd></div>
-              <div><dt>再生数</dt><dd>{metricCount(item.viewCount)}</dd></div>
-              <div><dt>登録者数</dt><dd>{item.hiddenSubscriberCount ? '非公開' : metricCount(item.subscriberCount)}</dd></div>
-              <div><dt>登録者数に対する再生倍率</dt><dd>{item.channelRatio == null ? '—' : `${Number(item.channelRatio).toFixed(2)}倍`}</dd></div>
-              <div><dt>Views/hour</dt><dd>{Number.isFinite(Number(item.viewsVelocity)) ? Number(item.viewsVelocity).toFixed(6) : '—'}</dd></div>
-            </dl>
-            <div className="revenue-score"><strong>{scoreLabel(item.opportunityScore)}</strong><span>Opportunity<br />{scoreStrength(item.opportunityScore)}</span><b>{scoreLabel(item.breakoutScore)}</b><span>Breakout<br />{scoreStrength(item.breakoutScore)}</span></div>
-            <div className={`revenue-velocity is-${velocity.tone}`}><span>{velocity.label}</span><p>{velocity.description}</p></div>
-            {item.velocityMode === 'observed_delta' && item.previousViewCount != null && <dl className="revenue-observed-details">
-              <div><dt>前回再生数</dt><dd>{metricCount(item.previousViewCount)}</dd></div>
-              <div><dt>現在再生数</dt><dd>{metricCount(item.viewCount)}</dd></div>
-              <div><dt>増加再生数</dt><dd>+{metricCount(item.viewIncrease, '0')}</dd></div>
-              <div><dt>経過時間</dt><dd>{Number(item.velocityElapsedHours).toFixed(2)}時間</dd></div>
-              <div><dt>実測Views/hour</dt><dd>{Number(item.viewsVelocity).toFixed(6)}</dd></div>
-            </dl>}
-            <div className="revenue-reasons"><strong>なぜ上位なのか</strong><ul>{reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></div>
-            <p className="revenue-meta">母集団 {item.percentilePopulationSize}件 · {item.scoreVersion}</p>
-            <details className="revenue-score-details"><summary>詳細を見る</summary><dl>
-              <div><dt>再生速度 percentile</dt><dd>{scoreLabel(item.velocityPercentile)}</dd></div>
-              <div><dt>チャンネル倍率 percentile</dt><dd>{scoreLabel(item.channelRatioPercentile)}</dd></div>
-              <div><dt>engagement percentile</dt><dd>{scoreLabel(item.engagementPercentile)}</dd></div>
-              <div><dt>channel_ratio</dt><dd>{item.channelRatio == null ? '—' : Number(item.channelRatio).toFixed(6)}</dd></div>
-              <div><dt>engagement_rate</dt><dd>{scoreLabel(item.engagementRate)}</dd></div>
-              <div><dt>freshness</dt><dd>{scoreLabel(item.freshness)}</dd></div>
-              <div><dt>Buyer Intent</dt><dd>{metricCount(item.buyerIntent)}</dd></div>
-              <div><dt>Commerce Fit</dt><dd>{metricCount(item.commerceFit)}</dd></div>
-            </dl></details>
-            {reviewUrl && <a className="revenue-youtube-link" href={reviewUrl} target="_blank" rel="noopener noreferrer">YouTubeで見る</a>}
-          </div>
-        </article>
-      })}
-      {state.config.configured && state.opportunities.length === 0 && <div className="revenue-state"><h3>まだ候補がありません</h3><p>テーマのScore設定を保存して収集を実行してください。</p></div>}
-    </section>
+    <OpportunitySection title="本日の発掘TOP3" description="本日のsearch.listで発掘した候補です。過去動画が再登場する場合もあります。" items={state.opportunities || []} configured={state.config.configured} />
+    <OpportunitySection title="継続観測・急伸TOP3" description="発見後7日間、6時間以上の間隔で実測した成長候補です。" items={state.trackingOpportunities || []} tracking configured={state.config.configured} />
     <details className="revenue-score-guide"><summary>スコアについて</summary><dl>
       <div><dt>Breakout Score</dt><dd>再生速度、チャンネル規模比、反応率、鮮度から「通常より勢いがあるか」を示します。</dd></div>
       <div><dt>Opportunity Score</dt><dd>Breakout Scoreを70%、Buyer IntentとCommerce Fitを各15%で補正した企画候補順位です。</dd></div>
@@ -215,5 +226,5 @@ export default function RevenueLabDashboard() {
     catch (failure) { setError(failure.message) }
     finally { setBusy(false) }
   }
-  return <RevenueLabView state={state} error={error} busy={busy} onReload={reload} onRun={queries => perform(() => enqueueEnabledRevenueQueries(queries))} onSave={(id, values) => perform(() => updateRevenueQuery(id, values))} />
+  return <RevenueLabView state={state} error={error} busy={busy} onReload={reload} onRun={queries => perform(() => enqueueEnabledRevenueQueries(queries))} onTrack={() => perform(enqueueRevenueTracking)} onSave={(id, values) => perform(() => updateRevenueQuery(id, values))} />
 }

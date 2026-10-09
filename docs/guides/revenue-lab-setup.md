@@ -17,20 +17,24 @@ Do not put these values in source files, browser storage, `config/revenue-lab.js
 ## Supabase
 
 1. Apply `supabase/migrations/20261007210000_revenue_lab_phase1.sql` in a development project first.
-2. Apply `supabase/seed/revenue_lab_phase1.sql`. It creates three disabled starter themes with unset human Scores; edit and enable them in the dashboard.
-3. Add `revenue_lab` to the API exposed schemas in Supabase project settings.
-4. Enable the `pg_cron` extension before applying the migration if daily enqueueing is desired. The migration installs the 05:15 JST schedule only when the extension is available.
-5. Verify anon/authenticated roles cannot access the schema; the local server uses the service role.
-6. Confirm only the intended themes are enabled; the database rejects more than three enabled themes.
+2. Apply `supabase/migrations/20261009100000_revenue_lab_tracking_v1.sql`. It backfills existing snapshots as Discovery and creates Tracking targets from successful historical collection runs.
+3. Apply `supabase/seed/revenue_lab_phase1.sql`. It creates three disabled starter themes with unset human Scores; edit and enable them in the dashboard.
+4. Add `revenue_lab` to the API exposed schemas in Supabase project settings.
+5. Enable the `pg_cron` extension before applying the Phase 1 migration if daily enqueueing is desired. The existing 05:15 JST cron calls the replaced enqueue function and therefore adds both Discovery and Tracking jobs.
+6. Verify anon/authenticated roles cannot access the schema; the local server uses the service role.
+7. Confirm only the intended themes are enabled; the database rejects more than three enabled themes.
 
-The matching rollback is `supabase/rollback/20261007210000_revenue_lab_phase1_down.sql`. Do not run it after production snapshots are needed without exporting the schema first.
+Tracking rollback is `supabase/rollback/20261009100000_revenue_lab_tracking_v1_down.sql`. Apply it before the Phase 1 rollback. Do not run either rollback after production snapshots are needed without exporting the schema first.
 
 ## Google Cloud
 
 1. Enable YouTube Data API v3 for the selected Google Cloud project.
 2. Create an API key restricted to YouTube Data API v3.
 3. Restrict the key by IP where the worker environment permits it.
-4. Review quota usage. One query run uses one `search.list`, one `videos.list`, and up to one `channels.list` request; `search.list` carries the dominant quota cost.
+4. Review quota usage. One Discovery query uses one `search.list`, one `videos.list`, and up to one `channels.list`. Tracking uses no search call and batches saved video and channel IDs in groups of at most 50.
+   - Discovery: approximately 102 quota units per enabled theme/day (100 + 1 + 1).
+   - Tracking: 1 unit per `videos.list` batch plus 1 unit per `channels.list` batch. With one theme discovering 25 unique videos every day, the seven-day window is at most about 150 prior-day targets, or approximately 6 units/day in the worst case where every video has a different channel.
+   - Combined initial ceiling: approximately 108 units/day for one theme, or 324 units/day for three themes. Duplicate videos/channels reduce Tracking requests; unavailable videos do not add `search.list` calls.
 5. Place the key only in the worker/server process environment.
 
 ## Run
@@ -41,7 +45,7 @@ npm run revenue:worker
 
 AI Office starts the worker automatically when all three required environment variables are available. `npm run revenue:worker` is also available for a dedicated process. A queued job remains in Supabase while the PC is off and is processed after the worker next starts.
 
-To enqueue manually, open Revenue Lab and choose 「今すぐ収集」. The HTTP request creates a queue row; it does not wait for YouTube collection.
+To enqueue manually, open Revenue Lab and choose `Discovery実行` or `Tracking実行`. Each HTTP request creates queue rows and does not wait for YouTube collection.
 
 ## Operational Checks
 
@@ -50,6 +54,9 @@ To enqueue manually, open Revenue Lab and choose 「今すぐ収集」. The HTTP
 - A worker interruption leaves a lease that becomes claimable after expiry.
 - A query missing buyer intent or commerce fit displays `設定不足` and produces no opportunity rows.
 - Stored opportunity rows contain `score_version = youtube-v1` and complete `score_parameters`.
+- Discovery snapshots have `capture_kind = discovery`; Tracking snapshots have `capture_kind = tracking` and a `capture_job_id`.
+- A Tracking interval below six hours is `waiting_interval` and does not create a snapshot or Score.
+- Tracking results use `score_version = youtube-tracking-v1`; growth ratio and percent are display-only.
 
 ## Official References
 

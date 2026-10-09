@@ -71,4 +71,24 @@ describe('Revenue Lab YouTube client', () => {
   it('requires a server-side API key at construction', () => {
     expect(() => createYouTubeClient({ apiKey: '' })).toThrow(/YOUTUBE_API_KEY/)
   })
+
+  it('tracks saved IDs in batches without search.list and reports unavailable videos', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async input => {
+      const url = new URL(input)
+      calls.push(url)
+      if (url.pathname.endsWith('/videos')) return response({ items: url.searchParams.get('id').split(',')
+        .filter(id => id !== 'missing')
+        .map(id => ({ id, snippet: { title: id, channelId: `c-${id}`, publishedAt: '2026-10-01T00:00:00Z' }, statistics: { viewCount: '100' } })) })
+      return response({ items: [] })
+    })
+    const client = createYouTubeClient({ apiKey: 'test-key', fetchImpl })
+    const ids = Array.from({ length: 50 }, (_, index) => `v${index}`).concat('missing')
+    const tracked = await client.track(ids, '2026-10-09T00:00:00Z')
+    expect(calls.filter(url => url.pathname.endsWith('/search'))).toHaveLength(0)
+    expect(calls.filter(url => url.pathname.endsWith('/videos'))).toHaveLength(2)
+    expect(calls.every(url => (url.searchParams.get('id') || '').split(',').length <= 50)).toBe(true)
+    expect(tracked.missingVideoIds).toEqual(['missing'])
+    expect(tracked.videos).toHaveLength(50)
+  })
 })

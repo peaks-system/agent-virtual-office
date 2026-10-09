@@ -23,6 +23,8 @@ function queryFromRow(row) {
   const source = Array.isArray(row.sources) ? row.sources[0] : row.sources
   return {
     id: row.id,
+    sourceItemId: row.source_item_id,
+    trackingRunId: row.tracking_run_id,
     sourceId: row.source_id,
     projectId: source?.project_id ?? row.project_id ?? null,
     label: row.label,
@@ -140,6 +142,11 @@ function createSupabaseStore({
     return rpc('enqueue_youtube_job', { p_source_query_id: sourceQueryId, p_requested_day: requestedDay })
   }
 
+  async function enqueueTracking(requestedDay) {
+    const createdCount = await rpc('enqueue_tracking_jobs', { p_day: requestedDay })
+    return { createdCount: Number(createdCount || 0) }
+  }
+
   const inFilter = values => encodeURIComponent([...new Set(values)].map(value => `"${String(value).replace(/["\\]/g, '')}"`).join(','))
 
   async function enrichOpportunityReview(opportunities) {
@@ -196,14 +203,43 @@ function createSupabaseStore({
 
   async function dashboard(limit = 3) {
     const data = await rpc('dashboard_snapshot', { p_limit: limit })
-    const [opportunities, runs] = await Promise.all([
+    const [opportunities, runs, trackingRuns] = await Promise.all([
       enrichOpportunityReview((data?.opportunities || []).map(opportunityFromRow)),
       request('collection_runs?select=id,source_query_id,status,captured_at,requested_count,received_count,scored_count,excluded_reason,error_code,completed_at&order=captured_at.desc&limit=1'),
+      request('tracking_runs?status=eq.succeeded&select=*&order=captured_at.desc&limit=20'),
     ])
     const latestRun = runs?.[0]
+    const latestTrackingByQuery = new Map()
+    for (const run of trackingRuns || []) {
+      if (!latestTrackingByQuery.has(run.source_query_id)) latestTrackingByQuery.set(run.source_query_id, run)
+    }
+    const latestTrackingRuns = [...latestTrackingByQuery.values()]
+    const trackingRunIds = latestTrackingRuns.map(run => run.id)
+    const trackingRows = trackingRunIds.length ? await request(
+      `tracking_opportunities?tracking_run_id=in.(${encodeURIComponent(trackingRunIds.join(','))})&select=*&order=opportunity_score_raw.desc,breakout_score_raw.desc,published_at.desc,youtube_video_id.asc&limit=${Math.max(1, Math.min(limit, 3))}`,
+    ) : []
+    let trackingOpportunities = await enrichOpportunityReview((trackingRows || []).map(opportunityFromRow))
+    const trackingItemIds = trackingOpportunities.map(item => item.sourceItemId).filter(Boolean)
+    const trackingDetails = trackingItemIds.length ? await request(
+      `tracking_run_items?tracking_run_id=in.(${encodeURIComponent(trackingRunIds.join(','))})&source_item_id=in.(${encodeURIComponent(trackingItemIds.join(','))})&select=tracking_run_id,source_item_id,previous_view_count,current_view_count,view_delta,elapsed_hours,views_velocity,growth_ratio,growth_percent,status`,
+    ) : []
+    const detailByRunAndItem = new Map((trackingDetails || []).map(row => [`${row.tracking_run_id}:${row.source_item_id}`, row]))
+    trackingOpportunities = trackingOpportunities.map(item => {
+      const detail = detailByRunAndItem.get(`${item.trackingRunId}:${item.sourceItemId}`)
+      return detail ? {
+        ...item,
+        previousViewCount: detail.previous_view_count == null ? null : Number(detail.previous_view_count),
+        viewCount: detail.current_view_count == null ? item.viewCount : Number(detail.current_view_count),
+        viewIncrease: detail.view_delta == null ? null : Number(detail.view_delta),
+        velocityElapsedHours: detail.elapsed_hours == null ? null : Number(detail.elapsed_hours),
+        growthRatio: detail.growth_ratio == null ? null : Number(detail.growth_ratio),
+        growthPercent: detail.growth_percent == null ? null : Number(detail.growth_percent),
+      } : item
+    })
     return {
       queries: (data?.queries || []).map(queryFromRow),
       opportunities,
+      trackingOpportunities,
       latestJob: data?.latest_job ? {
         id: data.latest_job.id,
         jobType: data.latest_job.job_type,
@@ -226,6 +262,17 @@ function createSupabaseStore({
         excludedReason: latestRun.excluded_reason,
         errorCode: latestRun.error_code,
         completedAt: latestRun.completed_at,
+      } : null,
+      latestTrackingRun: latestTrackingRuns[0] ? {
+        id: latestTrackingRuns[0].id,
+        sourceQueryId: latestTrackingRuns[0].source_query_id,
+        status: latestTrackingRuns[0].status,
+        capturedAt: latestTrackingRuns[0].captured_at,
+        targetCount: latestTrackingRuns[0].target_count,
+        receivedCount: latestTrackingRuns[0].received_count,
+        scoredCount: latestTrackingRuns[0].scored_count,
+        waitingCount: latestTrackingRuns[0].waiting_count,
+        missingCount: latestTrackingRuns[0].missing_count,
       } : null,
     }
   }
@@ -268,7 +315,7 @@ function createSupabaseStore({
     const items = await request(`source_items?source_id=eq.${encodeURIComponent(sourceId)}&item_type=eq.video&external_id=in.(${encodeURIComponent(encodedIds)})&select=id,external_id`)
     if (!items?.length) return new Map()
     const itemIds = items.map(item => item.id).join(',')
-    const snapshots = await request(`source_item_snapshots?source_item_id=in.(${encodeURIComponent(itemIds)})&select=source_item_id,captured_at,view_count&order=captured_at.desc`)
+    const snapshots = await request(`source_item_snapshots?source_item_id=in.(${encodeURIComponent(itemIds)})&capture_kind=eq.discovery&select=source_item_id,captured_at,view_count&order=captured_at.desc`)
     const externalByItem = new Map(items.map(item => [item.id, item.external_id]))
     const result = new Map()
     for (const snapshot of snapshots || []) {
@@ -302,7 +349,7 @@ function createSupabaseStore({
     return new Map(rows.map(row => [`${row.item_type}:${row.external_id}`, row.id]))
   }
 
-  async function persistCollection({ runId, query, videos, opportunities, excludedReason }) {
+  async function persistCollection({ runId, jobId, query, videos, opportunities, excludedReason }) {
     const itemIds = await upsertItems(query.sourceId, videos)
     const snapshotRows = []
     const channelSeen = new Set()
@@ -315,6 +362,8 @@ function createSupabaseStore({
         comment_count: video.commentCount ?? null,
         subscriber_count: null,
         hidden_subscriber_count: false,
+        capture_kind: 'discovery',
+        capture_job_id: jobId,
         metrics: { search_position: video.searchPosition },
       })
       if (video.channelId && !channelSeen.has(video.channelId)) {
@@ -327,12 +376,14 @@ function createSupabaseStore({
           comment_count: null,
           subscriber_count: video.subscriberCount ?? null,
           hidden_subscriber_count: video.hiddenSubscriberCount === true,
+          capture_kind: 'discovery',
+          capture_job_id: jobId,
           metrics: {},
         })
       }
     }
-    const snapshots = snapshotRows.length ? await request('source_item_snapshots?select=id,source_item_id', {
-      method: 'POST', body: snapshotRows, prefer: 'return=representation',
+    const snapshots = snapshotRows.length ? await request('source_item_snapshots?on_conflict=source_item_id,capture_job_id&select=id,source_item_id', {
+      method: 'POST', body: snapshotRows, prefer: 'resolution=merge-duplicates,return=representation',
     }) : []
     const snapshotByItem = new Map(snapshots.map(row => [row.source_item_id, row.id]))
     const runItems = videos.map(video => {
@@ -340,6 +391,12 @@ function createSupabaseStore({
       return { collection_run_id: runId, source_item_id: itemId, snapshot_id: snapshotByItem.get(itemId), search_position: video.searchPosition }
     })
     if (runItems.length) await request('collection_run_items', { method: 'POST', body: runItems, prefer: 'return=minimal' })
+    if (runItems.length) await rpc('upsert_tracking_targets', {
+      p_source_query_id: query.id,
+      p_source_item_ids: runItems.map(item => item.source_item_id),
+      p_discovered_at: videos[0]?.capturedAt,
+      p_collection_run_id: runId,
+    })
     if (opportunities.length) {
       await request('opportunities', { method: 'POST', body: opportunities.map((item, index) => ({
         collection_run_id: runId,
@@ -386,7 +443,120 @@ function createSupabaseStore({
     })
   }
 
-  return { claimNext, dashboard, enqueueQuery, failRun, finishJob, getQuery, listQueries, persistCollection, previousVideoSnapshots, startRun, updateQuery }
+  async function listTrackingCandidates(sourceId, requestedDay, capturedAt) {
+    const rows = await rpc('tracking_candidates', {
+      p_source_id: sourceId, p_requested_day: requestedDay, p_captured_at: capturedAt,
+    })
+    return (rows || []).map(row => ({
+      targetId: row.target_id,
+      sourceQueryId: row.source_query_id,
+      sourceItemId: row.source_item_id,
+      youtubeVideoId: row.youtube_video_id,
+      title: row.title,
+      channelId: row.channel_id,
+      channelTitle: row.channel_title,
+      publishedAt: row.published_at,
+      thumbnailUrl: row.thumbnail_url,
+      buyerIntent: row.buyer_intent,
+      commerceFit: row.commerce_fit,
+      previousSnapshot: row.previous_snapshot_id ? {
+        id: row.previous_snapshot_id,
+        capturedAt: row.previous_captured_at,
+        viewCount: row.previous_view_count == null ? null : Number(row.previous_view_count),
+      } : null,
+    }))
+  }
+
+  async function startTrackingRun(queryId, jobId, requestedDay, capturedAt, targetCount) {
+    const rows = await request('tracking_runs?on_conflict=job_id,source_query_id&select=id', {
+      method: 'POST',
+      body: { source_query_id: queryId, job_id: jobId, requested_day: requestedDay, captured_at: capturedAt, target_count: targetCount, status: 'running' },
+      prefer: 'resolution=merge-duplicates,return=representation',
+    })
+    return rows[0].id
+  }
+
+  async function persistTrackingSnapshots({ sourceId, jobId, videos }) {
+    if (!videos.length) return new Map()
+    const itemIds = await upsertItems(sourceId, videos)
+    const rows = []
+    const channels = new Set()
+    for (const video of videos) {
+      rows.push({
+        source_item_id: itemIds.get(`video:${video.youtubeVideoId}`), captured_at: video.capturedAt,
+        view_count: video.viewCount ?? null, like_count: video.likeCount ?? null, comment_count: video.commentCount ?? null,
+        subscriber_count: null, hidden_subscriber_count: false, capture_kind: 'tracking', capture_job_id: jobId, metrics: {},
+      })
+      if (video.channelId && !channels.has(video.channelId)) {
+        channels.add(video.channelId)
+        rows.push({
+          source_item_id: itemIds.get(`channel:${video.channelId}`), captured_at: video.capturedAt,
+          view_count: null, like_count: null, comment_count: null, subscriber_count: video.subscriberCount ?? null,
+          hidden_subscriber_count: video.hiddenSubscriberCount === true, capture_kind: 'tracking', capture_job_id: jobId, metrics: {},
+        })
+      }
+    }
+    const snapshots = await request('source_item_snapshots?on_conflict=source_item_id,capture_job_id&select=id,source_item_id', {
+      method: 'POST', body: rows, prefer: 'resolution=merge-duplicates,return=representation',
+    })
+    return new Map(snapshots.map(row => [row.source_item_id, row.id]))
+  }
+
+  async function persistTrackingRun({ runId, queryId, records, opportunities }) {
+    if (records.length) await request('tracking_run_items?on_conflict=tracking_run_id,source_item_id', {
+      method: 'POST', body: records.map(record => ({
+        tracking_run_id: runId, tracking_target_id: record.targetId, source_item_id: record.sourceItemId,
+        previous_snapshot_id: record.previousSnapshotId, current_snapshot_id: record.currentSnapshotId,
+        status: record.status, previous_view_count: record.previousViewCount, current_view_count: record.currentViewCount,
+        view_delta: record.viewDelta, elapsed_hours: record.elapsedHours, views_velocity: record.viewsVelocity,
+        growth_ratio: record.growthRatio, growth_percent: record.growthPercent,
+      })), prefer: 'resolution=merge-duplicates,return=minimal',
+    })
+    if (opportunities.length) await request('tracking_opportunities?on_conflict=tracking_run_id,source_item_id,score_version', {
+      method: 'POST', body: opportunities.map((item, index) => ({
+        tracking_run_id: runId, source_query_id: queryId, source_item_id: item.sourceItemId,
+        youtube_video_id: item.youtubeVideoId, title: item.title, channel_id: item.channelId,
+        channel_title: item.channelTitle, thumbnail_url: item.thumbnailUrl, published_at: item.publishedAt,
+        score_version: item.scoreVersion, velocity_mode: item.velocityMode, views_velocity: item.viewsVelocity,
+        channel_ratio: item.channelRatio, engagement_rate: item.engagementRate, freshness: item.freshness,
+        velocity_percentile: item.velocityPercentile, channel_ratio_percentile: item.channelRatioPercentile,
+        engagement_percentile: item.engagementPercentile, buyer_intent: item.buyerIntent, commerce_fit: item.commerceFit,
+        breakout_score: item.breakoutScore, opportunity_score: item.opportunityScore,
+        breakout_score_raw: item._breakoutRaw, opportunity_score_raw: item._opportunityRaw,
+        percentile_population_size: item.percentilePopulationSize, score_parameters: item.scoreParameters, rank_position: index + 1,
+      })), prefer: 'resolution=merge-duplicates,return=minimal',
+    })
+    const counts = {
+      received_count: records.filter(record => record.status !== 'missing').length,
+      scored_count: opportunities.length,
+      waiting_count: records.filter(record => record.status === 'waiting_interval').length,
+      missing_count: records.filter(record => record.status === 'missing').length,
+    }
+    await request(`tracking_runs?id=eq.${encodeURIComponent(runId)}`, {
+      method: 'PATCH', body: { ...counts, status: 'succeeded', completed_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function failTrackingRuns(runIds, error) {
+    if (!runIds.length) return
+    await request(`tracking_runs?id=in.(${encodeURIComponent(runIds.join(','))})`, {
+      method: 'PATCH',
+      body: { status: 'failed', error_code: String(error?.code || 'TRACKING_FAILED').slice(0, 80), completed_at: new Date().toISOString() },
+      prefer: 'return=minimal',
+    })
+  }
+
+  const markTrackingMissing = targetIds => targetIds.length
+    ? rpc('mark_tracking_targets_missing', { p_target_ids: targetIds }) : Promise.resolve(0)
+  const markTrackingSeen = (targetIds, seenAt) => targetIds.length
+    ? rpc('mark_tracking_targets_seen', { p_target_ids: targetIds, p_seen_at: seenAt }) : Promise.resolve(0)
+
+  return {
+    claimNext, dashboard, enqueueQuery, enqueueTracking, failRun, finishJob, getQuery,
+    listQueries, listTrackingCandidates, markTrackingMissing, markTrackingSeen, failTrackingRuns,
+    persistCollection, persistTrackingRun, persistTrackingSnapshots, previousVideoSnapshots,
+    startRun, startTrackingRun, updateQuery,
+  }
 }
 
 module.exports = { PROFILE, RevenueStoreError, createSupabaseStore, opportunityFromRow, queryFromRow }

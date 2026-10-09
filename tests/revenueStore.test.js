@@ -33,6 +33,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
     })
     await store.persistCollection({
       runId: 'run-1',
+      jobId: 'job-1',
       query: { id: 'query-1', sourceId: 'source-1', maxResults: 25 },
       videos: [{
         youtubeVideoId: 'video-1', title: '動画', channelId: 'channel-1', channelTitle: 'チャンネル',
@@ -47,7 +48,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
     const snapshotCall = calls.find(call => call.url.includes('/source_item_snapshots?'))
     expect(snapshotCall.body).toHaveLength(2)
     const expectedKeys = [
-      'captured_at', 'comment_count', 'hidden_subscriber_count', 'like_count', 'metrics',
+      'capture_job_id', 'capture_kind', 'captured_at', 'comment_count', 'hidden_subscriber_count', 'like_count', 'metrics',
       'source_item_id', 'subscriber_count', 'view_count',
     ]
     for (const row of snapshotCall.body) expect(Object.keys(row).sort()).toEqual(expectedKeys)
@@ -105,6 +106,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
         id: 'run-1', source_query_id: 'query-1', status: 'succeeded', captured_at: '2026-10-08T00:00:00Z',
         requested_count: 25, received_count: 25, scored_count: 24, completed_at: '2026-10-08T00:01:00Z',
       }])
+      if (url.includes('/tracking_runs?')) return response([])
       throw new Error(`Unexpected request: ${url} ${options?.method}`)
     })
     const store = createSupabaseStore({
@@ -123,6 +125,18 @@ describe('Revenue Lab Supabase store snapshots', () => {
     expect(dashboard.latestRun).toMatchObject({
       id: 'run-1', sourceQueryId: 'query-1', status: 'succeeded', receivedCount: 25, scoredCount: 24,
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(5)
+    expect(fetchImpl).toHaveBeenCalledTimes(6)
+  })
+
+  it('restricts Discovery previous snapshots to discovery capture kind', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async url => {
+      calls.push(url)
+      if (url.includes('/source_items?')) return response([{ id: 'video-item', external_id: 'video-1' }])
+      return response([{ source_item_id: 'video-item', captured_at: '2026-10-08T00:00:00Z', view_count: 100 }])
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await store.previousVideoSnapshots('source-1', ['video-1'])
+    expect(calls.find(url => url.includes('/source_item_snapshots?'))).toContain('capture_kind=eq.discovery')
   })
 })

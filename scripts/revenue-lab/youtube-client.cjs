@@ -113,7 +113,52 @@ function createYouTubeClient({ apiKey = process.env.YOUTUBE_API_KEY, fetchImpl =
       .sort((a, b) => a.searchPosition - b.searchPosition)
   }
 
-  return { collect }
+  async function track(videoIds, capturedAt) {
+    if (!Array.isArray(videoIds) || videoIds.length > 600 || videoIds.some(id => typeof id !== 'string' || !id || id.length > 128)) {
+      throw new TypeError('videoIds must be an array of up to 600 YouTube video IDs')
+    }
+    const capturedTime = Date.parse(capturedAt)
+    if (!Number.isFinite(capturedTime)) throw new TypeError('capturedAt must be an ISO date')
+    const uniqueIds = [...new Set(videoIds)]
+    const videoItems = []
+    for (let offset = 0; offset < uniqueIds.length; offset += 50) {
+      videoItems.push(...await request('videos', {
+        part: 'snippet,statistics', id: uniqueIds.slice(offset, offset + 50).join(','),
+      }, 'tracking videos'))
+    }
+    const channelIds = [...new Set(videoItems.map(item => item?.snippet?.channelId).filter(Boolean))]
+    const channelItems = []
+    for (let offset = 0; offset < channelIds.length; offset += 50) {
+      channelItems.push(...await request('channels', {
+        part: 'snippet,statistics', id: channelIds.slice(offset, offset + 50).join(','),
+      }, 'tracking channels'))
+    }
+    const channelById = new Map(channelItems.map(item => [item.id, item]))
+    const found = new Set(videoItems.map(item => item?.id).filter(Boolean))
+    const videos = videoItems.map(item => {
+      const snippet = item.snippet || {}
+      const statistics = item.statistics || {}
+      const channel = channelById.get(snippet.channelId)
+      const hiddenSubscribers = channel?.statistics?.hiddenSubscriberCount === true
+      return {
+        youtubeVideoId: item.id,
+        title: String(snippet.title || '').slice(0, 500),
+        channelId: snippet.channelId || null,
+        channelTitle: String(snippet.channelTitle || '').slice(0, 300),
+        publishedAt: snippet.publishedAt || null,
+        thumbnailUrl: snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || null,
+        viewCount: count(statistics.viewCount),
+        likeCount: count(statistics.likeCount),
+        commentCount: count(statistics.commentCount),
+        subscriberCount: hiddenSubscribers ? null : count(channel?.statistics?.subscriberCount),
+        hiddenSubscriberCount: hiddenSubscribers,
+        capturedAt: new Date(capturedTime).toISOString(),
+      }
+    })
+    return { videos, missingVideoIds: uniqueIds.filter(id => !found.has(id)) }
+  }
+
+  return { collect, track }
 }
 
 module.exports = { API_ROOT, YouTubeProviderError, count, createYouTubeClient, validateCollection }

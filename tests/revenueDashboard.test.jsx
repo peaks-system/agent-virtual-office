@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { RevenueLabView, nextCollectionLabel, opportunityReasons, queryNeedsScores, scoreLabel, scoreStrength, velocityPresentation, videoReviewUrl } from '../src/components/RevenueLabDashboard'
 
-const handlers = { onReload: vi.fn(), onRun: vi.fn(), onSave: vi.fn() }
+const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onSave: vi.fn() }
 
 describe('Revenue Lab dashboard', () => {
   it('formats saved scores and detects incomplete human inputs', () => {
@@ -112,6 +112,25 @@ describe('Revenue Lab dashboard', () => {
     const query = { id: 'q', label: 'Theme', queryText: 'query', buyerIntent: null, commerceFit: null, enabled: true }
     const markup = renderToStaticMarkup(<RevenueLabView state={{ config: { configured: true, missing: [] }, queries: [query], opportunities: [], latestJob: null }} {...handlers} />)
     expect(markup).toContain('ランキング対象外')
-    expect(markup).toMatch(/disabled=""[^>]*>今すぐ収集/)
+    expect(markup).toMatch(/disabled=""[^>]*>Discovery実行/)
+  })
+
+  it('separates daily discovery from observed tracking without mixing rankings', () => {
+    const tracking = {
+      id: 'tracking-1', youtubeVideoId: 'tracked', title: 'Tracked video', channelTitle: 'Track channel',
+      publishedAt: '2026-10-07T00:00:00Z', viewCount: 1500, previousViewCount: 1000,
+      viewIncrease: 500, velocityElapsedHours: 24, viewsVelocity: 20.833333,
+      growthRatio: 1.5, growthPercent: 50, subscriberCount: 500, channelRatio: 3,
+      opportunityScore: 80, breakoutScore: 75, velocityMode: 'observed_delta',
+      scoreVersion: 'youtube-tracking-v1', percentilePopulationSize: 10,
+    }
+    const markup = renderToStaticMarkup(<RevenueLabView state={{
+      config: { configured: true, missing: [] }, queries: [], opportunities: [], trackingOpportunities: [tracking], latestJob: null,
+    }} {...handlers} />)
+    expect(markup).toContain('本日の発掘TOP3')
+    expect(markup).toContain('継続観測・急伸TOP3')
+    expect(markup).toContain('youtube-tracking-v1')
+    expect(markup).toContain('1.500倍（+50.00%）')
+    expect(markup).toContain('実測')
   })
 })

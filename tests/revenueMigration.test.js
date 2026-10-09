@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 
 const migration = readFileSync('supabase/migrations/20261007210000_revenue_lab_phase1.sql', 'utf8')
 const rollback = readFileSync('supabase/rollback/20261007210000_revenue_lab_phase1_down.sql', 'utf8')
+const trackingMigration = readFileSync('supabase/migrations/20261009100000_revenue_lab_tracking_v1.sql', 'utf8')
+const trackingRollback = readFileSync('supabase/rollback/20261009100000_revenue_lab_tracking_v1_down.sql', 'utf8')
 
 describe('Revenue Lab Supabase migration', () => {
   it('creates the isolated schema and all Phase 1 entities', () => {
@@ -11,6 +13,22 @@ describe('Revenue Lab Supabase migration', () => {
       'projects', 'sources', 'source_queries', 'source_items', 'jobs', 'collection_runs',
       'source_item_snapshots', 'collection_run_items', 'opportunities',
     ]) expect(migration).toContain(`create table revenue_lab.${table}`)
+  })
+
+  it('adds isolated Tracking v1 entities and snapshot provenance without changing youtube-v1', () => {
+    for (const table of ['tracking_targets', 'tracking_runs', 'tracking_run_items', 'tracking_opportunities']) {
+      expect(trackingMigration).toContain(`create table revenue_lab.${table}`)
+    }
+    expect(trackingMigration).toContain("capture_kind in ('discovery', 'tracking')")
+    expect(trackingMigration).toContain('capture_job_id uuid')
+    expect(trackingMigration).toContain("score_version = 'youtube-tracking-v1'")
+    expect(trackingMigration).toContain("job_type in ('youtube.collect', 'youtube.track')")
+    expect(trackingMigration).toContain("snap.capture_kind = 'tracking'")
+    expect(trackingMigration).toContain("snap.capture_kind = 'discovery'")
+    expect(trackingMigration).toContain("interval '7 days'")
+    expect(trackingMigration).toContain("then 'retired'")
+    expect(trackingRollback).toContain('drop table if exists revenue_lab.tracking_targets')
+    expect(migration).toContain("check (score_version = 'youtube-v1')")
   })
 
   it('enforces query, score version, and human-score boundaries in the database', () => {

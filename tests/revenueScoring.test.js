@@ -10,6 +10,7 @@ const {
   percentileRanks,
   roundForStorage,
   scoreYouTubePopulation,
+  scoreYouTubeTrackingPopulation,
 } = require('../scripts/revenue-lab/scoring.cjs')
 
 const capturedAt = '2026-10-07T12:00:00.000Z'
@@ -133,5 +134,24 @@ describe('Revenue Lab youtube-v1 scoring', () => {
       { youtubeVideoId: 'x', publishedAt: '2026-10-07T12:00:00Z', _opportunityRaw: 80.002, _breakoutRaw: 1 },
     ]
     expect(rows.sort(compareOpportunities).map(row => row.youtubeVideoId)).toEqual(['x', 'z', 'a', 'b'])
+  })
+
+  it('uses a separate tracking version while preserving v1 weights and excluding growth from scoring', () => {
+    const input = video({ previousSnapshot: { viewCount: 500, capturedAt: hoursBefore(10) } })
+    const discovery = scoreYouTubePopulation([input], { buyerIntent: 90, commerceFit: 95 })
+    const tracking = scoreYouTubeTrackingPopulation([input], { buyerIntent: 90, commerceFit: 95 })
+    expect(discovery.opportunities[0].scoreVersion).toBe('youtube-v1')
+    expect(tracking.opportunities[0]).toMatchObject({
+      scoreVersion: 'youtube-tracking-v1', velocityMode: 'observed_delta',
+      breakoutScore: discovery.opportunities[0].breakoutScore,
+      opportunityScore: discovery.opportunities[0].opportunityScore,
+    })
+    expect(tracking.opportunities[0].scoreParameters.tracking.growth_ratio_and_percent).toBe('display_only_not_scored')
+  })
+
+  it('never admits a lifetime estimate into the tracking population', () => {
+    const tracking = scoreYouTubeTrackingPopulation([video()], { buyerIntent: 90, commerceFit: 95 })
+    expect(tracking.scoreVersion).toBe('youtube-tracking-v1')
+    expect(tracking.opportunities).toEqual([])
   })
 })

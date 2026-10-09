@@ -64,6 +64,14 @@ describe('Revenue Lab API', () => {
     expect((await response.json()).data.status).toBe('pending')
   })
 
+  it('enqueues a manual Tracking job independently from Discovery', async () => {
+    const store = { enqueueTracking: vi.fn(async () => ({ createdCount: 1 })) }
+    const origin = await fixture({ store })
+    const response = await fetch(`${origin}/api/revenue/tracking/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })
+    expect(response.status).toBe(201)
+    expect(store.enqueueTracking).toHaveBeenCalledWith('2026-10-08')
+  })
+
   it('uses a consistent safe error envelope for malformed JSON and service failures', async () => {
     const store = { dashboard: vi.fn(async () => { throw Object.assign(new Error('db secret details'), { code: 'SUPABASE_HTTP_ERROR' }) }) }
     const origin = await fixture({ store })

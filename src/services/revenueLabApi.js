@@ -41,4 +41,8 @@ export async function enqueueEnabledRevenueQueries(queries) {
   return results
 }
 
+export function enqueueRevenueTracking() {
+  return request('/tracking/jobs', { method: 'POST', body: JSON.stringify({}) })
+}
+
 export { request as revenueRequest }

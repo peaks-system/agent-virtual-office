@@ -80,7 +80,7 @@ function createRevenueApi({
     const pathname = new URL(req.url, 'http://local').pathname.replace(/^\/api\/revenue(?=\/|$)/, '') || '/'
     try {
       if (req.method === 'GET' && pathname === '/dashboard') {
-        if (!config.configured) return reply(res, 200, { data: { config, queries: [], opportunities: [], latestJob: null } })
+        if (!config.configured) return reply(res, 200, { data: { config, queries: [], opportunities: [], trackingOpportunities: [], latestJob: null, latestRun: null, latestTrackingRun: null } })
         const limitValue = Number(new URL(req.url, 'http://local').searchParams.get('limit') || 3)
         const limit = Number.isInteger(limitValue) ? Math.max(1, Math.min(limitValue, 3)) : 3
         return reply(res, 200, { data: { config, ...(await getStore().dashboard(limit)) } })
@@ -105,6 +105,12 @@ function createRevenueApi({
         if (!UUID.test(input.sourceQueryId || '')) return fail(res, 400, 'VALIDATION_ERROR', 'sourceQueryIdが正しくありません。')
         const result = await getStore().enqueueQuery(input.sourceQueryId, today())
         return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
+      if (req.method === 'POST' && pathname === '/tracking/jobs') {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!config.configured) return fail(res, 503, 'REVENUE_NOT_CONFIGURED', 'Revenue Labの環境変数を設定してください。', { missing: config.missing })
+        const result = await getStore().enqueueTracking(today())
+        return reply(res, result.createdCount > 0 ? 201 : 200, { data: result })
       }
       if (!['GET', 'PUT', 'POST'].includes(req.method)) {
         res.setHeader('Allow', 'GET, PUT, POST')
