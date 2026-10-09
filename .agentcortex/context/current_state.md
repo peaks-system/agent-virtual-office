@@ -16,6 +16,7 @@
 - **Last Verified**: 2026-10-07
 - **Update Sequence**: 146
 - **ADR Index**:
+  - docs/adr/ADR-013-revenue-lab-ai-interpretation-layer.md — metadata-only OpenAI analysis as an immutable layer above deterministic Revenue Lab scores · applies_to: scripts/revenue-*, scripts/revenue-lab/*analysis*, supabase/migrations/*ai_analyst*, src/components/RevenueLabDashboard*
   - docs/adr/ADR-011-revenue-lab-job-boundary.md — Revenue Lab durable queue, replaceable worker, and server-only secret boundary · applies_to: scripts/revenue-*, scripts/revenue-lab/*, supabase/migrations/*revenue_lab*, src/components/RevenueLabDashboard*
   - docs/adr/ADR-001-vnext-self-managed-architecture.md — vNext self-managed AI architecture
   - docs/adr/ADR-002-multi-worktree-session-design.md — multi-worktree session isolation design
@@ -61,6 +62,7 @@
     - **Session closure** — final retro at `docs/reviews/2026-05-29-session-retro.md` (snapshot, not authoritative). 27 commits ahead of `origin/main`, 0 behind. `main` branch is the canonical state; `_product-backlog.md` lean (14 items: AVO-101..AVO-115 minus done + #20 deferred); `_shipped-log.md` holds 73 prior shipped rows; vitest 960/960; build 887ms clean. All work-log archives in place + INDEX.jsonl up to date. Push to origin pending human confirmation.
   - **Branch status**: All feature branches closed/merged. main is HEAD.
 - **Spec Index**:
+  - [revenue-lab] docs/specs/revenue-lab-phase2-ai-opportunity-analyst.md [Implemented, Live Validation Pending]  *(metadata-only Responses API + strict Structured Outputs; exact-input fingerprint cache; initial manual run limited to one video)*
   - [maintenance] docs/specs/engineering-audit-remediation.md [Shipped]  *(2026-09-24 audit remediation: dev server monotonic clock parity F-01, bridge UI planning/awaiting-approval toggles F-05; 2026-09-26 server-hardening wave: malformed-request crash guard, SSE heartbeat/client cap, Host-header DNS-rebinding allowlist, vitest CVE bump; 2026-09-26 dev-server-parity wave: file-watcher fallback root-scoping + `.claude`-segment fix, STALE_MS-based overwrite window, add/unlink SSE watch, dev CORS parity, LAN/no-token warning parity; 2026-09-27 follow-ups: `OFFICE_ALLOWED_HOSTS` also governs the dev server via shared `src/utils/hostAllowlist.mjs`, render-smoke exit-race teardown)*
   - [ci-infra] docs/specs/sim-soak-gate.md [Shipped]  *(AVO-157 — nightly world-invariant soak: teleport/stack/frozen/off-floor; test-the-test 11 pins)*
   - [ci-infra] docs/specs/avo-190-soak-target-identity.md [Shipped]  *(AVO-190 — fail-closed AVO identity preflight for soak and overlap recorder targets)*

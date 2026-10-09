@@ -5,11 +5,13 @@ const { createJobHandlers } = require('./revenue-lab/job-handlers.cjs')
 const { createLocalWorker } = require('./revenue-lab/worker.cjs')
 const { createSupabaseStore } = require('./revenue-lab/supabase-store.cjs')
 const { createYouTubeClient } = require('./revenue-lab/youtube-client.cjs')
+const { createOpenAIAnalysisClient } = require('./revenue-lab/openai-client.cjs')
 
 async function main() {
   const store = createSupabaseStore()
   const youtube = createYouTubeClient()
-  const handlers = createJobHandlers({ store, youtube })
+  const analyst = process.env.OPENAI_API_KEY ? createOpenAIAnalysisClient() : null
+  const handlers = createJobHandlers({ store, youtube, analyst })
   const worker = createLocalWorker({ store, handlers })
   const shutdown = signal => {
     console.log(`[revenue-lab] ${signal} received; stopping after the current job.`)

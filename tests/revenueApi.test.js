@@ -23,7 +23,7 @@ async function fixture({ authorize = () => true, env, store } = {}) {
 describe('Revenue Lab API', () => {
   it('reports missing environment names without values or constructing storage', async () => {
     const status = configurationStatus({ SUPABASE_URL: 'https://safe.test' })
-    expect(status).toEqual({ configured: false, missing: ['SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY'] })
+    expect(status).toMatchObject({ configured: false, missing: ['SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY'], analysis: { configured: false, missing: ['OPENAI_API_KEY'] } })
     const origin = await fixture({ env: { SUPABASE_URL: 'https://safe.test' } })
     const response = await fetch(`${origin}/api/revenue/dashboard`)
     expect(response.status).toBe(200)
@@ -70,6 +70,21 @@ describe('Revenue Lab API', () => {
     const response = await fetch(`${origin}/api/revenue/tracking/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })
     expect(response.status).toBe(201)
     expect(store.enqueueTracking).toHaveBeenCalledWith('2026-10-08')
+  })
+
+  it('starts with one analysis candidate, caps six, and requires server-side OpenAI configuration', async () => {
+    const store = { enqueueAnalysisCandidates: vi.fn(async limit => ({ selectedCount: limit, records: [{ created: true }] })) }
+    const configuredEnv = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test', YOUTUBE_API_KEY: 'test', OPENAI_API_KEY: 'secret' }
+    const deniedOrigin = await fixture({ store, env: configuredEnv, authorize: () => false })
+    expect((await fetch(`${deniedOrigin}/api/revenue/analysis/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })).status).toBe(401)
+    expect(store.enqueueAnalysisCandidates).not.toHaveBeenCalled()
+    const missingOrigin = await fixture({ store })
+    expect((await fetch(`${missingOrigin}/api/revenue/analysis/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })).status).toBe(503)
+    const origin = await fixture({ store, env: configuredEnv })
+    const first = await fetch(`${origin}/api/revenue/analysis/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })
+    expect(first.status).toBe(201)
+    expect(store.enqueueAnalysisCandidates).toHaveBeenCalledWith(1, expect.objectContaining({ model: 'gpt-6-luna' }))
+    expect((await fetch(`${origin}/api/revenue/analysis/jobs`, { method: 'POST', headers: jsonHeaders, body: '{"limit":7}' })).status).toBe(400)
   })
 
   it('uses a consistent safe error envelope for malformed JSON and service failures', async () => {

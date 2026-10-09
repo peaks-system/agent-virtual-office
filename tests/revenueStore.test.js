@@ -114,6 +114,13 @@ describe('Revenue Lab Supabase store snapshots', () => {
         requested_count: 25, received_count: 25, scored_count: 24, completed_at: '2026-10-08T00:01:00Z',
       }])
       if (url.includes('/tracking_runs?')) return response([])
+      if (url.includes('/ai_analysis_requests?')) return response([{
+        id: 'request-1', source_item_id: 'video-item', status: 'succeeded', prompt_version: 'opportunity-analyst-v1',
+        schema_version: 'opportunity-analysis-v1', requested_model: 'gpt-test', resolved_model: 'gpt-test', generated_at: '2026-10-08T00:02:00Z',
+      }])
+      if (url.includes('/ai_opportunity_analyses?')) return response([{
+        id: 'analysis-1', analysis_request_id: 'request-1', output_json: { recommendation: 'hold' },
+      }])
       throw new Error(`Unexpected request: ${url} ${options?.method}`)
     })
     const store = createSupabaseStore({
@@ -132,7 +139,8 @@ describe('Revenue Lab Supabase store snapshots', () => {
     expect(dashboard.latestRun).toMatchObject({
       id: 'run-1', sourceQueryId: 'query-1', status: 'succeeded', receivedCount: 25, scoredCount: 24,
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(6)
+    expect(dashboard.analyses[0]).toMatchObject({ id: 'analysis-1', sourceItemId: 'video-item', status: 'succeeded', output: { recommendation: 'hold' } })
+    expect(fetchImpl).toHaveBeenCalledTimes(8)
   })
 
   it('restricts Discovery previous snapshots to discovery capture kind', async () => {

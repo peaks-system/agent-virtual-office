@@ -5,8 +5,17 @@ const migration = readFileSync('supabase/migrations/20261007210000_revenue_lab_p
 const rollback = readFileSync('supabase/rollback/20261007210000_revenue_lab_phase1_down.sql', 'utf8')
 const trackingMigration = readFileSync('supabase/migrations/20261009100000_revenue_lab_tracking_v1.sql', 'utf8')
 const trackingRollback = readFileSync('supabase/rollback/20261009100000_revenue_lab_tracking_v1_down.sql', 'utf8')
+const analysisMigration = readFileSync('supabase/migrations/20261009150000_revenue_lab_ai_analyst_v1.sql', 'utf8')
+const analysisRollback = readFileSync('supabase/rollback/20261009150000_revenue_lab_ai_analyst_v1_down.sql', 'utf8')
 
 describe('Revenue Lab Supabase migration', () => {
+  it('adds an isolated AI layer with fingerprint identity and reversible tables', () => {
+    expect(analysisMigration).toContain("'opportunity.analyze'")
+    expect(analysisMigration).toContain('unique (project_id, source_item_id, input_fingerprint, prompt_version, schema_version, requested_model)')
+    expect(analysisMigration).toContain('create table revenue_lab.human_analysis_reviews')
+    expect(analysisRollback).toContain('drop table if exists revenue_lab.ai_analysis_requests')
+    expect(analysisMigration).not.toMatch(/update revenue_lab\.(?:opportunities|tracking_opportunities)/)
+  })
   it('creates the isolated schema and all Phase 1 entities', () => {
     expect(migration).toContain('create schema if not exists revenue_lab')
     for (const table of [

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { RevenueLabView, nextCollectionLabel, opportunityReasons, queryNeedsScores, scoreLabel, scoreStrength, velocityPresentation, videoReviewUrl } from '../src/components/RevenueLabDashboard'
 
-const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onSave: vi.fn() }
+const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onAnalyze: vi.fn(), onReview: vi.fn(), onSave: vi.fn() }
 
 describe('Revenue Lab dashboard', () => {
   it('formats saved scores and detects incomplete human inputs', () => {
@@ -132,5 +132,27 @@ describe('Revenue Lab dashboard', () => {
     expect(markup).toContain('youtube-tracking-v1')
     expect(markup).toContain('1.500倍（+50.00%）')
     expect(markup).toContain('実測')
+  })
+
+  it('shows metadata-only AI hypotheses without changing card order', () => {
+    const opportunities = [
+      { id: 'a', sourceItemId: 'item-a', youtubeVideoId: 'a', title: 'First', opportunityScore: 90, breakoutScore: 88, velocityMode: 'estimated_lifetime', percentilePopulationSize: 25 },
+      { id: 'b', sourceItemId: 'item-b', youtubeVideoId: 'b', title: 'Second', opportunityScore: 80, breakoutScore: 78, velocityMode: 'estimated_lifetime', percentilePopulationSize: 25 },
+    ]
+    const output = {
+      product_or_theme_name: '便利グッズ', video_subject: '商品紹介候補', recommendation: 'hold',
+      recommendation_reason: '追加の商品確認が必要', evidence_quality: 'limited',
+      growth_hypotheses: [{ hypothesis: '検索テーマとの一致が考えられる', confidence: 'medium', supporting_indicators: ['query_match'] }],
+      product_search_keywords: ['便利グッズ'], similar_product_categories: ['生活雑貨'], video_ideas: ['比較'], hooks: ['本当に便利？'],
+    }
+    const markup = renderToStaticMarkup(<RevenueLabView state={{
+      config: { configured: true, missing: [], analysis: { configured: true } }, queries: [], opportunities,
+      trackingOpportunities: [], analyses: [{ id: 'analysis-1', sourceItemId: 'item-a', status: 'succeeded', output }], latestJob: null,
+    }} {...handlers} />)
+    expect(markup).toContain('TOP1をAI分析')
+    expect(markup).toContain('保存済みメタデータだけを使った解釈')
+    expect(markup).toContain('成長仮説')
+    expect(markup).toContain('確信度 中')
+    expect(markup.indexOf('First')).toBeLessThan(markup.indexOf('Second'))
   })
 })

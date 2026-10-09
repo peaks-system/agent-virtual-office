@@ -1,4 +1,4 @@
-# Revenue Lab Phase 1 Setup
+# Revenue Lab Phase 1–2 Setup
 
 ## Environment
 
@@ -11,6 +11,8 @@ Set these only in the process environment used to start AI Office and the worker
 - `REVENUE_LAB_POLL_INTERVAL_MS` — optional, defaults to 30000 and is bounded to 5000–300000.
 - `REVENUE_LAB_JOB_LEASE_SECONDS` — optional, defaults to 300 and is bounded to 60–3600.
 - `REVENUE_LAB_PROJECT_ID` — optional project UUID when more than one Revenue Lab project exists.
+- `OPENAI_API_KEY` — optional server/worker-only key. Required only for Phase 2 analysis; Discovery and Tracking work without it.
+- `REVENUE_LAB_OPENAI_MODEL` — optional requested analysis model; defaults to `gpt-6-luna`.
 
 Do not put these values in source files, browser storage, `config/revenue-lab.json`, or Supabase tables.
 
@@ -18,13 +20,25 @@ Do not put these values in source files, browser storage, `config/revenue-lab.js
 
 1. Apply `supabase/migrations/20261007210000_revenue_lab_phase1.sql` in a development project first.
 2. Apply `supabase/migrations/20261009100000_revenue_lab_tracking_v1.sql`. It backfills existing snapshots as Discovery and creates Tracking targets from successful historical collection runs.
-3. Apply `supabase/seed/revenue_lab_phase1.sql`. It creates three disabled starter themes with unset human Scores; edit and enable them in the dashboard.
+3. Apply `supabase/migrations/20261009150000_revenue_lab_ai_analyst_v1.sql`. It adds only analysis requests, contexts, structured results, human reviews, and the analysis job type.
+4. Apply `supabase/seed/revenue_lab_phase1.sql` only for a new installation. It creates three disabled starter themes with unset human Scores; edit and enable them in the dashboard.
 4. Add `revenue_lab` to the API exposed schemas in Supabase project settings.
 5. Enable the `pg_cron` extension before applying the Phase 1 migration if daily enqueueing is desired. The existing 05:15 JST cron calls the replaced enqueue function and therefore adds both Discovery and Tracking jobs.
 6. Verify anon/authenticated roles cannot access the schema; the local server uses the service role.
 7. Confirm only the intended themes are enabled; the database rejects more than three enabled themes.
 
-Tracking rollback is `supabase/rollback/20261009100000_revenue_lab_tracking_v1_down.sql`. Apply it before the Phase 1 rollback. Do not run either rollback after production snapshots are needed without exporting the schema first.
+Phase 2 rollback is `supabase/rollback/20261009150000_revenue_lab_ai_analyst_v1_down.sql`. It removes analysis data only. Tracking rollback is `supabase/rollback/20261009100000_revenue_lab_tracking_v1_down.sql`; apply it before the Phase 1 rollback. Do not run a rollback after retained data matters without exporting the schema first.
+
+## OpenAI Phase 2 Live Validation
+
+1. Apply the Phase 2 migration and restart AI Office so the server and local worker receive `OPENAI_API_KEY`.
+2. Confirm Discovery and Tracking TOP3 still have the same scores, ranks, and ordering as before migration.
+3. Select `TOP1をAI分析`. The UI deliberately sends `limit: 1`; the server rejects values above six.
+4. Wait for the durable `opportunity.analyze` job to complete, then reload the dashboard.
+5. Review that the output says it is metadata-only, uses confidence-bearing growth hypotheses, and does not claim to have watched the video or checked descriptions, transcripts, products, or links.
+6. Only after output quality is accepted should a caller use `limit: 2` through `limit: 6` on `POST /api/revenue/analysis/jobs`.
+
+The Responses request uses strict JSON Schema output, disables provider-side storage with `store=false`, and does not enable tools. The canonical fingerprint covers the exact stable input JSON. Prompt, schema, or requested-model changes create a separate cache identity.
 
 ## Google Cloud
 
@@ -57,6 +71,7 @@ To enqueue manually, open Revenue Lab and choose `Discovery実行` or `Tracking�
 - Discovery snapshots have `capture_kind = discovery`; Tracking snapshots have `capture_kind = tracking` and a `capture_job_id`.
 - A Tracking interval below six hours is `waiting_interval` and does not create a snapshot or Score.
 - Tracking results use `score_version = youtube-tracking-v1`; growth ratio and percent are display-only.
+- AI requests persist exact input, SHA-256 fingerprint, model/prompt/schema versions, response metadata, and token usage without changing opportunity rows.
 
 ## Official References
 
@@ -65,3 +80,5 @@ To enqueue manually, open Revenue Lab and choose `Discovery実行` or `Tracking�
 - YouTube channels: https://developers.google.com/youtube/v3/docs/channels/list
 - Supabase Data API: https://supabase.com/docs/guides/api
 - Supabase Cron: https://supabase.com/docs/guides/cron
+- OpenAI Structured Outputs: https://developers.openai.com/api/docs/guides/structured-outputs
+- OpenAI Responses API: https://developers.openai.com/api/docs/guides/migrate-to-responses

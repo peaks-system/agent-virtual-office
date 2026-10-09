@@ -95,6 +95,18 @@ describe('Revenue Lab job handler and local worker', () => {
     expect(store.persistCollection).toHaveBeenCalledWith(expect.objectContaining({ opportunities: [] }))
   })
 
+  it('runs AI analysis as a separate interpretation job without touching scoring', async () => {
+    const store = {
+      getAnalysisRequest: vi.fn(async () => ({ id: 'request-1', inputSnapshot: { analysis_basis: 'metadata_only' } })),
+      markAnalysisRunning: vi.fn(async () => {}), persistAnalysisSuccess: vi.fn(async () => {}), persistAnalysisFailure: vi.fn(async () => {}),
+    }
+    const analyst = { analyze: vi.fn(async () => ({ analysis: { recommendation: 'hold' }, resolvedModel: 'gpt-test', responseId: 'resp-1', usage: {} })) }
+    const handler = createJobHandlers({ store, youtube: {}, analyst }).get('opportunity.analyze')
+    await expect(handler({ id: 'job-ai', payload: { analysis_request_id: 'request-1' } })).resolves.toEqual({ analysisRequestId: 'request-1', recommendation: 'hold' })
+    expect(analyst.analyze).toHaveBeenCalledWith({ analysis_basis: 'metadata_only' })
+    expect(store.persistAnalysisSuccess).toHaveBeenCalledOnce()
+  })
+
   it('marks a run failed and exposes only a sealed job error', async () => {
     const store = {
       getQuery: vi.fn(async () => ({ id: 'q1', sourceId: 's1', queryText: 'x', buyerIntent: 50, commerceFit: 50, enabled: true, maxResults: 1 })),

@@ -45,4 +45,14 @@ export function enqueueRevenueTracking() {
   return request('/tracking/jobs', { method: 'POST', body: JSON.stringify({}) })
 }
 
+export function enqueueRevenueAnalysis(limit = 1) {
+  return request('/analysis/jobs', { method: 'POST', body: JSON.stringify({ limit }) })
+}
+
+export function createRevenueAnalysisReview(analysisId, decision, agreement, notes = null) {
+  return request(`/analyses/${encodeURIComponent(analysisId)}/reviews`, {
+    method: 'POST', body: JSON.stringify({ decision, agreement, notes }),
+  })
+}
+
 export { request as revenueRequest }

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { enqueueEnabledRevenueQueries, enqueueRevenueTracking, loadRevenueDashboard, updateRevenueQuery } from '../services/revenueLabApi'
+import { createRevenueAnalysisReview, enqueueEnabledRevenueQueries, enqueueRevenueAnalysis, enqueueRevenueTracking, loadRevenueDashboard, updateRevenueQuery } from '../services/revenueLabApi'
 import './revenueLabDashboard.css'
 
-const EMPTY = { config: { configured: false, missing: [] }, queries: [], opportunities: [], trackingOpportunities: [], latestJob: null, latestRun: null, latestTrackingRun: null }
+const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], latestJob: null, latestRun: null, latestTrackingRun: null }
 
 export function scoreLabel(value) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—'
@@ -112,7 +112,30 @@ function QueryEditor({ query, busy, onSave }) {
   </form>
 }
 
-function OpportunityCard({ item, index, tracking = false }) {
+const recommendationLabel = value => ({ adopt: '採用', hold: '保留', exclude: '除外' })[value] || '—'
+const confidenceLabel = value => ({ high: '高', medium: '中', low: '低' })[value] || value
+
+function AnalysisPanel({ analysis, busy, onReview }) {
+  if (!analysis) return <div className="revenue-analysis is-empty"><strong>AI分析</strong><p>まだ分析されていません。上部の「TOP1をAI分析」から1動画で品質を確認します。</p></div>
+  if (analysis.status !== 'succeeded' || !analysis.output) return <div className={`revenue-analysis is-${analysis.status}`}><strong>AI分析</strong><p>{({ pending: 'ジョブ待機中', running: 'メタデータを分析中', refused: '分析は拒否されました', incomplete: '分析結果が未完了です', failed: '分析に失敗しました' })[analysis.status] || analysis.status}</p></div>
+  const output = analysis.output
+  return <section className="revenue-analysis is-succeeded" aria-label="AI Opportunity Analyst">
+    <div className="revenue-analysis-heading"><strong>AI Opportunity Analyst</strong><span>{recommendationLabel(output.recommendation)}</span></div>
+    <p className="revenue-analysis-note">保存済みメタデータだけを使った解釈です。動画本文・映像・字幕・商品リンクは確認していません。</p>
+    <dl><div><dt>商品・テーマ</dt><dd>{output.product_or_theme_name}</dd></div><div><dt>動画の主題候補</dt><dd>{output.video_subject}</dd></div><div><dt>推奨理由</dt><dd>{output.recommendation_reason}</dd></div></dl>
+    <strong>成長仮説</strong><ul>{output.growth_hypotheses?.map((hypothesis, index) => <li key={`${hypothesis.hypothesis}-${index}`}><b>確信度 {confidenceLabel(hypothesis.confidence)}</b> {hypothesis.hypothesis}<small>{hypothesis.supporting_indicators?.join(' / ')}</small></li>)}</ul>
+    <details><summary>企画・商品探索の詳細</summary><dl>
+      <div><dt>商品検索キーワード</dt><dd>{output.product_search_keywords?.join(' / ') || '—'}</dd></div>
+      <div><dt>類似商品カテゴリ</dt><dd>{output.similar_product_categories?.join(' / ') || '—'}</dd></div>
+      <div><dt>動画企画案</dt><dd>{output.video_ideas?.join(' / ') || '—'}</dd></div>
+      <div><dt>Hook案</dt><dd>{output.hooks?.join(' / ') || '—'}</dd></div>
+      <div><dt>根拠品質</dt><dd>{output.evidence_quality === 'moderate' ? '中程度' : '限定的'}</dd></div>
+    </dl></details>
+    {analysis.id && <div className="revenue-human-review"><span>人間評価</span>{['adopt', 'hold', 'exclude'].map(decision => <button type="button" key={decision} disabled={busy} onClick={() => onReview(analysis, decision)}>{recommendationLabel(decision)}</button>)}</div>}
+  </section>
+}
+
+function OpportunityCard({ item, index, tracking = false, analysis, busy, onReview }) {
   const reviewUrl = videoReviewUrl(item)
   const velocity = velocityPresentation(item.velocityMode)
   const reasons = opportunityReasons(item)
@@ -150,27 +173,29 @@ function OpportunityCard({ item, index, tracking = false }) {
         <div><dt>Commerce Fit</dt><dd>{metricCount(item.commerceFit)}</dd></div>
       </dl></details>
       {reviewUrl && <a className="revenue-youtube-link" href={reviewUrl} target="_blank" rel="noopener noreferrer">YouTubeで見る</a>}
+      <AnalysisPanel analysis={analysis} busy={busy} onReview={onReview} />
     </div>
   </article>
 }
 
-function OpportunitySection({ title, description, items, tracking = false, configured }) {
+function OpportunitySection({ title, description, items, tracking = false, configured, analysisByItem = new Map(), busy, onReview = () => {} }) {
   return <section className="revenue-ranking-section">
     <div className="revenue-section-heading"><div><p className="revenue-kicker">{tracking ? 'OBSERVED TRACKING' : 'DAILY DISCOVERY'}</p><h2>{title}</h2><p>{description}</p></div></div>
     <div className="revenue-grid" aria-label={title}>
-      {items.map((item, index) => <OpportunityCard key={item.id || item.youtubeVideoId} item={item} index={index} tracking={tracking} />)}
+      {items.map((item, index) => <OpportunityCard key={item.id || item.youtubeVideoId} item={item} index={index} tracking={tracking} analysis={analysisByItem.get(item.sourceItemId)} busy={busy} onReview={onReview} />)}
       {configured && items.length === 0 && <div className="revenue-state"><h3>まだ候補がありません</h3><p>{tracking ? '6時間以上の間隔がある継続観測データを待っています。' : 'テーマのScore設定を保存して収集を実行してください。'}</p></div>}
     </div>
   </section>
 }
 
-export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, onSave }) {
+export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, onAnalyze, onReview, onSave }) {
   if (!state) return <main className="revenue-shell" aria-busy="true"><div className="revenue-state"><h2>Revenue Lab</h2><p>収益機会を読み込んでいます…</p></div></main>
   const eligible = state.queries.filter(query => query.enabled && !queryNeedsScores(query))
   const enabledQueries = state.queries.filter(query => query.enabled)
   const lookbackDays = [...new Set(enabledQueries.map(query => query.lookbackDays).filter(Boolean))]
   const latestRun = state.latestRun
   const scoreVersion = state.opportunities[0]?.scoreVersion || 'youtube-v1'
+  const analysisByItem = new Map((state.analyses || []).map(analysis => [analysis.sourceItemId, analysis]))
   return <main className="revenue-shell">
     <section className="revenue-hero">
       <div><p className="revenue-kicker">YOUTUBE COMMERCE · PHASE 1</p><h2>今日検討すべき候補</h2><p>本日の発掘と、過去候補の実測成長を分けて確認します。</p></div>
@@ -192,8 +217,13 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, o
         <div className="revenue-summary-wide"><dt>次回予定収集時刻</dt><dd>{nextCollectionLabel()}</dd></div>
       </dl>
     </section>
-    <OpportunitySection title="本日の発掘TOP3" description="本日のsearch.listで発掘した候補です。過去動画が再登場する場合もあります。" items={state.opportunities || []} configured={state.config.configured} />
-    <OpportunitySection title="継続観測・急伸TOP3" description="発見後7日間、6時間以上の間隔で実測した成長候補です。" items={state.trackingOpportunities || []} tracking configured={state.config.configured} />
+    <section className="revenue-analyst-intro">
+      <div><p className="revenue-kicker">PHASE 2 · METADATA ONLY</p><h2>AI Opportunity Analyst</h2><p>既存Scoreの上に、商品化の仮説と次の行動を追加します。Scoreと順位は変更しません。</p></div>
+      <button className="corp-primary" disabled={busy || !state.config.analysis?.configured || (!state.opportunities.length && !state.trackingOpportunities.length)} onClick={onAnalyze}>TOP1をAI分析</button>
+      {!state.config.analysis?.configured && <p className="revenue-warning">サーバー側に OPENAI_API_KEY を設定すると利用できます。Discovery / Trackingは引き続き利用できます。</p>}
+    </section>
+    <OpportunitySection title="本日の発掘TOP3" description="本日のsearch.listで発掘した候補です。過去動画が再登場する場合もあります。" items={state.opportunities || []} configured={state.config.configured} analysisByItem={analysisByItem} busy={busy} onReview={onReview} />
+    <OpportunitySection title="継続観測・急伸TOP3" description="発見後7日間、6時間以上の間隔で実測した成長候補です。" items={state.trackingOpportunities || []} tracking configured={state.config.configured} analysisByItem={analysisByItem} busy={busy} onReview={onReview} />
     <details className="revenue-score-guide"><summary>スコアについて</summary><dl>
       <div><dt>Breakout Score</dt><dd>再生速度、チャンネル規模比、反応率、鮮度から「通常より勢いがあるか」を示します。</dd></div>
       <div><dt>Opportunity Score</dt><dd>Breakout Scoreを70%、Buyer IntentとCommerce Fitを各15%で補正した企画候補順位です。</dd></div>
@@ -226,5 +256,8 @@ export default function RevenueLabDashboard() {
     catch (failure) { setError(failure.message) }
     finally { setBusy(false) }
   }
-  return <RevenueLabView state={state} error={error} busy={busy} onReload={reload} onRun={queries => perform(() => enqueueEnabledRevenueQueries(queries))} onTrack={() => perform(enqueueRevenueTracking)} onSave={(id, values) => perform(() => updateRevenueQuery(id, values))} />
+  const review = (analysis, decision) => perform(() => createRevenueAnalysisReview(
+    analysis.id, decision, decision === analysis.output?.recommendation ? 'agree' : 'disagree',
+  ))
+  return <RevenueLabView state={state} error={error} busy={busy} onReload={reload} onRun={queries => perform(() => enqueueEnabledRevenueQueries(queries))} onTrack={() => perform(enqueueRevenueTracking)} onAnalyze={() => perform(() => enqueueRevenueAnalysis(1))} onReview={review} onSave={(id, values) => perform(() => updateRevenueQuery(id, values))} />
 }

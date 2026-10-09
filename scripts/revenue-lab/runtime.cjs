@@ -4,6 +4,7 @@ const { createJobHandlers } = require('./job-handlers.cjs')
 const { createLocalWorker } = require('./worker.cjs')
 const { createSupabaseStore } = require('./supabase-store.cjs')
 const { createYouTubeClient } = require('./youtube-client.cjs')
+const { createOpenAIAnalysisClient } = require('./openai-client.cjs')
 
 const REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY']
 
@@ -29,7 +30,8 @@ function createRevenueRuntime({
     serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
   })
   const runtimeYouTube = youtube || createYouTubeClient({ apiKey: env.YOUTUBE_API_KEY })
-  const handlers = createJobHandlers({ store: runtimeStore, youtube: runtimeYouTube })
+  const analyst = env.OPENAI_API_KEY ? createOpenAIAnalysisClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_OPENAI_MODEL || undefined }) : null
+  const handlers = createJobHandlers({ store: runtimeStore, youtube: runtimeYouTube, analyst })
   const worker = workerFactory({ store: runtimeStore, handlers })
   let started = false
 

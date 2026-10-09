@@ -3,12 +3,16 @@
 const { permitted } = require('./staff-api.cjs')
 const { createSupabaseStore } = require('./revenue-lab/supabase-store.cjs')
 const { validHumanScore } = require('./revenue-lab/scoring.cjs')
+const { DEFAULT_MODEL } = require('./revenue-lab/analysis-schema.cjs')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function configurationStatus(env = process.env) {
   const missing = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY'].filter(key => !env[key])
-  return { configured: missing.length === 0, missing }
+  return { configured: missing.length === 0, missing, analysis: {
+    configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
+    requestedModel: env.REVENUE_LAB_OPENAI_MODEL || DEFAULT_MODEL,
+  } }
 }
 
 function errorBody(code, message, details = null) {
@@ -111,6 +115,27 @@ function createRevenueApi({
         if (!config.configured) return fail(res, 503, 'REVENUE_NOT_CONFIGURED', 'Revenue Labの環境変数を設定してください。', { missing: config.missing })
         const result = await getStore().enqueueTracking(today())
         return reply(res, result.createdCount > 0 ? 201 : 200, { data: result })
+      }
+      if (req.method === 'POST' && pathname === '/analysis/jobs') {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!config.configured) return fail(res, 503, 'REVENUE_NOT_CONFIGURED', 'Revenue Labの環境変数を設定してください。', { missing: config.missing })
+        if (!config.analysis.configured) return fail(res, 503, 'OPENAI_NOT_CONFIGURED', 'OpenAI分析の環境変数を設定してください。', { missing: config.analysis.missing })
+        const input = await body(req)
+        const limit = input.limit == null ? 1 : Number(input.limit)
+        if (!Number.isInteger(limit) || limit < 1 || limit > 6) return fail(res, 400, 'VALIDATION_ERROR', '分析件数は1〜6で指定してください。')
+        const result = await getStore().enqueueAnalysisCandidates(limit, { model: config.analysis.requestedModel })
+        return reply(res, result.records.some(record => record.created) ? 201 : 200, { data: result })
+      }
+      const reviewMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/reviews$/i)
+      if (req.method === 'POST' && reviewMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(reviewMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'analysis idが正しくありません。')
+        const input = await body(req)
+        if (!['adopt', 'hold', 'exclude'].includes(input.decision) || !['agree', 'disagree', 'unsure'].includes(input.agreement)) {
+          return fail(res, 400, 'VALIDATION_ERROR', '人間評価の内容を確認してください。')
+        }
+        if (input.notes != null && (typeof input.notes !== 'string' || input.notes.length > 1000)) return fail(res, 400, 'VALIDATION_ERROR', 'メモは1000文字以内です。')
+        return reply(res, 201, { data: await getStore().createAnalysisReview(reviewMatch[1], input) })
       }
       if (!['GET', 'PUT', 'POST'].includes(req.method)) {
         res.setHeader('Allow', 'GET, PUT, POST')

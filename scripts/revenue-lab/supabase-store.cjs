@@ -1,5 +1,8 @@
 'use strict'
 
+const { inputFingerprint } = require('./canonical-json.cjs')
+const { DEFAULT_MODEL, PROMPT_VERSION, SCHEMA_VERSION } = require('./analysis-schema.cjs')
+
 const PROFILE = 'revenue_lab'
 
 class RevenueStoreError extends Error {
@@ -66,6 +69,37 @@ function opportunityFromRow(row) {
     percentilePopulationSize: row.percentile_population_size,
     createdAt: row.created_at,
   }
+}
+
+function analysisContext(item, kind, rankPosition) {
+  return {
+    kind, source_query_id: item.sourceQueryId,
+    opportunity_id: kind === 'discovery' ? item.id : null,
+    tracking_opportunity_id: kind === 'tracking' ? item.id : null,
+    rank_position: rankPosition, score_version: item.scoreVersion, velocity_mode: item.velocityMode,
+    views_velocity: item.viewsVelocity, channel_ratio: item.channelRatio, engagement_rate: item.engagementRate,
+    freshness: item.freshness, velocity_percentile: item.velocityPercentile,
+    channel_ratio_percentile: item.channelRatioPercentile, engagement_percentile: item.engagementPercentile,
+    buyer_intent: item.buyerIntent, commerce_fit: item.commerceFit, breakout_score: item.breakoutScore,
+    opportunity_score: item.opportunityScore, percentile_population_size: item.percentilePopulationSize,
+    previous_view_count: item.previousViewCount ?? null, current_view_count: item.viewCount ?? null,
+    current_captured_at: item.currentCapturedAt ?? null, previous_captured_at: item.previousCapturedAt ?? null,
+    view_delta: item.viewIncrease ?? null, elapsed_hours: item.velocityElapsedHours ?? null,
+    growth_ratio: item.growthRatio ?? null, growth_percent: item.growthPercent ?? null,
+  }
+}
+
+function mergeAnalysisCandidates(discovery = [], tracking = [], limit = 1) {
+  const candidates = new Map()
+  for (const [kind, items] of [['discovery', discovery], ['tracking', tracking]]) {
+    items.forEach((item, index) => {
+      if (!item.sourceItemId) return
+      const existing = candidates.get(item.sourceItemId) || { item, contexts: [] }
+      existing.contexts.push(analysisContext(item, kind, index + 1))
+      candidates.set(item.sourceItemId, existing)
+    })
+  }
+  return [...candidates.values()].slice(0, Math.max(1, Math.min(Number(limit) || 1, 6)))
 }
 
 function createSupabaseStore({
@@ -188,6 +222,7 @@ function createSupabaseStore({
         : null
       return {
         ...opportunity,
+        sourceItemId: opportunity.sourceItemId || videoItem?.id || null,
         sourceUrl: videoItem?.canonical_url || null,
         viewCount,
         currentCapturedAt: videoSnapshot?.captured_at || null,
@@ -236,10 +271,31 @@ function createSupabaseStore({
         growthPercent: detail.growth_percent == null ? null : Number(detail.growth_percent),
       } : item
     })
+    const analysisItemIds = [...new Set([...opportunities, ...trackingOpportunities].map(item => item.sourceItemId).filter(Boolean))]
+    const analysisRequests = analysisItemIds.length ? await request(
+      `ai_analysis_requests?source_item_id=in.(${encodeURIComponent(analysisItemIds.join(','))})&select=*&order=created_at.desc&limit=30`,
+    ) : []
+    const requestIds = analysisRequests.map(row => row.id)
+    const analysisRows = requestIds.length ? await request(
+      `ai_opportunity_analyses?analysis_request_id=in.(${encodeURIComponent(requestIds.join(','))})&select=*&limit=30`,
+    ) : []
+    const outputByRequest = new Map(analysisRows.map(row => [row.analysis_request_id, row]))
+    const latestRequestByItem = new Map()
+    for (const row of analysisRequests) if (!latestRequestByItem.has(row.source_item_id)) latestRequestByItem.set(row.source_item_id, row)
+    const analyses = [...latestRequestByItem.values()].map(row => {
+      const output = outputByRequest.get(row.id)
+      return {
+        id: output?.id || null, requestId: row.id, sourceItemId: row.source_item_id, status: row.status,
+        promptVersion: row.prompt_version, schemaVersion: row.schema_version, requestedModel: row.requested_model,
+        resolvedModel: row.resolved_model, generatedAt: row.generated_at,
+        output: output?.output_json || null,
+      }
+    })
     return {
       queries: (data?.queries || []).map(queryFromRow),
       opportunities,
       trackingOpportunities,
+      analyses,
       latestJob: data?.latest_job ? {
         id: data.latest_job.id,
         jobType: data.latest_job.job_type,
@@ -275,6 +331,88 @@ function createSupabaseStore({
         missingCount: latestTrackingRuns[0].missing_count,
       } : null,
     }
+  }
+
+  async function enqueueAnalysisCandidates(limit = 1, { model = DEFAULT_MODEL } = {}) {
+    const bounded = Math.max(1, Math.min(Number(limit) || 1, 6))
+    const data = await dashboard(3)
+    const queryById = new Map(data.queries.map(query => [query.id, query]))
+    const selected = mergeAnalysisCandidates(data.opportunities, data.trackingOpportunities, bounded)
+    const results = []
+    for (const candidate of selected) {
+      const { item, contexts } = candidate
+      const querySummaries = [...new Map(contexts.map(context => [context.source_query_id, queryById.get(context.source_query_id)]).filter(([, query]) => query)).values()]
+      const query = querySummaries[0] ? await getQuery(querySummaries[0].id) : null
+      const snapshots = await request(
+        `source_item_snapshots?source_item_id=eq.${encodeURIComponent(item.sourceItemId)}&select=id,captured_at&order=captured_at.desc&limit=1`,
+      )
+      const input = {
+        analysis_basis: 'metadata_only',
+        video: {
+          source_item_id: item.sourceItemId, youtube_video_id: item.youtubeVideoId, title: item.title,
+          channel_title: item.channelTitle || null, published_at: item.publishedAt, url: item.sourceUrl || null,
+        },
+        source_queries: querySummaries.map(value => ({ id: value.id, label: value.label, query_text: value.queryText })),
+        contexts,
+        limitations: [
+          'No video description, transcript, audio, frames, product links, or affiliate links were provided.',
+          'Growth explanations must remain metadata-based hypotheses.',
+          'Saved deterministic scores and ranks are immutable inputs.',
+        ],
+      }
+      const response = await rpc('enqueue_ai_analysis', {
+        p_project_id: query?.projectId, p_source_item_id: item.sourceItemId,
+        p_input_snapshot_id: snapshots?.[0]?.id || null, p_input_fingerprint: inputFingerprint(input),
+        p_input_snapshot: input, p_prompt_version: PROMPT_VERSION, p_schema_version: SCHEMA_VERSION,
+        p_requested_model: model, p_contexts: contexts,
+      })
+      results.push(response)
+    }
+    return { requestedCount: bounded, selectedCount: selected.length, records: results }
+  }
+
+  async function getAnalysisRequest(id) {
+    const rows = await request(`ai_analysis_requests?id=eq.${encodeURIComponent(id)}&select=*&limit=1`)
+    const row = rows?.[0]
+    return row ? { id: row.id, inputSnapshot: row.input_snapshot, requestedModel: row.requested_model } : null
+  }
+
+  async function markAnalysisRunning(id) {
+    await request(`ai_analysis_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'running', updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistAnalysisSuccess(id, result) {
+    const now = new Date().toISOString()
+    await request('ai_opportunity_analyses?on_conflict=analysis_request_id', {
+      method: 'POST', body: { analysis_request_id: id, recommendation: result.analysis.recommendation,
+        evidence_quality: result.analysis.evidence_quality, product_or_theme_name: result.analysis.product_or_theme_name,
+        output_json: result.analysis, updated_at: now }, prefer: 'resolution=merge-duplicates,return=minimal',
+    })
+    await request(`ai_analysis_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'succeeded', resolved_model: result.resolvedModel,
+        openai_response_id: result.responseId, input_tokens: result.usage.inputTokens,
+        cached_input_tokens: result.usage.cachedInputTokens, output_tokens: result.usage.outputTokens,
+        reasoning_tokens: result.usage.reasoningTokens, generated_at: now, updated_at: now, error_code: null },
+      prefer: 'return=minimal',
+    })
+  }
+
+  async function persistAnalysisFailure(id, error) {
+    const status = error?.code === 'OPENAI_REFUSED' ? 'refused' : error?.code === 'OPENAI_INCOMPLETE' ? 'incomplete' : 'failed'
+    await request(`ai_analysis_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status, error_code: String(error?.code || 'ANALYSIS_FAILED').slice(0, 80), updated_at: new Date().toISOString() },
+      prefer: 'return=minimal',
+    })
+  }
+
+  async function createAnalysisReview(analysisId, review) {
+    const rows = await request('human_analysis_reviews?select=*', {
+      method: 'POST', body: { analysis_id: analysisId, decision: review.decision, agreement: review.agreement, notes: review.notes || null },
+      prefer: 'return=representation',
+    })
+    return rows?.[0] || null
   }
 
   async function claimNext(workerId, leaseSeconds) {
@@ -552,11 +690,12 @@ function createSupabaseStore({
     ? rpc('mark_tracking_targets_seen', { p_target_ids: targetIds, p_seen_at: seenAt }) : Promise.resolve(0)
 
   return {
-    claimNext, dashboard, enqueueQuery, enqueueTracking, failRun, finishJob, getQuery,
+    claimNext, dashboard, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
+    getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
     listQueries, listTrackingCandidates, markTrackingMissing, markTrackingSeen, failTrackingRuns,
     persistCollection, persistTrackingRun, persistTrackingSnapshots, previousVideoSnapshots,
     startRun, startTrackingRun, updateQuery,
   }
 }
 
-module.exports = { PROFILE, RevenueStoreError, createSupabaseStore, opportunityFromRow, queryFromRow }
+module.exports = { PROFILE, RevenueStoreError, analysisContext, createSupabaseStore, mergeAnalysisCandidates, opportunityFromRow, queryFromRow }

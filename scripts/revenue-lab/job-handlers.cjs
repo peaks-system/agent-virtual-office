@@ -6,7 +6,7 @@ class RevenueJobError extends Error {
   constructor(code, message) { super(message); this.name = 'RevenueJobError'; this.code = code }
 }
 
-function createJobHandlers({ store, youtube, clock = () => new Date() } = {}) {
+function createJobHandlers({ store, youtube, analyst, clock = () => new Date() } = {}) {
   if (!store || !youtube) throw new TypeError('store and youtube are required')
 
   async function collectYouTube(job) {
@@ -152,7 +152,29 @@ function createJobHandlers({ store, youtube, clock = () => new Date() } = {}) {
     }
   }
 
-  return new Map([['youtube.collect', collectYouTube], ['youtube.track', trackYouTube]])
+  async function analyzeOpportunity(job) {
+    const requestId = job?.payload?.analysis_request_id
+    if (!requestId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'analysis_request_id is required')
+    if (!analyst) throw new RevenueJobError('OPENAI_NOT_CONFIGURED', 'OpenAI analysis is not configured')
+    const request = await store.getAnalysisRequest(requestId)
+    if (!request) throw new RevenueJobError('ANALYSIS_REQUEST_NOT_FOUND', 'Analysis request was not found')
+    await store.markAnalysisRunning(requestId)
+    try {
+      const result = await analyst.analyze(request.inputSnapshot)
+      await store.persistAnalysisSuccess(requestId, result)
+      return { analysisRequestId: requestId, recommendation: result.analysis.recommendation }
+    } catch (error) {
+      try { await store.persistAnalysisFailure(requestId, error) }
+      catch { console.error('[revenue-lab] Analysis failure state could not be persisted', { requestId }) }
+      throw error instanceof RevenueJobError ? error : new RevenueJobError(error?.code || 'ANALYSIS_FAILED', 'Opportunity analysis failed')
+    }
+  }
+
+  return new Map([
+    ['youtube.collect', collectYouTube],
+    ['youtube.track', trackYouTube],
+    ['opportunity.analyze', analyzeOpportunity],
+  ])
 }
 
 module.exports = { RevenueJobError, createJobHandlers }
