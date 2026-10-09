@@ -13,8 +13,21 @@ Set these only in the process environment used to start AI Office and the worker
 - `REVENUE_LAB_PROJECT_ID` — optional project UUID when more than one Revenue Lab project exists.
 - `OPENAI_API_KEY` — optional server/worker-only key. Required only for Phase 2 analysis; Discovery and Tracking work without it.
 - `REVENUE_LAB_OPENAI_MODEL` — optional requested analysis model; defaults to `gpt-6-luna`.
+- `RAKUTEN_APPLICATION_ID` — required for Product Candidate Finder; server/worker-only Rakuten application ID.
+- `RAKUTEN_ACCESS_KEY` — required for Product Candidate Finder; server/worker-only Rakuten access key.
+- `RAKUTEN_AFFILIATE_ID` — optional. When set, Rakuten may return an affiliate URL for each product.
 
 Do not put these values in source files, browser storage, `config/revenue-lab.json`, or Supabase tables.
+
+## Product Candidate Finder Live Validation
+
+1. Apply `supabase/migrations/20261009200000_revenue_lab_product_candidate_finder_v1.sql` and restart AI Office.
+2. Confirm the Dashboard reports Rakuten configuration without exposing values.
+3. On exactly one succeeded AI analysis, select `商品候補を検索`.
+4. Wait for the durable `product.search` job to complete and reload the Dashboard.
+5. Confirm API version `20260701`, `availability=1`, capture time, search terms, up to five candidates, provider facts, and `product-rakuten-v1` components.
+6. Select one candidate as `次の調査対象` and confirm the decision persists after reload.
+7. Repeat the same search within 24 hours and confirm the existing run is returned without new Provider requests.
 
 ## Supabase
 

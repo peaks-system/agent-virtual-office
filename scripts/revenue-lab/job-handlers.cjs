@@ -1,12 +1,13 @@
 'use strict'
 
 const { scoreYouTubePopulation, scoreYouTubeTrackingPopulation } = require('./scoring.cjs')
+const { rankProductCandidates } = require('./product-ranking.cjs')
 
 class RevenueJobError extends Error {
   constructor(code, message) { super(message); this.name = 'RevenueJobError'; this.code = code }
 }
 
-function createJobHandlers({ store, youtube, analyst, clock = () => new Date() } = {}) {
+function createJobHandlers({ store, youtube, analyst, productProvider, clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   if (!store || !youtube) throw new TypeError('store and youtube are required')
 
   async function collectYouTube(job) {
@@ -170,10 +171,54 @@ function createJobHandlers({ store, youtube, analyst, clock = () => new Date() }
     }
   }
 
+  async function searchProducts(job) {
+    const runId = job?.payload?.product_search_run_id
+    if (!runId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'product_search_run_id is required')
+    if (!productProvider) throw new RevenueJobError('RAKUTEN_NOT_CONFIGURED', 'Product catalog provider is not configured')
+    const run = await store.getProductSearchRun(runId)
+    if (!run) throw new RevenueJobError('PRODUCT_SEARCH_RUN_NOT_FOUND', 'Product search run was not found')
+    if (run.provider !== productProvider.id || run.providerApiVersion !== productProvider.apiVersion) {
+      throw new RevenueJobError('PRODUCT_PROVIDER_MISMATCH', 'Product provider does not match the saved run')
+    }
+    await store.markProductSearchRunning(runId)
+    try {
+      const providerSearch = async options => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try { return await productProvider.search(options) }
+          catch (error) {
+            if (!['RATE_LIMITED', 'PROVIDER_UNAVAILABLE'].includes(error?.code) || attempt === 2) throw error
+            await sleep(1_000 * (2 ** attempt))
+          }
+        }
+        throw new RevenueJobError('PRODUCT_SEARCH_FAILED', 'Product candidate search failed')
+      }
+      const searches = []
+      for (const [index, keyword] of run.inputSnapshot.keywords.entries()) {
+        if (index > 0) await sleep(1_000)
+        const result = await providerSearch({ keyword, limit: run.inputSnapshot.hits_per_keyword })
+        searches.push({ keyword, requestedHits: run.inputSnapshot.hits_per_keyword, result })
+      }
+      const recordsByProduct = new Map()
+      searches.forEach(search => search.result.items.forEach((product, index) => {
+        const record = recordsByProduct.get(product.providerProductId) || { product, matches: [] }
+        record.matches.push({ keyword: search.keyword, position: index + 1, resultCount: search.result.items.length })
+        recordsByProduct.set(product.providerProductId, record)
+      }))
+      const ranked = rankProductCandidates([...recordsByProduct.values()], run.inputSnapshot.keywords)
+      await store.persistProductSearchSuccess(runId, searches, ranked)
+      return { productSearchRunId: runId, received: searches.reduce((sum, search) => sum + search.result.items.length, 0), candidates: ranked.length }
+    } catch (error) {
+      try { await store.persistProductSearchFailure(runId, error) }
+      catch { console.error('[revenue-lab] Product search failure state could not be persisted', { runId }) }
+      throw error instanceof RevenueJobError ? error : new RevenueJobError(error?.code || 'PRODUCT_SEARCH_FAILED', 'Product candidate search failed')
+    }
+  }
+
   return new Map([
     ['youtube.collect', collectYouTube],
     ['youtube.track', trackYouTube],
     ['opportunity.analyze', analyzeOpportunity],
+    ['product.search', searchProducts],
   ])
 }
 

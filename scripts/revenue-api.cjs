@@ -12,6 +12,10 @@ function configurationStatus(env = process.env) {
   return { configured: missing.length === 0, missing, analysis: {
     configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
     requestedModel: env.REVENUE_LAB_OPENAI_MODEL || DEFAULT_MODEL,
+  }, products: {
+    configured: Boolean(env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY),
+    missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'].filter(key => !env[key]),
+    provider: 'rakuten-ichiba', providerApiVersion: '20260701', affiliateConfigured: Boolean(env.RAKUTEN_AFFILIATE_ID),
   } }
 }
 
@@ -126,6 +130,15 @@ function createRevenueApi({
         const result = await getStore().enqueueAnalysisCandidates(limit, { model: config.analysis.requestedModel })
         return reply(res, result.records.some(record => record.created) ? 201 : 200, { data: result })
       }
+      const productSearchMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/product-search\/jobs$/i)
+      if (req.method === 'POST' && productSearchMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(productSearchMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'analysis idが正しくありません。')
+        if (!config.products.configured) return fail(res, 503, 'RAKUTEN_NOT_CONFIGURED', '楽天商品検索の環境変数を設定してください。', { missing: config.products.missing })
+        await body(req)
+        const result = await getStore().enqueueProductSearch(productSearchMatch[1], today())
+        return reply(res, result.created ? 201 : 200, { data: result })
+      }
       const reviewMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/reviews$/i)
       if (req.method === 'POST' && reviewMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
@@ -136,6 +149,17 @@ function createRevenueApi({
         }
         if (input.notes != null && (typeof input.notes !== 'string' || input.notes.length > 1000)) return fail(res, 400, 'VALIDATION_ERROR', 'メモは1000文字以内です。')
         return reply(res, 201, { data: await getStore().createAnalysisReview(reviewMatch[1], input) })
+      }
+      const productDecisionMatch = pathname.match(/^\/product-candidates\/([0-9a-f-]{36})\/decisions$/i)
+      if (req.method === 'POST' && productDecisionMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(productDecisionMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'candidate idが正しくありません。')
+        const input = await body(req)
+        if (!UUID.test(input.analysisId || '') || !['selected_for_research', 'shortlisted', 'hold', 'rejected'].includes(input.decision)) {
+          return fail(res, 400, 'VALIDATION_ERROR', '商品候補の判断内容を確認してください。')
+        }
+        if (input.notes != null && (typeof input.notes !== 'string' || input.notes.length > 1000)) return fail(res, 400, 'VALIDATION_ERROR', 'メモは1000文字以内です。')
+        return reply(res, 201, { data: await getStore().createProductDecision(productDecisionMatch[1], input.analysisId, input) })
       }
       if (!['GET', 'PUT', 'POST'].includes(req.method)) {
         res.setHeader('Allow', 'GET, PUT, POST')

@@ -55,4 +55,16 @@ export function createRevenueAnalysisReview(analysisId, decision, agreement, not
   })
 }
 
+export function enqueueProductSearch(analysisId) {
+  return request(`/analyses/${encodeURIComponent(analysisId)}/product-search/jobs`, {
+    method: 'POST', body: JSON.stringify({}),
+  })
+}
+
+export function createProductCandidateDecision(candidateId, analysisId, decision, notes = null) {
+  return request(`/product-candidates/${encodeURIComponent(candidateId)}/decisions`, {
+    method: 'POST', body: JSON.stringify({ analysisId, decision, notes }),
+  })
+}
+
 export { request as revenueRequest }

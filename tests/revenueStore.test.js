@@ -123,6 +123,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
       if (url.includes('/ai_opportunity_analyses?')) return response([{
         id: 'analysis-1', analysis_request_id: 'request-1', output_json: { recommendation: 'hold' },
       }])
+      if (url.includes('/product_search_runs?')) return response([])
       throw new Error(`Unexpected request: ${url} ${options?.method}`)
     })
     const store = createSupabaseStore({
@@ -147,7 +148,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
       usage: { inputTokens: 120, cachedInputTokens: 0, outputTokens: 80, reasoningTokens: 20 },
       output: { recommendation: 'hold' },
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(8)
+    expect(fetchImpl).toHaveBeenCalledTimes(9)
   })
 
   it('restricts Discovery previous snapshots to discovery capture kind', async () => {

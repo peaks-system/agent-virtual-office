@@ -5,6 +5,7 @@ const { createLocalWorker } = require('./worker.cjs')
 const { createSupabaseStore } = require('./supabase-store.cjs')
 const { createYouTubeClient } = require('./youtube-client.cjs')
 const { createOpenAIAnalysisClient } = require('./openai-client.cjs')
+const { createRakutenProductProvider } = require('./providers/rakuten-product-provider.cjs')
 
 const REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY']
 
@@ -12,6 +13,7 @@ function createRevenueRuntime({
   env = process.env,
   store,
   youtube,
+  productProvider,
   workerFactory = createLocalWorker,
 } = {}) {
   const missing = REQUIRED_ENV.filter(key => !env[key])
@@ -31,7 +33,10 @@ function createRevenueRuntime({
   })
   const runtimeYouTube = youtube || createYouTubeClient({ apiKey: env.YOUTUBE_API_KEY })
   const analyst = env.OPENAI_API_KEY ? createOpenAIAnalysisClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_OPENAI_MODEL || undefined }) : null
-  const handlers = createJobHandlers({ store: runtimeStore, youtube: runtimeYouTube, analyst })
+  const rakuten = productProvider || (env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY
+    ? createRakutenProductProvider({ applicationId: env.RAKUTEN_APPLICATION_ID, accessKey: env.RAKUTEN_ACCESS_KEY, affiliateId: env.RAKUTEN_AFFILIATE_ID })
+    : null)
+  const handlers = createJobHandlers({ store: runtimeStore, youtube: runtimeYouTube, analyst, productProvider: rakuten })
   const worker = workerFactory({ store: runtimeStore, handlers })
   let started = false
 

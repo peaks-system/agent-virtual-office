@@ -1,9 +1,9 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { RevenueLabView, nextCollectionLabel, opportunityReasons, queryNeedsScores, scoreLabel, scoreStrength, velocityPresentation, videoReviewUrl } from '../src/components/RevenueLabDashboard'
+import { RevenueLabView, nextCollectionLabel, opportunityReasons, queryNeedsScores, safeRakutenUrl, scoreLabel, scoreStrength, velocityPresentation, videoReviewUrl } from '../src/components/RevenueLabDashboard'
 
-const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onAnalyze: vi.fn(), onReview: vi.fn(), onSave: vi.fn() }
+const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onAnalyze: vi.fn(), onReview: vi.fn(), onProductSearch: vi.fn(), onProductDecision: vi.fn(), onSave: vi.fn() }
 
 describe('Revenue Lab dashboard', () => {
   it('formats saved scores and detects incomplete human inputs', () => {
@@ -156,5 +156,26 @@ describe('Revenue Lab dashboard', () => {
     expect(markup).toContain('成長仮説')
     expect(markup).toContain('確信度 中')
     expect(markup.indexOf('First')).toBeLessThan(markup.indexOf('Second'))
+  })
+
+  it('renders provider facts, deterministic score components, and research-only selection wording', () => {
+    const opportunity = { id: 'a', sourceItemId: 'item-a', youtubeVideoId: 'a', title: 'First', opportunityScore: 90, breakoutScore: 88, velocityMode: 'estimated_lifetime', percentilePopulationSize: 25 }
+    const output = { product_or_theme_name: '便利グッズ', video_subject: '候補', recommendation: 'adopt', recommendation_reason: '調査', evidence_quality: 'limited', growth_hypotheses: [], product_search_keywords: ['便利グッズ'], similar_product_categories: [], video_ideas: [], hooks: [] }
+    const candidate = { id: 'candidate-1', rankPosition: 1, title: '実在商品', shopName: '楽天ショップ', productUrl: 'https://item.rakuten.co.jp/shop/item', imageUrls: [], priceAmount: 3980, reviewAverage: 4.5, reviewCount: 20, affiliateRate: 2, candidateScore: 82.4, scoreVersion: 'product-rakuten-v1', keywordMatchScore: 100, searchCoverageScore: 100, providerRankScore: 100, reviewCountScore: 50, reviewAverageScore: 90, affiliateRateScore: 50 }
+    const markup = renderToStaticMarkup(<RevenueLabView state={{ config: { configured: true, missing: [], analysis: { configured: true }, products: { configured: true } }, queries: [], opportunities: [opportunity], trackingOpportunities: [], analyses: [{ id: 'analysis-1', sourceItemId: 'item-a', status: 'succeeded', output }], productSearches: [{ id: 'run-1', analysisId: 'analysis-1', status: 'succeeded', providerApiVersion: '20260701', fetchedAt: '2026-10-09T00:00:00Z', keywords: ['便利グッズ'], candidates: [candidate] }], latestJob: null }} {...handlers} />)
+    expect(markup).toContain('Product Candidate Finder')
+    expect(markup).toContain('API 20260701')
+    expect(markup).toContain('実在商品')
+    expect(markup).toContain('¥3,980')
+    expect(markup).toContain('キーワード一致')
+    expect(markup).toContain('次の調査対象に選ぶ')
+    expect(markup).toContain('商品紹介・公開の承認ではありません')
+    expect(markup).toContain('target="_blank"')
+  })
+
+  it('allows only HTTPS Rakuten links from provider data', () => {
+    expect(safeRakutenUrl('https://item.rakuten.co.jp/shop/item')).toContain('rakuten.co.jp')
+    expect(safeRakutenUrl('javascript:alert(1)')).toBeNull()
+    expect(safeRakutenUrl('https://example.com/item')).toBeNull()
   })
 })

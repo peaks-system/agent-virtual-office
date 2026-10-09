@@ -2,6 +2,8 @@
 
 const { inputFingerprint } = require('./canonical-json.cjs')
 const { DEFAULT_MODEL, PROMPT_VERSION, SCHEMA_VERSION } = require('./analysis-schema.cjs')
+const { SCORE_PARAMETERS: PRODUCT_SCORE_PARAMETERS, SCORE_VERSION: PRODUCT_SCORE_VERSION } = require('./product-ranking.cjs')
+const { API_VERSION: RAKUTEN_API_VERSION, PROVIDER_ID: RAKUTEN_PROVIDER_ID } = require('./providers/rakuten-product-provider.cjs')
 
 const PROFILE = 'revenue_lab'
 
@@ -100,6 +102,23 @@ function mergeAnalysisCandidates(discovery = [], tracking = [], limit = 1) {
     })
   }
   return [...candidates.values()].slice(0, Math.max(1, Math.min(Number(limit) || 1, 6)))
+}
+
+function productSearchTerms(output) {
+  const ordered = [
+    ...(Array.isArray(output?.product_search_keywords) ? output.product_search_keywords : []),
+    output?.product_or_theme_name,
+    ...(Array.isArray(output?.similar_product_categories) ? output.similar_product_categories : []),
+  ]
+  const seen = new Set()
+  const terms = []
+  for (const value of ordered) {
+    const term = String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ')
+    if (!term || term.length > 128 || seen.has(term)) continue
+    seen.add(term); terms.push(term)
+    if (terms.length === 3) break
+  }
+  return terms
 }
 
 function createSupabaseStore({
@@ -236,6 +255,64 @@ function createSupabaseStore({
     })
   }
 
+  async function productSearchesForAnalyses(analysisIds) {
+    if (!analysisIds.length) return []
+    const runs = await request(
+      `product_search_runs?analysis_id=in.(${encodeURIComponent(analysisIds.join(','))})&select=*&order=created_at.desc&limit=30`,
+    )
+    const latestByAnalysis = new Map()
+    for (const run of runs || []) if (!latestByAnalysis.has(run.analysis_id)) latestByAnalysis.set(run.analysis_id, run)
+    const latestRuns = [...latestByAnalysis.values()]
+    const runIds = latestRuns.map(run => run.id)
+    const candidateRows = runIds.length ? await request(
+      `product_candidates?product_search_run_id=in.(${encodeURIComponent(runIds.join(','))})&rank_position=lte.5&select=*&order=rank_position.asc`,
+    ) : []
+    const snapshotIds = candidateRows.map(row => row.offer_snapshot_id)
+    const snapshots = snapshotIds.length ? await request(
+      `product_offer_snapshots?id=in.(${encodeURIComponent(snapshotIds.join(','))})&select=*`,
+    ) : []
+    const snapshotById = new Map(snapshots.map(row => [row.id, row]))
+    const candidateIds = candidateRows.map(row => row.id)
+    const decisions = candidateIds.length ? await request(
+      `product_candidate_decisions?product_candidate_id=in.(${encodeURIComponent(candidateIds.join(','))})&select=*&order=created_at.desc`,
+    ) : []
+    const latestDecisionByCandidate = new Map()
+    for (const decision of decisions || []) if (!latestDecisionByCandidate.has(decision.product_candidate_id)) latestDecisionByCandidate.set(decision.product_candidate_id, decision)
+    const candidatesByRun = new Map()
+    for (const row of candidateRows || []) {
+      const snapshot = snapshotById.get(row.offer_snapshot_id)
+      if (!snapshot) continue
+      const records = candidatesByRun.get(row.product_search_run_id) || []
+      records.push({
+        id: row.id, rankPosition: row.rank_position, scoreVersion: row.score_version,
+        candidateScore: Number(row.candidate_score), keywordMatchScore: Number(row.keyword_match_score),
+        searchCoverageScore: Number(row.search_coverage_score), providerRankScore: Number(row.provider_rank_score),
+        reviewCountScore: Number(row.review_count_score), reviewAverageScore: Number(row.review_average_score),
+        affiliateRateScore: Number(row.affiliate_rate_score), matchedKeywordCount: row.matched_keyword_count,
+        scoreParameters: row.score_parameters, matchEvidence: row.match_evidence,
+        title: snapshot.title, catchcopy: snapshot.catchcopy, productUrl: snapshot.product_url,
+        affiliateUrl: snapshot.affiliate_url, imageUrls: snapshot.image_urls || [],
+        priceAmount: snapshot.price_amount == null ? null : Number(snapshot.price_amount), currency: snapshot.currency,
+        availability: snapshot.availability, shopId: snapshot.shop_id, shopName: snapshot.shop_name,
+        shopUrl: snapshot.shop_url, genreId: snapshot.genre_id,
+        reviewCount: snapshot.review_count == null ? null : Number(snapshot.review_count),
+        reviewAverage: snapshot.review_average == null ? null : Number(snapshot.review_average),
+        affiliateRate: snapshot.affiliate_rate == null ? null : Number(snapshot.affiliate_rate),
+        capturedAt: snapshot.captured_at, decision: latestDecisionByCandidate.get(row.id) || null,
+      })
+      candidatesByRun.set(row.product_search_run_id, records)
+    }
+    return latestRuns.map(run => ({
+      id: run.id, analysisId: run.analysis_id, status: run.status, provider: run.provider,
+      providerApiVersion: run.provider_api_version, scoreVersion: run.score_version,
+      inputFingerprint: run.input_fingerprint, keywords: run.input_snapshot?.keywords || [],
+      requestedCount: run.requested_count, receivedCount: run.received_count,
+      candidateCount: run.candidate_count, cacheExpiresAt: run.cache_expires_at,
+      fetchedAt: run.fetched_at, errorCode: run.error_code,
+      candidates: (candidatesByRun.get(run.id) || []).sort((a, b) => a.rankPosition - b.rankPosition),
+    }))
+  }
+
   async function dashboard(limit = 3) {
     const data = await rpc('dashboard_snapshot', { p_limit: limit })
     const [opportunities, runs, trackingRuns] = await Promise.all([
@@ -296,11 +373,13 @@ function createSupabaseStore({
         output: output?.output_json || null,
       }
     })
+    const productSearches = await productSearchesForAnalyses(analyses.map(analysis => analysis.id).filter(Boolean))
     return {
       queries: (data?.queries || []).map(queryFromRow),
       opportunities,
       trackingOpportunities,
       analyses,
+      productSearches,
       latestJob: data?.latest_job ? {
         id: data.latest_job.id,
         jobType: data.latest_job.job_type,
@@ -418,6 +497,116 @@ function createSupabaseStore({
       prefer: 'return=representation',
     })
     return rows?.[0] || null
+  }
+
+  async function enqueueProductSearch(analysisId, requestedDay) {
+    const analyses = await request(`ai_opportunity_analyses?id=eq.${encodeURIComponent(analysisId)}&select=id,output_json&limit=1`)
+    const analysis = analyses?.[0]
+    if (!analysis?.output_json) {
+      const error = new RevenueStoreError('ANALYSIS_NOT_FOUND', 'Successful AI analysis was not found', 404)
+      throw error
+    }
+    const keywords = productSearchTerms(analysis.output_json)
+    if (!keywords.length) throw new RevenueStoreError('PRODUCT_KEYWORDS_MISSING', 'AI analysis has no usable product search terms', 400)
+    const input = {
+      analysis_id: analysis.id,
+      provider: RAKUTEN_PROVIDER_ID,
+      provider_api_version: RAKUTEN_API_VERSION,
+      score_version: PRODUCT_SCORE_VERSION,
+      availability: 1,
+      hits_per_keyword: 10,
+      keywords,
+      analysis_output: {
+        product_or_theme_name: analysis.output_json.product_or_theme_name,
+        similar_product_categories: analysis.output_json.similar_product_categories || [],
+        product_search_keywords: analysis.output_json.product_search_keywords || [],
+      },
+    }
+    return rpc('enqueue_product_search', {
+      p_analysis_id: analysis.id, p_input_fingerprint: inputFingerprint(input), p_input_snapshot: input,
+      p_provider: RAKUTEN_PROVIDER_ID, p_provider_api_version: RAKUTEN_API_VERSION,
+      p_score_version: PRODUCT_SCORE_VERSION, p_requested_day: requestedDay,
+    })
+  }
+
+  async function getProductSearchRun(id) {
+    const rows = await request(`product_search_runs?id=eq.${encodeURIComponent(id)}&select=*&limit=1`)
+    const row = rows?.[0]
+    return row ? { id: row.id, analysisId: row.analysis_id, projectId: row.project_id, inputSnapshot: row.input_snapshot,
+      provider: row.provider, providerApiVersion: row.provider_api_version, scoreVersion: row.score_version } : null
+  }
+
+  async function markProductSearchRunning(id) {
+    await request(`product_search_runs?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'running', error_code: null, updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistProductSearchSuccess(id, searches, ranked) {
+    const requestRows = await request('product_search_requests?select=id,keyword_index', {
+      method: 'POST', body: searches.map((search, index) => ({
+        product_search_run_id: id, keyword: search.keyword, keyword_index: index + 1,
+        requested_hits: search.requestedHits, received_count: search.result.items.length,
+        status: 'succeeded', provider_metadata: search.result.requestMetadata || {}, fetched_at: search.result.fetchedAt,
+      })), prefer: 'return=representation',
+    })
+    const requestIdByIndex = new Map(requestRows.map(row => [Number(row.keyword_index), row.id]))
+    const products = [...new Map(searches.flatMap(search => search.result.items).map(product => [product.providerProductId, product])).values()]
+    const productRows = await request('catalog_products?on_conflict=provider,provider_product_id&select=id,provider_product_id', {
+      method: 'POST', body: products.map(product => ({ provider: product.provider, provider_product_id: product.providerProductId, updated_at: new Date().toISOString() })),
+      prefer: 'resolution=merge-duplicates,return=representation',
+    })
+    const productIdByExternal = new Map(productRows.map(row => [row.provider_product_id, row.id]))
+    const snapshotInputs = []
+    searches.forEach((search, searchIndex) => search.result.items.forEach(product => snapshotInputs.push({
+      catalog_product_id: productIdByExternal.get(product.providerProductId), product_search_request_id: requestIdByIndex.get(searchIndex + 1),
+      provider_api_version: search.result.apiVersion, captured_at: product.capturedAt, title: product.title,
+      catchcopy: product.catchcopy, product_url: product.productUrl, affiliate_url: product.affiliateUrl,
+      image_urls: product.imageUrls, price_amount: product.priceAmount, currency: product.currency,
+      availability: product.availability, shop_id: product.shop.id, shop_name: product.shop.name, shop_url: product.shop.url,
+      genre_id: product.genreId, review_count: product.reviewCount, review_average: product.reviewAverage,
+      affiliate_rate: product.affiliateRate, provider_facts: product.providerFacts,
+    })))
+    const snapshotRows = await request('product_offer_snapshots?select=id,catalog_product_id', {
+      method: 'POST', body: snapshotInputs, prefer: 'return=representation',
+    })
+    const firstSnapshotByProduct = new Map()
+    for (const snapshot of snapshotRows) if (!firstSnapshotByProduct.has(snapshot.catalog_product_id)) firstSnapshotByProduct.set(snapshot.catalog_product_id, snapshot.id)
+    await request('product_candidates', {
+      method: 'POST', body: ranked.map(candidate => {
+        const productId = productIdByExternal.get(candidate.product.providerProductId)
+        return {
+          product_search_run_id: id, catalog_product_id: productId, offer_snapshot_id: firstSnapshotByProduct.get(productId),
+          score_version: candidate.scoreVersion, keyword_match_score: candidate.savedComponents.keywordMatch,
+          search_coverage_score: candidate.savedComponents.searchCoverage, provider_rank_score: candidate.savedComponents.providerRank,
+          review_count_score: candidate.savedComponents.reviewCount, review_average_score: candidate.savedComponents.reviewAverage,
+          affiliate_rate_score: candidate.savedComponents.affiliateRate, candidate_score: candidate.candidateScore,
+          candidate_score_raw: candidate.candidateScoreRaw, matched_keyword_count: candidate.matchedKeywordCount,
+          rank_position: candidate.rankPosition, score_parameters: PRODUCT_SCORE_PARAMETERS,
+          match_evidence: { matched_keywords: candidate.matchedKeywords, matches: candidate.matches },
+        }
+      }), prefer: 'return=minimal',
+    })
+    const fetchedAt = searches.map(search => search.result.fetchedAt).sort().at(-1) || new Date().toISOString()
+    await request(`product_search_runs?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'succeeded', received_count: snapshotInputs.length, candidate_count: ranked.length,
+        fetched_at: fetchedAt, cache_expires_at: new Date(new Date(fetchedAt).getTime() + 86_400_000).toISOString(),
+        completed_at: new Date().toISOString(), updated_at: new Date().toISOString(), error_code: null }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistProductSearchFailure(id, error) {
+    await request(`product_search_runs?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'failed', error_code: String(error?.code || 'PRODUCT_SEARCH_FAILED').slice(0, 80),
+        completed_at: new Date().toISOString(), updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function createProductDecision(candidateId, analysisId, decision) {
+    return rpc('record_product_candidate_decision', {
+      p_candidate_id: candidateId, p_analysis_id: analysisId,
+      p_decision: decision.decision, p_notes: decision.notes || null,
+    })
   }
 
   async function claimNext(workerId, leaseSeconds) {
@@ -697,10 +886,12 @@ function createSupabaseStore({
   return {
     claimNext, dashboard, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
     getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
+    enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
+    persistProductSearchFailure, createProductDecision,
     listQueries, listTrackingCandidates, markTrackingMissing, markTrackingSeen, failTrackingRuns,
     persistCollection, persistTrackingRun, persistTrackingSnapshots, previousVideoSnapshots,
     startRun, startTrackingRun, updateQuery,
   }
 }
 
-module.exports = { PROFILE, RevenueStoreError, analysisContext, createSupabaseStore, mergeAnalysisCandidates, opportunityFromRow, queryFromRow }
+module.exports = { PROFILE, RevenueStoreError, analysisContext, createSupabaseStore, mergeAnalysisCandidates, opportunityFromRow, productSearchTerms, queryFromRow }

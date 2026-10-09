@@ -87,6 +87,29 @@ describe('Revenue Lab API', () => {
     expect((await fetch(`${origin}/api/revenue/analysis/jobs`, { method: 'POST', headers: jsonHeaders, body: '{"limit":7}' })).status).toBe(400)
   })
 
+  it('requires Rakuten server credentials and enqueues exactly one analysis product search', async () => {
+    const store = { enqueueProductSearch: vi.fn(async () => ({ id: 'run-1', status: 'pending', created: true, cached: false })) }
+    const base = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test', YOUTUBE_API_KEY: 'test' }
+    const missingOrigin = await fixture({ store, env: base })
+    expect((await fetch(`${missingOrigin}/api/revenue/analyses/${uuid}/product-search/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })).status).toBe(503)
+    const env = { ...base, RAKUTEN_APPLICATION_ID: 'app', RAKUTEN_ACCESS_KEY: 'key' }
+    const origin = await fixture({ store, env })
+    const response = await fetch(`${origin}/api/revenue/analyses/${uuid}/product-search/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })
+    expect(response.status).toBe(201)
+    expect(store.enqueueProductSearch).toHaveBeenCalledWith(uuid, '2026-10-08')
+    expect(configurationStatus(env).products).toMatchObject({ configured: true, providerApiVersion: '20260701', affiliateConfigured: false })
+  })
+
+  it('validates and saves an append-only product research decision', async () => {
+    const store = { createProductDecision: vi.fn(async (_candidate, _analysis, input) => ({ id: 'decision-1', ...input })) }
+    const origin = await fixture({ store })
+    const invalid = await fetch(`${origin}/api/revenue/product-candidates/${uuid}/decisions`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ analysisId: uuid, decision: 'publish' }) })
+    expect(invalid.status).toBe(400)
+    const response = await fetch(`${origin}/api/revenue/product-candidates/${uuid}/decisions`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ analysisId: uuid, decision: 'selected_for_research' }) })
+    expect(response.status).toBe(201)
+    expect(store.createProductDecision).toHaveBeenCalledWith(uuid, uuid, expect.objectContaining({ decision: 'selected_for_research' }))
+  })
+
   it('uses a consistent safe error envelope for malformed JSON and service failures', async () => {
     const store = { dashboard: vi.fn(async () => { throw Object.assign(new Error('db secret details'), { code: 'SUPABASE_HTTP_ERROR' }) }) }
     const origin = await fixture({ store })

@@ -107,6 +107,38 @@ describe('Revenue Lab job handler and local worker', () => {
     expect(store.persistAnalysisSuccess).toHaveBeenCalledOnce()
   })
 
+  it('searches one product analysis sequentially and persists deterministic candidates', async () => {
+    const store = {
+      getProductSearchRun: vi.fn(async () => ({ id: 'product-run', provider: 'rakuten-ichiba', providerApiVersion: '20260701', inputSnapshot: { keywords: ['便利グッズ', '収納'], hits_per_keyword: 10 } })),
+      markProductSearchRunning: vi.fn(async () => {}), persistProductSearchSuccess: vi.fn(async () => {}), persistProductSearchFailure: vi.fn(async () => {}),
+    }
+    const productProvider = { id: 'rakuten-ichiba', apiVersion: '20260701', search: vi.fn(async ({ keyword }) => ({
+      apiVersion: '20260701', fetchedAt: capturedAt.toISOString(), requestMetadata: { availability: 1 },
+      items: [{ providerProductId: 'shop:1', title: `便利グッズ ${keyword}`, catchcopy: '', reviewCount: 10, reviewAverage: 4, affiliateRate: 1 }],
+    })) }
+    const sleep = vi.fn(async () => {})
+    const handler = createJobHandlers({ store, youtube: {}, productProvider, sleep }).get('product.search')
+    await expect(handler({ id: 'job-product', payload: { product_search_run_id: 'product-run' } })).resolves.toMatchObject({ candidates: 1, received: 2 })
+    expect(productProvider.search).toHaveBeenCalledTimes(2)
+    expect(sleep).toHaveBeenCalledWith(1000)
+    expect(store.persistProductSearchSuccess.mock.calls[0][2][0]).toMatchObject({ scoreVersion: 'product-rakuten-v1', matchedKeywordCount: 2 })
+  })
+
+  it('backs off only retryable product-provider failures', async () => {
+    const store = {
+      getProductSearchRun: vi.fn(async () => ({ id: 'run', provider: 'rakuten-ichiba', providerApiVersion: '20260701', inputSnapshot: { keywords: ['便利'], hits_per_keyword: 10 } })),
+      markProductSearchRunning: vi.fn(async () => {}), persistProductSearchSuccess: vi.fn(async () => {}), persistProductSearchFailure: vi.fn(async () => {}),
+    }
+    const search = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('limited'), { code: 'RATE_LIMITED' }))
+      .mockResolvedValue({ apiVersion: '20260701', fetchedAt: capturedAt.toISOString(), requestMetadata: {}, items: [] })
+    const sleep = vi.fn(async () => {})
+    const handler = createJobHandlers({ store, youtube: {}, productProvider: { id: 'rakuten-ichiba', apiVersion: '20260701', search }, sleep }).get('product.search')
+    await handler({ id: 'job', payload: { product_search_run_id: 'run' } })
+    expect(search).toHaveBeenCalledTimes(2)
+    expect(sleep).toHaveBeenCalledWith(1000)
+  })
+
   it('marks a run failed and exposes only a sealed job error', async () => {
     const store = {
       getQuery: vi.fn(async () => ({ id: 'q1', sourceId: 's1', queryText: 'x', buyerIntent: 50, commerceFit: 50, enabled: true, maxResults: 1 })),

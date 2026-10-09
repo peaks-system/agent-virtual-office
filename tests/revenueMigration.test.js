@@ -7,8 +7,22 @@ const trackingMigration = readFileSync('supabase/migrations/20261009100000_reven
 const trackingRollback = readFileSync('supabase/rollback/20261009100000_revenue_lab_tracking_v1_down.sql', 'utf8')
 const analysisMigration = readFileSync('supabase/migrations/20261009150000_revenue_lab_ai_analyst_v1.sql', 'utf8')
 const analysisRollback = readFileSync('supabase/rollback/20261009150000_revenue_lab_ai_analyst_v1_down.sql', 'utf8')
+const productMigration = readFileSync('supabase/migrations/20261009200000_revenue_lab_product_candidate_finder_v1.sql', 'utf8')
+const productRollback = readFileSync('supabase/rollback/20261009200000_revenue_lab_product_candidate_finder_v1_down.sql', 'utf8')
 
 describe('Revenue Lab Supabase migration', () => {
+  it('adds reversible provider-fact product tables and a cached product.search job', () => {
+    for (const table of ['product_search_runs', 'product_search_requests', 'catalog_products', 'product_offer_snapshots', 'product_candidates', 'product_candidate_decisions']) {
+      expect(productMigration).toContain(`create table revenue_lab.${table}`)
+      expect(productRollback).toContain(`drop table if exists revenue_lab.${table}`)
+    }
+    expect(productMigration).toContain("'product.search'")
+    expect(productMigration).toContain("provider_api_version = '20260701'")
+    expect(productMigration).toContain("score_version = 'product-rakuten-v1'")
+    expect(productMigration).toContain('cache_expires_at > now()')
+    expect(productMigration).toContain('Product candidate does not belong to analysis')
+    expect(productMigration).not.toMatch(/update revenue_lab\.(?:opportunities|tracking_opportunities|ai_opportunity_analyses)/)
+  })
   it('adds an isolated AI layer with fingerprint identity and reversible tables', () => {
     expect(analysisMigration).toContain("'opportunity.analyze'")
     expect(analysisMigration).toContain('unique (project_id, source_item_id, input_fingerprint, prompt_version, schema_version, requested_model)')
