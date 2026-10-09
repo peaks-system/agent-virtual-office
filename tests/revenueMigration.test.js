@@ -9,6 +9,7 @@ const analysisMigration = readFileSync('supabase/migrations/20261009150000_reven
 const analysisRollback = readFileSync('supabase/rollback/20261009150000_revenue_lab_ai_analyst_v1_down.sql', 'utf8')
 const productMigration = readFileSync('supabase/migrations/20261009200000_revenue_lab_product_candidate_finder_v1.sql', 'utf8')
 const productRollback = readFileSync('supabase/rollback/20261009200000_revenue_lab_product_candidate_finder_v1_down.sql', 'utf8')
+const productRpcPrivilegesMigration = readFileSync('supabase/migrations/20261009210000_revenue_lab_product_rpc_privileges.sql', 'utf8')
 
 describe('Revenue Lab Supabase migration', () => {
   it('adds reversible provider-fact product tables and a cached product.search job', () => {
@@ -22,6 +23,17 @@ describe('Revenue Lab Supabase migration', () => {
     expect(productMigration).toContain('cache_expires_at > now()')
     expect(productMigration).toContain('Product candidate does not belong to analysis')
     expect(productMigration).not.toMatch(/update revenue_lab\.(?:opportunities|tracking_opportunities|ai_opportunity_analyses)/)
+  })
+  it('restricts Product Candidate RPC execution to service_role', () => {
+    for (const signature of [
+      'revenue_lab.enqueue_product_search(uuid, text, jsonb, text, text, text, date)',
+      'revenue_lab.record_product_candidate_decision(uuid, uuid, text, text)',
+    ]) {
+      expect(productRpcPrivilegesMigration).toContain(`revoke execute on function ${signature}`)
+      expect(productRpcPrivilegesMigration).toContain('from public, anon, authenticated')
+      expect(productRpcPrivilegesMigration).toContain(`grant execute on function ${signature}`)
+      expect(productRpcPrivilegesMigration).toContain('to service_role')
+    }
   })
   it('adds an isolated AI layer with fingerprint identity and reversible tables', () => {
     expect(analysisMigration).toContain("'opportunity.analyze'")
