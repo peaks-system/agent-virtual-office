@@ -140,7 +140,7 @@ describe('Revenue Lab dashboard', () => {
       { id: 'b', sourceItemId: 'item-b', youtubeVideoId: 'b', title: 'Second', opportunityScore: 80, breakoutScore: 78, velocityMode: 'estimated_lifetime', percentilePopulationSize: 25 },
     ]
     const output = {
-      product_or_theme_name: '便利グッズ', video_subject: '商品紹介候補', recommendation: 'hold',
+      product_or_theme_name: '便利グッズ', video_subject: '商品紹介候補', recommendation: 'adopt',
       recommendation_reason: '追加の商品確認が必要', evidence_quality: 'limited',
       growth_hypotheses: [{ hypothesis: '検索テーマとの一致が考えられる', confidence: 'medium', supporting_indicators: ['query_match'] }],
       product_search_keywords: ['便利グッズ'], similar_product_categories: ['生活雑貨'], video_ideas: ['比較'], hooks: ['本当に便利？'],
@@ -151,6 +151,8 @@ describe('Revenue Lab dashboard', () => {
     }} {...handlers} />)
     expect(markup).toContain('TOP1をAI分析')
     expect(markup).toContain('保存済みメタデータだけを使った解釈')
+    expect(markup).toContain('次の調査対象として採用')
+    expect(markup).toContain('制作・商品採用の確定ではなく')
     expect(markup).toContain('成長仮説')
     expect(markup).toContain('確信度 中')
     expect(markup.indexOf('First')).toBeLessThan(markup.indexOf('Second'))

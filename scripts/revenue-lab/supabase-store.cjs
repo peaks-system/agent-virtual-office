@@ -286,8 +286,13 @@ function createSupabaseStore({
       const output = outputByRequest.get(row.id)
       return {
         id: output?.id || null, requestId: row.id, sourceItemId: row.source_item_id, status: row.status,
+        inputSnapshotId: row.input_snapshot_id, inputFingerprint: row.input_fingerprint,
         promptVersion: row.prompt_version, schemaVersion: row.schema_version, requestedModel: row.requested_model,
         resolvedModel: row.resolved_model, generatedAt: row.generated_at,
+        usage: {
+          inputTokens: row.input_tokens, cachedInputTokens: row.cached_input_tokens,
+          outputTokens: row.output_tokens, reasoningTokens: row.reasoning_tokens,
+        },
         output: output?.output_json || null,
       }
     })

@@ -27,6 +27,7 @@ Add a metadata-only interpretation layer over the existing Discovery and Trackin
 - AC-10: The dashboard presents analysis beside the existing ranked card without reordering it, and distinguishes cached, pending, running, succeeded, and failed states.
 - AC-11: `OPENAI_API_KEY` is server/worker-only and optional for Phase 1 collection and tracking.
 - AC-12: Tests pin canonicalization, cache identity, strict schema, unsupported-claim rejection, one-item initial enqueue, six-item maximum, score/rank immutability, API validation, and UI states.
+- AC-13: The `adopt` recommendation means “adopt as the next research target”; it never means automatic product selection, production, publishing, or affiliate execution.
 
 ## Data Contract
 

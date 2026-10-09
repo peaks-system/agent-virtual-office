@@ -112,7 +112,7 @@ function QueryEditor({ query, busy, onSave }) {
   </form>
 }
 
-const recommendationLabel = value => ({ adopt: '採用', hold: '保留', exclude: '除外' })[value] || '—'
+const recommendationLabel = value => ({ adopt: '次の調査対象として採用', hold: '保留', exclude: '除外' })[value] || '—'
 const confidenceLabel = value => ({ high: '高', medium: '中', low: '低' })[value] || value
 
 function AnalysisPanel({ analysis, busy, onReview }) {
@@ -122,6 +122,7 @@ function AnalysisPanel({ analysis, busy, onReview }) {
   return <section className="revenue-analysis is-succeeded" aria-label="AI Opportunity Analyst">
     <div className="revenue-analysis-heading"><strong>AI Opportunity Analyst</strong><span>{recommendationLabel(output.recommendation)}</span></div>
     <p className="revenue-analysis-note">保存済みメタデータだけを使った解釈です。動画本文・映像・字幕・商品リンクは確認していません。</p>
+    {output.recommendation === 'adopt' && <p className="revenue-analysis-note"><strong>「採用」</strong>は制作・商品採用の確定ではなく、次の人間調査へ進める意味です。</p>}
     <dl><div><dt>商品・テーマ</dt><dd>{output.product_or_theme_name}</dd></div><div><dt>動画の主題候補</dt><dd>{output.video_subject}</dd></div><div><dt>推奨理由</dt><dd>{output.recommendation_reason}</dd></div></dl>
     <strong>成長仮説</strong><ul>{output.growth_hypotheses?.map((hypothesis, index) => <li key={`${hypothesis.hypothesis}-${index}`}><b>確信度 {confidenceLabel(hypothesis.confidence)}</b> {hypothesis.hypothesis}<small>{hypothesis.supporting_indicators?.join(' / ')}</small></li>)}</ul>
     <details><summary>企画・商品探索の詳細</summary><dl>

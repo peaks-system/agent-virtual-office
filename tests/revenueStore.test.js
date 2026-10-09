@@ -117,6 +117,8 @@ describe('Revenue Lab Supabase store snapshots', () => {
       if (url.includes('/ai_analysis_requests?')) return response([{
         id: 'request-1', source_item_id: 'video-item', status: 'succeeded', prompt_version: 'opportunity-analyst-v1',
         schema_version: 'opportunity-analysis-v1', requested_model: 'gpt-test', resolved_model: 'gpt-test', generated_at: '2026-10-08T00:02:00Z',
+        input_snapshot_id: 'snapshot-1', input_fingerprint: 'a'.repeat(64), input_tokens: 120, cached_input_tokens: 0,
+        output_tokens: 80, reasoning_tokens: 20,
       }])
       if (url.includes('/ai_opportunity_analyses?')) return response([{
         id: 'analysis-1', analysis_request_id: 'request-1', output_json: { recommendation: 'hold' },
@@ -139,7 +141,12 @@ describe('Revenue Lab Supabase store snapshots', () => {
     expect(dashboard.latestRun).toMatchObject({
       id: 'run-1', sourceQueryId: 'query-1', status: 'succeeded', receivedCount: 25, scoredCount: 24,
     })
-    expect(dashboard.analyses[0]).toMatchObject({ id: 'analysis-1', sourceItemId: 'video-item', status: 'succeeded', output: { recommendation: 'hold' } })
+    expect(dashboard.analyses[0]).toMatchObject({
+      id: 'analysis-1', sourceItemId: 'video-item', status: 'succeeded', inputSnapshotId: 'snapshot-1',
+      inputFingerprint: 'a'.repeat(64), requestedModel: 'gpt-test', resolvedModel: 'gpt-test',
+      usage: { inputTokens: 120, cachedInputTokens: 0, outputTokens: 80, reasoningTokens: 20 },
+      output: { recommendation: 'hold' },
+    })
     expect(fetchImpl).toHaveBeenCalledTimes(8)
   })
 
