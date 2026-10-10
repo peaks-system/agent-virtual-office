@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react'
-import { createProductCandidateDecision, createRevenueAnalysisReview, enqueueEnabledRevenueQueries, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, loadRevenueDashboard, updateRevenueQuery } from '../services/revenueLabApi'
+import React, { useEffect, useRef, useState } from 'react'
+import { createManualCampaign as createManualCampaignRequest, createProductCandidateDecision, createRevenueAnalysisReview, enqueueEnabledRevenueQueries, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, loadRevenueDashboard, registerCampaignPublication, updateRevenueQuery } from '../services/revenueLabApi'
 import './revenueLabDashboard.css'
 
-const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] }, products: { configured: false, missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], latestJob: null, latestRun: null, latestTrackingRun: null }
+const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] }, products: { configured: false, missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], latestJob: null, latestRun: null, latestTrackingRun: null }
 
 export function scoreLabel(value) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—'
@@ -125,9 +125,92 @@ export function safeRakutenUrl(value) {
 
 const productDecisionLabel = value => ({ selected_for_research: '次の調査対象', shortlisted: '候補保存', hold: '保留', rejected: '除外' })[value] || '未判断'
 
+export function manualProductSearchLinks(keywords = []) {
+  const terms = [...new Set(keywords.filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean))].slice(0, 8)
+  return terms.flatMap(keyword => {
+    const query = encodeURIComponent(keyword)
+    return [
+      { provider: 'Amazon', discoveryChannel: 'amazon_search', keyword, url: `https://www.amazon.co.jp/s?k=${query}` },
+      { provider: '楽天市場', discoveryChannel: 'rakuten_search', keyword, url: `https://search.rakuten.co.jp/search/mall/${query}/` },
+      { provider: 'Yahoo!ショッピング', discoveryChannel: 'yahoo_search', keyword, url: `https://shopping.yahoo.co.jp/search?p=${query}` },
+      { provider: 'Google', discoveryChannel: 'google_search', keyword, url: `https://www.google.com/search?q=${query}` },
+    ]
+  })
+}
+
+export function newCampaignIdempotencyKey() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (typeof globalThis.crypto?.getRandomValues === 'function') globalThis.crypto.getRandomValues(bytes)
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+export function campaignSavePresentation(submitting, saved) {
+  if (saved) return { label: '保存済み', disabled: true }
+  if (submitting) return { label: '保存中…', disabled: true }
+  return { label: '商品・Campaign・Iterationを保存', disabled: false }
+}
+
+function ManualCampaignForm({ analysis, busy, onCreate }) {
+  const keywords = [...new Set((analysis?.output?.product_search_keywords || []).filter(Boolean))]
+  const [form, setForm] = useState({
+    campaignName: `${analysis?.output?.product_or_theme_name || '商品候補'} Campaign`, objective: '',
+    discoveryChannel: 'google_search', searchKeyword: keywords[0] || '', merchant: '', productName: '', productUrl: '', affiliateUrl: '', priceAmount: '', currency: 'JPY', productNotes: '',
+    appealHypothesis: analysis?.output?.recommendation_reason || '', hookText: analysis?.output?.hooks?.[0] || '',
+    contentOutline: analysis?.output?.video_ideas?.join('\n') || '', scriptText: '', youtubeVideoId: '', publicationTitle: '', publishedAt: '',
+  })
+  const [submissionKey] = useState(newCampaignIdempotencyKey)
+  const [submitting, setSubmitting] = useState(false)
+  const [saved, setSaved] = useState(null)
+  const submittingRef = useRef(false)
+  if (!analysis?.id) return null
+  const links = manualProductSearchLinks(keywords)
+  const savePresentation = campaignSavePresentation(submitting, saved)
+  const update = (name, value) => setForm(previous => ({ ...previous, [name]: value }))
+  return <section className="revenue-manual-campaign" aria-label="Manual Campaign">
+    <div className="revenue-product-heading"><strong>Manual / Search Product</strong><span>商品APIなしで利用可能</span></div>
+    <p className="revenue-product-facts">AIの保存済み検索語から外部検索を開き、確認した事実だけを登録します。商品情報の推測・スクレイピングは行いません。</p>
+    <div className="revenue-search-links">{links.map(link => <a key={`${link.provider}-${link.keyword}`} href={link.url} target="_blank" rel="noopener noreferrer">{link.provider}: {link.keyword}</a>)}</div>
+    {!keywords.length && <p className="revenue-warning">保存済みの商品検索キーワードがないため、Campaignを作成できません。</p>}
+    {!!keywords.length && <details><summary>商品を選んでCampaignを作成</summary><form onSubmit={async event => {
+      event.preventDefault()
+      if (submittingRef.current || saved) return
+      submittingRef.current = true
+      setSubmitting(true)
+      try {
+        const result = await onCreate(analysis.id, {
+          ...form,
+          idempotencyKey: submissionKey,
+          priceAmount: form.priceAmount === '' ? null : Number(form.priceAmount),
+          youtubeVideoId: form.youtubeVideoId || null,
+          publicationTitle: form.youtubeVideoId ? form.publicationTitle : null,
+          publishedAt: form.youtubeVideoId && form.publishedAt ? new Date(form.publishedAt).toISOString() : null,
+        })
+        setSaved(result || { created: true })
+      } catch {
+        // The shared Dashboard alert presents the sealed API error.
+      } finally {
+        submittingRef.current = false
+        setSubmitting(false)
+      }
+    }}>
+      <fieldset><legend>Campaign</legend><label>Campaign名<input required maxLength={120} value={form.campaignName} onChange={event => update('campaignName', event.target.value)} /></label><label>目的<textarea maxLength={1000} value={form.objective} onChange={event => update('objective', event.target.value)} /></label></fieldset>
+      <fieldset><legend>人間が確認した商品</legend><label>検索語<select required value={form.searchKeyword} onChange={event => update('searchKeyword', event.target.value)}>{keywords.map(keyword => <option key={keyword}>{keyword}</option>)}</select></label><label>発見経路<select value={form.discoveryChannel} onChange={event => update('discoveryChannel', event.target.value)}><option value="amazon_search">Amazon検索</option><option value="rakuten_search">楽天市場検索</option><option value="yahoo_search">Yahoo!ショッピング検索</option><option value="google_search">Google検索</option><option value="direct">直接入力</option></select></label><label>商品名<input required maxLength={240} value={form.productName} onChange={event => update('productName', event.target.value)} /></label><label>販売元・ショップ<input required maxLength={80} value={form.merchant} onChange={event => update('merchant', event.target.value)} /></label><label>商品URL（HTTPS）<input type="url" required value={form.productUrl} onChange={event => update('productUrl', event.target.value)} /></label><label>アフィリエイトURL（任意）<input type="url" value={form.affiliateUrl} onChange={event => update('affiliateUrl', event.target.value)} /></label><div className="revenue-form-pair"><label>価格（任意）<input type="number" min="0" step="0.01" value={form.priceAmount} onChange={event => update('priceAmount', event.target.value)} /></label><label>通貨<input maxLength={3} value={form.currency} onChange={event => update('currency', event.target.value.toUpperCase())} /></label></div><label>確認メモ<textarea maxLength={1000} value={form.productNotes} onChange={event => update('productNotes', event.target.value)} /></label></fieldset>
+      <fieldset><legend>Iteration #1 の訴求と構成</legend><label>訴求仮説<textarea required maxLength={1000} value={form.appealHypothesis} onChange={event => update('appealHypothesis', event.target.value)} /></label><label>Hook<textarea required maxLength={500} value={form.hookText} onChange={event => update('hookText', event.target.value)} /></label><label>台本・構成<textarea required maxLength={5000} value={form.contentOutline} onChange={event => update('contentOutline', event.target.value)} /></label><label>台本本文（任意）<textarea maxLength={8000} value={form.scriptText} onChange={event => update('scriptText', event.target.value)} /></label></fieldset>
+      <fieldset><legend>YouTube公開情報（任意・後から登録可）</legend><p className="revenue-product-facts">公開前は空欄のまま保存できます。その場合、Iterationは下書きになります。</p><label>YouTube Video ID（任意）<input pattern="[A-Za-z0-9_-]{6,32}" value={form.youtubeVideoId} onChange={event => update('youtubeVideoId', event.target.value)} /></label><label>公開タイトル（任意）<input disabled={!form.youtubeVideoId} maxLength={200} value={form.publicationTitle} onChange={event => update('publicationTitle', event.target.value)} /></label><label>公開日時（任意）<input disabled={!form.youtubeVideoId} type="datetime-local" value={form.publishedAt} onChange={event => update('publishedAt', event.target.value)} /></label></fieldset>
+      {saved && <p className="revenue-save-success" role="status"><strong>保存しました。</strong> CampaignとIterationはCampaign実験台帳で確認できます。{saved.idempotentReplay ? ' 同一操作の再送は既存Campaignへ統合されました。' : ''}</p>}
+      <button className="corp-primary" disabled={busy || savePresentation.disabled} type="submit">{savePresentation.label}</button>
+    </form></details>}
+  </section>
+}
+
 function ProductCandidatePanel({ analysis, search, config, busy, onSearch, onDecision }) {
   if (!analysis?.id) return null
-  if (!config?.configured && !search) return <section className="revenue-products is-empty"><strong>Product Candidate Finder</strong><p>楽天商品検索のサーバー設定が必要です。</p><code>{config?.missing?.join(', ')}</code></section>
+  if (!config?.configured && !search) return <section className="revenue-products is-empty"><strong>楽天Provider（任意）</strong><p>楽天認証情報が未設定でも、上のManual / Search ProductからCampaignを作成できます。</p></section>
   if (!search) return <section className="revenue-products is-empty"><div className="revenue-product-heading"><strong>Product Candidate Finder</strong><button type="button" disabled={busy} onClick={() => onSearch(analysis.id)}>商品候補を検索</button></div><p>AIが生成した検索語を使い、楽天の実在商品を1分析ずつ確認します。</p></section>
   if (search.status !== 'succeeded') return <section className={`revenue-products is-${search.status}`}><div className="revenue-product-heading"><strong>Product Candidate Finder</strong><span>{jobStatusLabel(search.status)}</span></div><p>{search.status === 'failed' ? `商品検索に失敗しました（${search.errorCode || 'PRODUCT_SEARCH_FAILED'}）` : '楽天の商品候補を取得しています。'}</p></section>
   return <section className="revenue-products is-succeeded" aria-label="Product Candidate Finder">
@@ -153,7 +236,7 @@ function ProductCandidatePanel({ analysis, search, config, busy, onSearch, onDec
   </section>
 }
 
-function AnalysisPanel({ analysis, productSearch, productConfig, busy, onReview, onProductSearch, onProductDecision }) {
+function AnalysisPanel({ analysis, productSearch, productConfig, busy, onReview, onProductSearch, onProductDecision, onCreateCampaign }) {
   if (!analysis) return <div className="revenue-analysis is-empty"><strong>AI分析</strong><p>まだ分析されていません。上部の「TOP1をAI分析」から1動画で品質を確認します。</p></div>
   if (analysis.status !== 'succeeded' || !analysis.output) return <div className={`revenue-analysis is-${analysis.status}`}><strong>AI分析</strong><p>{({ pending: 'ジョブ待機中', running: 'メタデータを分析中', refused: '分析は拒否されました', incomplete: '分析結果が未完了です', failed: '分析に失敗しました' })[analysis.status] || analysis.status}</p></div>
   const output = analysis.output
@@ -171,11 +254,12 @@ function AnalysisPanel({ analysis, productSearch, productConfig, busy, onReview,
       <div><dt>根拠品質</dt><dd>{output.evidence_quality === 'moderate' ? '中程度' : '限定的'}</dd></div>
     </dl></details>
     {analysis.id && <div className="revenue-human-review"><span>人間評価</span>{['adopt', 'hold', 'exclude'].map(decision => <button type="button" key={decision} disabled={busy} onClick={() => onReview(analysis, decision)}>{recommendationLabel(decision)}</button>)}</div>}
+    <ManualCampaignForm analysis={analysis} busy={busy} onCreate={onCreateCampaign} />
     <ProductCandidatePanel analysis={analysis} search={productSearch} config={productConfig} busy={busy} onSearch={onProductSearch} onDecision={onProductDecision} />
   </section>
 }
 
-function OpportunityCard({ item, index, tracking = false, analysis, productSearch, productConfig, busy, onReview, onProductSearch, onProductDecision }) {
+function OpportunityCard({ item, index, tracking = false, analysis, productSearch, productConfig, busy, onReview, onProductSearch, onProductDecision, onCreateCampaign }) {
   const reviewUrl = videoReviewUrl(item)
   const velocity = velocityPresentation(item.velocityMode)
   const reasons = opportunityReasons(item)
@@ -213,22 +297,52 @@ function OpportunityCard({ item, index, tracking = false, analysis, productSearc
         <div><dt>Commerce Fit</dt><dd>{metricCount(item.commerceFit)}</dd></div>
       </dl></details>
       {reviewUrl && <a className="revenue-youtube-link" href={reviewUrl} target="_blank" rel="noopener noreferrer">YouTubeで見る</a>}
-      <AnalysisPanel analysis={analysis} productSearch={productSearch} productConfig={productConfig} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} />
+      <AnalysisPanel analysis={analysis} productSearch={productSearch} productConfig={productConfig} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
     </div>
   </article>
 }
 
-function OpportunitySection({ title, description, items, tracking = false, configured, analysisByItem = new Map(), productSearchByAnalysis = new Map(), productConfig, busy, onReview = () => {}, onProductSearch = () => {}, onProductDecision = () => {} }) {
+function OpportunitySection({ title, description, items, tracking = false, configured, analysisByItem = new Map(), productSearchByAnalysis = new Map(), productConfig, busy, onReview = () => {}, onProductSearch = () => {}, onProductDecision = () => {}, onCreateCampaign = () => {} }) {
   return <section className="revenue-ranking-section">
     <div className="revenue-section-heading"><div><p className="revenue-kicker">{tracking ? 'OBSERVED TRACKING' : 'DAILY DISCOVERY'}</p><h2>{title}</h2><p>{description}</p></div></div>
     <div className="revenue-grid" aria-label={title}>
-      {items.map((item, index) => { const analysis = analysisByItem.get(item.sourceItemId); return <OpportunityCard key={item.id || item.youtubeVideoId} item={item} index={index} tracking={tracking} analysis={analysis} productSearch={productSearchByAnalysis.get(analysis?.id)} productConfig={productConfig} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} /> })}
+      {items.map((item, index) => { const analysis = analysisByItem.get(item.sourceItemId); return <OpportunityCard key={item.id || item.youtubeVideoId} item={item} index={index} tracking={tracking} analysis={analysis} productSearch={productSearchByAnalysis.get(analysis?.id)} productConfig={productConfig} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} /> })}
       {configured && items.length === 0 && <div className="revenue-state"><h3>まだ候補がありません</h3><p>{tracking ? '6時間以上の間隔がある継続観測データを待っています。' : 'テーマのScore設定を保存して収集を実行してください。'}</p></div>}
     </div>
   </section>
 }
 
-export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onSave }) {
+const campaignStatusLabel = value => ({ active: '進行中', completed: '完了', stopped: '停止' })[value] || value
+const iterationStatusLabel = value => ({ draft: '下書き', ready_to_publish: '公開準備完了', published: '公開済み', measuring: '計測中', review_due: 'レビュー待ち', closed: '終了' })[value] || value
+
+function PublicationRegistrationForm({ iterationId, busy, onRegister }) {
+  const [form, setForm] = useState({ youtubeVideoId: '', publicationTitle: '', publishedAt: '' })
+  return <form className="revenue-publication-form" onSubmit={event => {
+    event.preventDefault()
+    onRegister(iterationId, { ...form, publishedAt: form.publishedAt ? new Date(form.publishedAt).toISOString() : null })
+  }}><strong>公開後にYouTube情報を追加</strong><label>Video ID<input required pattern="[A-Za-z0-9_-]{6,32}" value={form.youtubeVideoId} onChange={event => setForm({ ...form, youtubeVideoId: event.target.value })} /></label><label>公開タイトル（任意）<input maxLength={200} value={form.publicationTitle} onChange={event => setForm({ ...form, publicationTitle: event.target.value })} /></label><label>公開日時（任意）<input type="datetime-local" value={form.publishedAt} onChange={event => setForm({ ...form, publishedAt: event.target.value })} /></label><button type="submit" disabled={busy}>Publicationを登録</button></form>
+}
+
+function CampaignBoard({ campaigns = [], busy, onRegisterPublication }) {
+  return <section className="revenue-campaign-board" aria-labelledby="campaign-board-heading">
+    <div className="revenue-section-heading"><div><p className="revenue-kicker">CAMPAIGN LEARNING LINEAGE</p><h2 id="campaign-board-heading">Campaign実験台帳</h2><p>Opportunityから商品、訴求、Iteration、公開動画までを一続きで確認します。</p></div><span>{campaigns.length} Campaign</span></div>
+    {!campaigns.length && <div className="revenue-state"><h3>Campaignはまだありません</h3><p>AI分析カードから人間が商品を確認し、最初のIterationを登録してください。</p></div>}
+    <div className="revenue-campaign-list">{campaigns.map(campaign => <article key={campaign.id} className="revenue-campaign">
+      <header><div><h3>{campaign.name}</h3><p>{campaign.objective || '目的メモなし'}</p></div><span className={`revenue-status is-${campaign.status}`}>{campaignStatusLabel(campaign.status)}</span></header>
+      <div className="revenue-origin-list">{campaign.origins?.map(origin => <span key={origin.id}>{origin.contextKind === 'tracking' ? '継続観測' : '発掘'} · Rank #{origin.rankPosition ?? '—'} · {origin.scoreVersion || '—'}</span>)}</div>
+      {campaign.iterations?.map(iteration => <section key={iteration.id} className="revenue-iteration">
+        <div className="revenue-product-heading"><strong>Iteration #{iteration.iterationNumber}</strong><span>{iterationStatusLabel(iteration.status)}</span></div>
+        {iteration.product && <div className="revenue-selected-product"><div><b>{iteration.product.productName}</b><small>{iteration.product.merchant || '販売元未入力'} · {iteration.product.discoveryChannel} · 検索語「{iteration.product.searchKeyword}」</small></div><a href={iteration.product.affiliateUrl || iteration.product.productUrl} target="_blank" rel="noopener noreferrer">商品を確認</a></div>}
+        <dl><div><dt>訴求仮説</dt><dd>{iteration.appealHypothesis}</dd></div><div><dt>Hook</dt><dd>{iteration.hookText}</dd></div><div><dt>台本・構成</dt><dd className="revenue-prewrap">{iteration.contentOutline?.text || '—'}</dd></div>{iteration.scriptText && <div><dt>台本本文</dt><dd className="revenue-prewrap">{iteration.scriptText}</dd></div>}</dl>
+        {iteration.publication && <div className="revenue-publication"><span>YouTube Video ID: {iteration.publication.youtubeVideoId}</span><a href={iteration.publication.canonicalUrl || `https://www.youtube.com/watch?v=${encodeURIComponent(iteration.publication.youtubeVideoId)}`} target="_blank" rel="noopener noreferrer">公開動画を開く</a></div>}
+        {!iteration.publication && <PublicationRegistrationForm iterationId={iteration.id} busy={busy} onRegister={onRegisterPublication} />}
+        <details><summary>監査情報</summary><p>Iteration: {iteration.id}<br />Treatment fingerprint: {iteration.treatmentFingerprint || '—'}<br />AI Analysis: {iteration.sourceAnalysisId || campaign.primaryAnalysisId || '—'}</p></details>
+      </section>)}
+    </article>)}</div>
+  </section>
+}
+
+export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onRegisterPublication, onSave }) {
   if (!state) return <main className="revenue-shell" aria-busy="true"><div className="revenue-state"><h2>Revenue Lab</h2><p>収益機会を読み込んでいます…</p></div></main>
   const eligible = state.queries.filter(query => query.enabled && !queryNeedsScores(query))
   const enabledQueries = state.queries.filter(query => query.enabled)
@@ -263,8 +377,9 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, o
       <button className="corp-primary" disabled={busy || !state.config.analysis?.configured || (!state.opportunities.length && !state.trackingOpportunities.length)} onClick={onAnalyze}>TOP1をAI分析</button>
       {!state.config.analysis?.configured && <p className="revenue-warning">サーバー側に OPENAI_API_KEY を設定すると利用できます。Discovery / Trackingは引き続き利用できます。</p>}
     </section>
-    <OpportunitySection title="本日の発掘TOP3" description="本日のsearch.listで発掘した候補です。過去動画が再登場する場合もあります。" items={state.opportunities || []} configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} />
-    <OpportunitySection title="継続観測・急伸TOP3" description="発見後7日間、6時間以上の間隔で実測した成長候補です。" items={state.trackingOpportunities || []} tracking configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} />
+    <OpportunitySection title="本日の発掘TOP3" description="本日のsearch.listで発掘した候補です。過去動画が再登場する場合もあります。" items={state.opportunities || []} configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
+    <OpportunitySection title="継続観測・急伸TOP3" description="発見後7日間、6時間以上の間隔で実測した成長候補です。" items={state.trackingOpportunities || []} tracking configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
+    <CampaignBoard campaigns={state.campaigns || []} busy={busy} onRegisterPublication={onRegisterPublication} />
     <details className="revenue-score-guide"><summary>スコアについて</summary><dl>
       <div><dt>Breakout Score</dt><dd>再生速度、チャンネル規模比、反応率、鮮度から「通常より勢いがあるか」を示します。</dd></div>
       <div><dt>Opportunity Score</dt><dd>Breakout Scoreを70%、Buyer IntentとCommerce Fitを各15%で補正した企画候補順位です。</dd></div>
@@ -293,12 +408,12 @@ export default function RevenueLabDashboard() {
   useEffect(() => { reload() }, [])
   const perform = async action => {
     setBusy(true); setError('')
-    try { await action(); await reload() }
-    catch (failure) { setError(failure.message) }
+    try { const result = await action(); await reload(); return result }
+    catch (failure) { setError(failure.message); throw failure }
     finally { setBusy(false) }
   }
   const review = (analysis, decision) => perform(() => createRevenueAnalysisReview(
     analysis.id, decision, decision === analysis.output?.recommendation ? 'agree' : 'disagree',
-  ))
-  return <RevenueLabView state={state} error={error} busy={busy} onReload={reload} onRun={queries => perform(() => enqueueEnabledRevenueQueries(queries))} onTrack={() => perform(enqueueRevenueTracking)} onAnalyze={() => perform(() => enqueueRevenueAnalysis(1))} onReview={review} onProductSearch={analysisId => perform(() => enqueueProductSearch(analysisId))} onProductDecision={(candidateId, analysisId, decision) => perform(() => createProductCandidateDecision(candidateId, analysisId, decision))} onSave={(id, values) => perform(() => updateRevenueQuery(id, values))} />
+  )).catch(() => {})
+  return <RevenueLabView state={state} error={error} busy={busy} onReload={reload} onRun={queries => { perform(() => enqueueEnabledRevenueQueries(queries)).catch(() => {}) }} onTrack={() => { perform(enqueueRevenueTracking).catch(() => {}) }} onAnalyze={() => { perform(() => enqueueRevenueAnalysis(1)).catch(() => {}) }} onReview={review} onProductSearch={analysisId => { perform(() => enqueueProductSearch(analysisId)).catch(() => {}) }} onProductDecision={(candidateId, analysisId, decision) => { perform(() => createProductCandidateDecision(candidateId, analysisId, decision)).catch(() => {}) }} onCreateCampaign={(analysisId, input) => perform(() => createManualCampaignRequest(analysisId, input))} onRegisterPublication={(iterationId, input) => { perform(() => registerCampaignPublication(iterationId, input)).catch(() => {}) }} onSave={(id, values) => { perform(() => updateRevenueQuery(id, values)).catch(() => {}) }} />
 }

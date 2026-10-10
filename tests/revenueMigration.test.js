@@ -10,8 +10,64 @@ const analysisRollback = readFileSync('supabase/rollback/20261009150000_revenue_
 const productMigration = readFileSync('supabase/migrations/20261009200000_revenue_lab_product_candidate_finder_v1.sql', 'utf8')
 const productRollback = readFileSync('supabase/rollback/20261009200000_revenue_lab_product_candidate_finder_v1_down.sql', 'utf8')
 const productRpcPrivilegesMigration = readFileSync('supabase/migrations/20261009210000_revenue_lab_product_rpc_privileges.sql', 'utf8')
+const campaignMigration = readFileSync('supabase/migrations/20261010100000_revenue_lab_campaign_manual_v1.sql', 'utf8')
+const campaignRollback = readFileSync('supabase/rollback/20261010100000_revenue_lab_campaign_manual_v1_down.sql', 'utf8')
+const optionalPublicationMigration = readFileSync('supabase/migrations/20261010110000_revenue_lab_campaign_publication_optional.sql', 'utf8')
+const optionalPublicationRollback = readFileSync('supabase/rollback/20261010110000_revenue_lab_campaign_publication_optional_down.sql', 'utf8')
+const campaignIdempotencyMigration = readFileSync('supabase/migrations/20261010120000_revenue_lab_campaign_creation_idempotency.sql', 'utf8')
+const campaignIdempotencyRollback = readFileSync('supabase/rollback/20261010120000_revenue_lab_campaign_creation_idempotency_down.sql', 'utf8')
 
 describe('Revenue Lab Supabase migration', () => {
+  it('adds reversible manual Campaign lineage with independent lifecycle states', () => {
+    for (const table of ['curated_products', 'campaigns', 'campaign_origins', 'campaign_iterations', 'campaign_publications']) {
+      expect(campaignMigration).toContain(`create table revenue_lab.${table}`)
+      expect(campaignRollback).toContain(`drop table if exists revenue_lab.${table}`)
+    }
+    expect(campaignMigration).toContain("status in ('active', 'completed', 'stopped')")
+    expect(campaignMigration).toContain("status in ('draft', 'ready_to_publish', 'published', 'measuring', 'review_due', 'closed')")
+    expect(campaignMigration).toContain('analysis_snapshot jsonb not null')
+    expect(campaignMigration).toContain('origin_snapshot jsonb not null')
+    expect(campaignMigration).toContain('treatment_snapshot jsonb not null')
+    expect(campaignMigration).toContain('initial_metadata jsonb not null')
+    expect(campaignMigration).not.toMatch(/update revenue_lab\.(?:opportunities|tracking_opportunities|ai_opportunity_analyses|product_candidates)/)
+  })
+
+  it('creates one atomic manual Campaign RPC and restricts it to service_role', () => {
+    const signature = 'revenue_lab.create_manual_campaign(uuid, jsonb, text)'
+    expect(campaignMigration).toContain('create or replace function revenue_lab.create_manual_campaign')
+    expect(campaignMigration).toContain('Product search keyword is not part of the AI analysis')
+    expect(campaignMigration).toContain(`revoke execute on function ${signature}`)
+    expect(campaignMigration).toContain('from public, anon, authenticated')
+    expect(campaignMigration).toContain(`grant execute on function ${signature}`)
+    expect(campaignMigration).toContain('to service_role')
+    expect(optionalPublicationMigration).toContain("when not has_publication then 'draft'")
+    expect(optionalPublicationMigration).toContain('if has_publication then')
+    expect(optionalPublicationMigration).toContain('create or replace function revenue_lab.register_campaign_publication')
+    expect(optionalPublicationMigration).toContain('campaign_publications_iteration_platform_key')
+    const publicationSignature = 'revenue_lab.register_campaign_publication(uuid, text, text, timestamptz)'
+    expect(optionalPublicationMigration).toContain(`revoke execute on function ${publicationSignature}`)
+    expect(optionalPublicationMigration).toContain(`grant execute on function ${publicationSignature}`)
+    expect(optionalPublicationRollback).toContain(`drop function if exists ${publicationSignature}`)
+    expect(optionalPublicationRollback).toContain('drop constraint if exists campaign_publications_iteration_platform_key')
+    expect(optionalPublicationRollback).toContain('create or replace function revenue_lab.create_manual_campaign')
+  })
+
+  it('deduplicates Campaign creation by operation key without making treatments globally unique', () => {
+    expect(campaignIdempotencyMigration).toContain('create table revenue_lab.campaign_creation_requests')
+    expect(campaignIdempotencyMigration).toContain('unique (project_id, idempotency_key)')
+    expect(campaignIdempotencyMigration).toContain('request_fingerprint text not null')
+    expect(campaignIdempotencyMigration).toContain('treatment_fingerprint text not null')
+    expect(campaignIdempotencyMigration).not.toContain('unique (project_id, treatment_fingerprint)')
+    expect(campaignIdempotencyMigration).toContain('on conflict (project_id, idempotency_key) do nothing')
+    expect(campaignIdempotencyMigration).toContain("'idempotentReplay', true")
+    const signature = 'revenue_lab.create_manual_campaign(uuid, jsonb, text, text, uuid)'
+    expect(campaignIdempotencyMigration).toContain(`revoke execute on function ${signature}`)
+    expect(campaignIdempotencyMigration).toContain('from public, anon, authenticated')
+    expect(campaignIdempotencyMigration).toContain(`grant execute on function ${signature}`)
+    expect(campaignIdempotencyMigration).toContain('to service_role')
+    expect(campaignIdempotencyRollback).toContain(`drop function if exists ${signature}`)
+    expect(campaignIdempotencyRollback).toContain('drop table if exists revenue_lab.campaign_creation_requests')
+  })
   it('adds reversible provider-fact product tables and a cached product.search job', () => {
     for (const table of ['product_search_runs', 'product_search_requests', 'catalog_products', 'product_offer_snapshots', 'product_candidates', 'product_candidate_decisions']) {
       expect(productMigration).toContain(`create table revenue_lab.${table}`)

@@ -313,12 +313,84 @@ function createSupabaseStore({
     }))
   }
 
+  async function manualCampaignsForProjects(projectIds) {
+    if (!projectIds.length) return []
+    const campaigns = await request(
+      `campaigns?project_id=in.(${encodeURIComponent(projectIds.join(','))})&select=*&order=created_at.desc&limit=50`,
+    )
+    if (!campaigns.length) return []
+    const campaignIds = campaigns.map(row => row.id)
+    const [origins, iterations] = await Promise.all([
+      request(`campaign_origins?campaign_id=in.(${encodeURIComponent(campaignIds.join(','))})&select=*&order=created_at.asc`),
+      request(`campaign_iterations?campaign_id=in.(${encodeURIComponent(campaignIds.join(','))})&select=*&order=iteration_number.asc`),
+    ])
+    const productIds = [...new Set(iterations.map(row => row.curated_product_id).filter(Boolean))]
+    const iterationIds = iterations.map(row => row.id)
+    const [products, publications] = await Promise.all([
+      productIds.length ? request(`curated_products?id=in.(${encodeURIComponent(productIds.join(','))})&select=*`) : [],
+      iterationIds.length ? request(`campaign_publications?campaign_iteration_id=in.(${encodeURIComponent(iterationIds.join(','))})&select=*&order=created_at.asc`) : [],
+    ])
+    const productById = new Map(products.map(row => [row.id, row]))
+    const publicationsByIteration = new Map()
+    for (const row of publications) {
+      const records = publicationsByIteration.get(row.campaign_iteration_id) || []
+      records.push({
+        id: row.id, platform: row.platform, youtubeVideoId: row.youtube_video_id,
+        youtubeChannelId: row.youtube_channel_id, canonicalUrl: row.canonical_url,
+        title: row.title, publishedAt: row.published_at, status: row.status,
+        initialMetadata: row.initial_metadata, createdAt: row.created_at,
+      })
+      publicationsByIteration.set(row.campaign_iteration_id, records)
+    }
+    const originsByCampaign = new Map()
+    for (const row of origins) {
+      const records = originsByCampaign.get(row.campaign_id) || []
+      records.push({
+        id: row.id, contextKind: row.context_kind, opportunityId: row.opportunity_id,
+        trackingOpportunityId: row.tracking_opportunity_id, sourceQueryId: row.source_query_id,
+        rankPosition: row.rank_position, scoreVersion: row.score_version, originSnapshot: row.origin_snapshot,
+      })
+      originsByCampaign.set(row.campaign_id, records)
+    }
+    const iterationsByCampaign = new Map()
+    for (const row of iterations) {
+      const product = productById.get(row.curated_product_id)
+      const records = iterationsByCampaign.get(row.campaign_id) || []
+      records.push({
+        id: row.id, iterationNumber: row.iteration_number, status: row.status,
+        sourceAnalysisId: row.source_analysis_id,
+        appealHypothesis: row.appeal_hypothesis, hookText: row.hook_text,
+        contentOutline: row.content_outline, scriptText: row.script_text,
+        treatmentFingerprint: row.treatment_fingerprint, lockedAt: row.locked_at,
+        product: product ? {
+          id: product.id, sourceKind: product.source_kind, discoveryChannel: product.discovery_channel,
+          searchKeyword: product.search_keyword, merchant: product.merchant, productName: product.product_name,
+          productUrl: product.product_url, affiliateUrl: product.affiliate_url,
+          priceAmount: product.price_amount == null ? null : Number(product.price_amount),
+          currency: product.currency, notes: product.notes, humanVerifiedAt: product.human_verified_at,
+        } : null,
+        publications: publicationsByIteration.get(row.id) || [],
+        publication: (publicationsByIteration.get(row.id) || [])[0] || null,
+      })
+      iterationsByCampaign.set(row.campaign_id, records)
+    }
+    return campaigns.map(row => ({
+      id: row.id, projectId: row.project_id, sourceItemId: row.source_item_id,
+      analysisId: row.primary_analysis_id, name: row.name, objective: row.objective,
+      status: row.status, analysisSnapshot: row.analysis_snapshot, createdAt: row.created_at,
+      origins: originsByCampaign.get(row.id) || [],
+      iterations: iterationsByCampaign.get(row.id) || [],
+    }))
+  }
+
   async function dashboard(limit = 3) {
     const data = await rpc('dashboard_snapshot', { p_limit: limit })
-    const [opportunities, runs, trackingRuns] = await Promise.all([
+    const querySourceIds = [...new Set((data?.queries || []).map(row => row.source_id).filter(Boolean))]
+    const [opportunities, runs, trackingRuns, projectSources] = await Promise.all([
       enrichOpportunityReview((data?.opportunities || []).map(opportunityFromRow)),
       request('collection_runs?select=id,source_query_id,status,captured_at,requested_count,received_count,scored_count,excluded_reason,error_code,completed_at&order=captured_at.desc&limit=1'),
       request('tracking_runs?status=eq.succeeded&select=*&order=captured_at.desc&limit=20'),
+      querySourceIds.length ? request(`sources?id=in.(${encodeURIComponent(querySourceIds.join(','))})&select=id,project_id`) : [],
     ])
     const latestRun = runs?.[0]
     const latestTrackingByQuery = new Map()
@@ -373,13 +445,18 @@ function createSupabaseStore({
         output: output?.output_json || null,
       }
     })
-    const productSearches = await productSearchesForAnalyses(analyses.map(analysis => analysis.id).filter(Boolean))
+    const analysisIds = analyses.map(analysis => analysis.id).filter(Boolean)
+    const projectIds = [...new Set((projectSources || []).map(row => row.project_id).filter(Boolean))]
+    const [productSearches, campaigns] = await Promise.all([
+      productSearchesForAnalyses(analysisIds), manualCampaignsForProjects(projectIds),
+    ])
     return {
       queries: (data?.queries || []).map(queryFromRow),
       opportunities,
       trackingOpportunities,
       analyses,
       productSearches,
+      campaigns,
       latestJob: data?.latest_job ? {
         id: data.latest_job.id,
         jobType: data.latest_job.job_type,
@@ -606,6 +683,43 @@ function createSupabaseStore({
     return rpc('record_product_candidate_decision', {
       p_candidate_id: candidateId, p_analysis_id: analysisId,
       p_decision: decision.decision, p_notes: decision.notes || null,
+    })
+  }
+
+  async function createManualCampaign(analysisId, input) {
+    const payload = {
+      campaign: { name: input.campaignName, objective: input.objective || null },
+      product: {
+        source_kind: 'manual', discovery_channel: input.discoveryChannel,
+        search_keyword: input.searchKeyword, merchant: input.merchant,
+        product_name: input.productName, product_url: input.productUrl,
+        affiliate_url: input.affiliateUrl || null, price_amount: input.priceAmount,
+        currency: input.currency, notes: input.productNotes || null,
+      },
+      creative: {
+        appeal_hypothesis: input.appealHypothesis, hook_text: input.hookText,
+        content_outline: { format: 'plain_text', text: input.contentOutline },
+        script_text: input.scriptText || null,
+      },
+      publication: input.youtubeVideoId ? {
+        youtube_video_id: input.youtubeVideoId, title: input.publicationTitle || null,
+        published_at: input.publishedAt || null,
+      } : null,
+    }
+    const treatment = { product: payload.product, creative: payload.creative }
+    return rpc('create_manual_campaign', {
+      p_analysis_id: analysisId, p_payload: payload, p_treatment_fingerprint: inputFingerprint(treatment),
+      p_request_fingerprint: inputFingerprint(payload),
+      p_idempotency_key: input.idempotencyKey,
+    })
+  }
+
+  async function registerCampaignPublication(iterationId, input) {
+    return rpc('register_campaign_publication', {
+      p_campaign_iteration_id: iterationId,
+      p_youtube_video_id: input.youtubeVideoId,
+      p_title: input.publicationTitle || null,
+      p_published_at: input.publishedAt || null,
     })
   }
 
@@ -887,7 +1001,7 @@ function createSupabaseStore({
     claimNext, dashboard, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
     getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
     enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
-    persistProductSearchFailure, createProductDecision,
+    persistProductSearchFailure, createProductDecision, createManualCampaign, registerCampaignPublication,
     listQueries, listTrackingCandidates, markTrackingMissing, markTrackingSeen, failTrackingRuns,
     persistCollection, persistTrackingRun, persistTrackingSnapshots, previousVideoSnapshots,
     startRun, startTrackingRun, updateQuery,

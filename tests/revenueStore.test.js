@@ -87,7 +87,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
   it('enriches dashboard opportunities from canonical URLs and latest snapshots', async () => {
     const fetchImpl = vi.fn(async (url, options) => {
       if (url.includes('/rpc/dashboard_snapshot')) return response({
-        queries: [], latest_job: null, opportunities: [{
+        queries: [{ id: 'query-1', source_id: 'source-1', label: 'Theme', query_text: 'query', enabled: true }], latest_job: null, opportunities: [{
           id: 'opportunity-1', source_query_id: 'query-1', youtube_video_id: 'video-1',
           channel_id: 'channel-1', title: '動画', channel_title: 'チャンネル', published_at: '2026-10-07T00:00:00Z',
           score_version: 'youtube-v1', velocity_mode: 'estimated_lifetime', views_velocity: 12.5,
@@ -114,6 +114,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
         requested_count: 25, received_count: 25, scored_count: 24, completed_at: '2026-10-08T00:01:00Z',
       }])
       if (url.includes('/tracking_runs?')) return response([])
+      if (url.includes('/sources?')) return response([{ id: 'source-1', project_id: 'project-1' }])
       if (url.includes('/ai_analysis_requests?')) return response([{
         id: 'request-1', source_item_id: 'video-item', status: 'succeeded', prompt_version: 'opportunity-analyst-v1',
         schema_version: 'opportunity-analysis-v1', requested_model: 'gpt-test', resolved_model: 'gpt-test', generated_at: '2026-10-08T00:02:00Z',
@@ -124,6 +125,11 @@ describe('Revenue Lab Supabase store snapshots', () => {
         id: 'analysis-1', analysis_request_id: 'request-1', output_json: { recommendation: 'hold' },
       }])
       if (url.includes('/product_search_runs?')) return response([])
+      if (url.includes('/campaigns?')) return response([{ id: 'campaign-1', project_id: 'project-1', source_item_id: 'video-item', primary_analysis_id: 'analysis-1', name: 'Campaign', objective: 'Test', status: 'active', analysis_snapshot: { analysis_id: 'analysis-1' }, created_at: '2026-10-10T00:00:00Z' }])
+      if (url.includes('/campaign_origins?')) return response([{ id: 'origin-1', campaign_id: 'campaign-1', context_kind: 'discovery', opportunity_id: 'opportunity-1', tracking_opportunity_id: null, source_query_id: 'query-1', rank_position: 1, score_version: 'youtube-v1', origin_snapshot: { opportunity_score: 69.75 } }])
+      if (url.includes('/campaign_iterations?')) return response([{ id: 'iteration-1', campaign_id: 'campaign-1', iteration_number: 1, curated_product_id: 'product-1', source_analysis_id: 'analysis-1', status: 'published', appeal_hypothesis: 'appeal', hook_text: 'hook', content_outline: { text: 'outline' }, script_text: null, treatment_fingerprint: 'b'.repeat(64), locked_at: '2026-10-10T00:00:00Z' }])
+      if (url.includes('/curated_products?')) return response([{ id: 'product-1', source_kind: 'manual', discovery_channel: 'google_search', search_keyword: 'keyword', merchant: 'Shop', product_name: 'Product', product_url: 'https://example.com/product', affiliate_url: null, price_amount: 1000, currency: 'JPY', notes: null, human_verified_at: '2026-10-10T00:00:00Z' }])
+      if (url.includes('/campaign_publications?')) return response([{ id: 'publication-1', campaign_iteration_id: 'iteration-1', platform: 'youtube', youtube_video_id: 'video123', canonical_url: 'https://www.youtube.com/watch?v=video123', title: 'Published', published_at: '2026-10-10T00:00:00Z', status: 'published', initial_metadata: {}, created_at: '2026-10-10T00:00:00Z' }])
       throw new Error(`Unexpected request: ${url} ${options?.method}`)
     })
     const store = createSupabaseStore({
@@ -148,7 +154,53 @@ describe('Revenue Lab Supabase store snapshots', () => {
       usage: { inputTokens: 120, cachedInputTokens: 0, outputTokens: 80, reasoningTokens: 20 },
       output: { recommendation: 'hold' },
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(9)
+    expect(dashboard.campaigns[0]).toMatchObject({
+      id: 'campaign-1', analysisId: 'analysis-1', status: 'active',
+      origins: [{ contextKind: 'discovery', rankPosition: 1, scoreVersion: 'youtube-v1' }],
+      iterations: [{ id: 'iteration-1', sourceAnalysisId: 'analysis-1', product: { productName: 'Product', discoveryChannel: 'google_search' }, publication: { youtubeVideoId: 'video123', status: 'published' } }],
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(15)
+  })
+
+  it('creates the manual product, Campaign, Iteration, and publication atomically with a deterministic fingerprint', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options) => {
+      calls.push({ url, method: options.method, body: JSON.parse(options.body) })
+      return response({ campaignId: 'campaign-1', iterationStatus: 'ready_to_publish' })
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const input = { idempotencyKey: '22222222-2222-4222-8222-222222222222', campaignName: 'Campaign', objective: null, discoveryChannel: 'google_search', searchKeyword: '卓上 ライト', merchant: 'Shop', productName: 'Light', productUrl: 'https://example.com/product', affiliateUrl: null, priceAmount: 3980, currency: 'JPY', productNotes: '確認済み', appealHypothesis: '省スペース', hookText: '机が変わる', contentOutline: '比較構成', scriptText: null, youtubeVideoId: 'video123', publicationTitle: null, publishedAt: null }
+    const result = await store.createManualCampaign('analysis-1', input)
+    expect(result).toMatchObject({ campaignId: 'campaign-1' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toContain('/rest/v1/rpc/create_manual_campaign')
+    expect(calls[0].body.p_analysis_id).toBe('analysis-1')
+    expect(calls[0].body.p_payload).toMatchObject({
+      campaign: { name: 'Campaign', objective: null },
+      product: { source_kind: 'manual', discovery_channel: 'google_search', search_keyword: '卓上 ライト', product_name: 'Light' },
+      creative: { appeal_hypothesis: '省スペース', hook_text: '机が変わる', content_outline: { format: 'plain_text', text: '比較構成' } },
+      publication: { youtube_video_id: 'video123' },
+    })
+    expect(calls[0].body.p_treatment_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(calls[0].body.p_request_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(calls[0].body.p_idempotency_key).toBe(input.idempotencyKey)
+  })
+
+  it('omits the publication payload for a pre-publication Campaign and can register it later', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options) => {
+      calls.push({ url, body: JSON.parse(options.body) })
+      return response(url.includes('register_campaign_publication')
+        ? { publicationId: 'publication-1', iterationStatus: 'ready_to_publish' }
+        : { campaignId: 'campaign-1', publicationId: null, iterationStatus: 'draft' })
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const input = { idempotencyKey: '22222222-2222-4222-8222-222222222222', campaignName: 'Draft', objective: null, discoveryChannel: 'google_search', searchKeyword: 'keyword', merchant: 'Shop', productName: 'Product', productUrl: 'https://example.com/product', affiliateUrl: null, priceAmount: null, currency: 'JPY', productNotes: null, appealHypothesis: 'appeal', hookText: 'hook', contentOutline: 'outline', scriptText: null, youtubeVideoId: null, publicationTitle: null, publishedAt: null }
+    expect(await store.createManualCampaign('analysis-1', input)).toMatchObject({ publicationId: null, iterationStatus: 'draft' })
+    expect(calls[0].body.p_payload.publication).toBeNull()
+    expect(await store.registerCampaignPublication('iteration-1', { youtubeVideoId: 'realVideo1', publicationTitle: null, publishedAt: null })).toMatchObject({ publicationId: 'publication-1', iterationStatus: 'ready_to_publish' })
+    expect(calls[1]).toMatchObject({ body: { p_campaign_iteration_id: 'iteration-1', p_youtube_video_id: 'realVideo1', p_title: null, p_published_at: null } })
+    expect(calls[1].url).toContain('/rpc/register_campaign_publication')
   })
 
   it('restricts Discovery previous snapshots to discovery capture kind', async () => {

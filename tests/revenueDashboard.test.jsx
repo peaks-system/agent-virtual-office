@@ -1,9 +1,9 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { RevenueLabView, nextCollectionLabel, opportunityReasons, queryNeedsScores, safeRakutenUrl, scoreLabel, scoreStrength, velocityPresentation, videoReviewUrl } from '../src/components/RevenueLabDashboard'
+import { RevenueLabView, campaignSavePresentation, manualProductSearchLinks, newCampaignIdempotencyKey, nextCollectionLabel, opportunityReasons, queryNeedsScores, safeRakutenUrl, scoreLabel, scoreStrength, velocityPresentation, videoReviewUrl } from '../src/components/RevenueLabDashboard'
 
-const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onAnalyze: vi.fn(), onReview: vi.fn(), onProductSearch: vi.fn(), onProductDecision: vi.fn(), onSave: vi.fn() }
+const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onAnalyze: vi.fn(), onReview: vi.fn(), onProductSearch: vi.fn(), onProductDecision: vi.fn(), onCreateCampaign: vi.fn(), onRegisterPublication: vi.fn(), onSave: vi.fn() }
 
 describe('Revenue Lab dashboard', () => {
   it('formats saved scores and detects incomplete human inputs', () => {
@@ -177,5 +177,54 @@ describe('Revenue Lab dashboard', () => {
     expect(safeRakutenUrl('https://item.rakuten.co.jp/shop/item')).toContain('rakuten.co.jp')
     expect(safeRakutenUrl('javascript:alert(1)')).toBeNull()
     expect(safeRakutenUrl('https://example.com/item')).toBeNull()
+  })
+
+  it('builds external search links only from saved AI keywords', () => {
+    const links = manualProductSearchLinks(['卓上 ライト', '卓上 ライト', '', null])
+    expect(links).toHaveLength(4)
+    expect(links.map(link => link.provider)).toEqual(['Amazon', '楽天市場', 'Yahoo!ショッピング', 'Google'])
+    expect(links.every(link => link.keyword === '卓上 ライト' && link.url.startsWith('https://'))).toBe(true)
+    expect(links[0].url).toContain('%E5%8D%93%E4%B8%8A%20%E3%83%A9%E3%82%A4%E3%83%88')
+  })
+
+  it('locks the Campaign save action while sending and after success', () => {
+    expect(campaignSavePresentation(false, null)).toEqual({ label: '商品・Campaign・Iterationを保存', disabled: false })
+    expect(campaignSavePresentation(true, null)).toEqual({ label: '保存中…', disabled: true })
+    expect(campaignSavePresentation(false, { campaignId: 'campaign-1' })).toEqual({ label: '保存済み', disabled: true })
+    expect(newCampaignIdempotencyKey()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  })
+
+  it('shows the API-optional manual product flow and complete campaign lineage', () => {
+    const opportunity = { id: 'opp-1', sourceItemId: 'item-a', youtubeVideoId: 'source01', title: 'Source', opportunityScore: 90, breakoutScore: 88, velocityMode: 'estimated_lifetime', percentilePopulationSize: 25 }
+    const output = { product_or_theme_name: '卓上ライト', video_subject: '候補', recommendation: 'adopt', recommendation_reason: '比較余地', evidence_quality: 'limited', growth_hypotheses: [], product_search_keywords: ['卓上 ライト'], similar_product_categories: [], video_ideas: ['比較企画'], hooks: ['暗い机が変わる'], }
+    const campaigns = [{ id: 'campaign-1', name: '卓上ライト検証', objective: 'クリック仮説の検証', status: 'active', primaryAnalysisId: 'analysis-1', origins: [{ id: 'origin-1', contextKind: 'discovery', rankPosition: 1, scoreVersion: 'youtube-v1' }], iterations: [{ id: 'iteration-1', iterationNumber: 1, status: 'published', sourceAnalysisId: 'analysis-1', appealHypothesis: '省スペース', hookText: '暗い机が変わる', contentOutline: { text: '比較して紹介' }, treatmentFingerprint: 'a'.repeat(64), product: { productName: '確認済みライト', merchant: 'Example Shop', discoveryChannel: 'google_search', searchKeyword: '卓上 ライト', productUrl: 'https://example.com/product', affiliateUrl: null }, publication: { youtubeVideoId: 'video123', canonicalUrl: 'https://www.youtube.com/watch?v=video123' } }] }]
+    const markup = renderToStaticMarkup(<RevenueLabView state={{ config: { configured: true, missing: [], analysis: { configured: true }, products: { configured: false } }, queries: [], opportunities: [opportunity], trackingOpportunities: [], analyses: [{ id: 'analysis-1', sourceItemId: 'item-a', status: 'succeeded', output }], productSearches: [], campaigns, latestJob: null }} {...handlers} />)
+    expect(markup).toContain('Manual / Search Product')
+    expect(markup).toContain('商品APIなしで利用可能')
+    expect(markup).toContain('Amazon: 卓上 ライト')
+    expect(markup).toContain('楽天市場: 卓上 ライト')
+    expect(markup).toContain('target="_blank"')
+    expect(markup).toContain('rel="noopener noreferrer"')
+    expect(markup).toContain('楽天認証情報が未設定でも')
+    expect(markup).toContain('Campaign実験台帳')
+    expect(markup).toContain('卓上ライト検証')
+    expect(markup).toContain('確認済みライト')
+    expect(markup).toContain('Iteration #1')
+    expect(markup).toContain('YouTube Video ID: video123')
+    expect(markup).toContain('Treatment fingerprint')
+  })
+
+  it('allows a pre-publication Campaign and exposes later Video ID registration', () => {
+    const opportunity = { id: 'opp-1', sourceItemId: 'item-a', youtubeVideoId: 'source01', title: 'Source', opportunityScore: 90, breakoutScore: 88, velocityMode: 'estimated_lifetime', percentilePopulationSize: 25 }
+    const output = { product_or_theme_name: '商品', video_subject: '候補', recommendation: 'hold', recommendation_reason: '調査', evidence_quality: 'limited', growth_hypotheses: [], product_search_keywords: ['商品 検索'], similar_product_categories: [], video_ideas: ['構成'], hooks: ['Hook'] }
+    const campaigns = [{ id: 'campaign-draft', name: '公開前Campaign', status: 'active', origins: [], iterations: [{ id: 'iteration-draft', iterationNumber: 1, status: 'draft', appealHypothesis: '訴求', hookText: 'Hook', contentOutline: { text: '構成' }, treatmentFingerprint: 'c'.repeat(64), product: { productName: '確認済み商品', merchant: 'Shop', discoveryChannel: 'google_search', searchKeyword: '商品 検索', productUrl: 'https://example.com/product' }, publication: null }] }]
+    const markup = renderToStaticMarkup(<RevenueLabView state={{ config: { configured: true, missing: [], analysis: { configured: true }, products: { configured: false } }, queries: [], opportunities: [opportunity], trackingOpportunities: [], analyses: [{ id: 'analysis-1', sourceItemId: 'item-a', status: 'succeeded', output }], productSearches: [], campaigns, latestJob: null }} {...handlers} />)
+    expect(markup).toContain('YouTube公開情報（任意・後から登録可）')
+    expect(markup).toContain('公開前は空欄のまま保存できます')
+    expect(markup).toMatch(/YouTube Video ID（任意）<input pattern="\[A-Za-z0-9_\-\]\{6,32\}" value=""\/?>/)
+    expect(markup).toContain('Iteration #1')
+    expect(markup).toContain('下書き')
+    expect(markup).toContain('公開後にYouTube情報を追加')
+    expect(markup).toContain('Publicationを登録')
   })
 })

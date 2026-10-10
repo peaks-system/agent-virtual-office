@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { configurationStatus, createRevenueApi } = require('../scripts/revenue-api.cjs')
 const uuid = '11111111-1111-4111-8111-111111111111'
+const idempotencyKey = '22222222-2222-4222-8222-222222222222'
 const servers = []
 const jsonHeaders = { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }
 
@@ -108,6 +109,66 @@ describe('Revenue Lab API', () => {
     const response = await fetch(`${origin}/api/revenue/product-candidates/${uuid}/decisions`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ analysisId: uuid, decision: 'selected_for_research' }) })
     expect(response.status).toBe(201)
     expect(store.createProductDecision).toHaveBeenCalledWith(uuid, uuid, expect.objectContaining({ decision: 'selected_for_research' }))
+  })
+
+  it('creates one manual Campaign lineage through the isolated authenticated API', async () => {
+    const store = { createManualCampaign: vi.fn(async () => ({ campaignId: uuid, iterationStatus: 'published' })) }
+    const origin = await fixture({ store })
+    const input = {
+      idempotencyKey,
+      campaignName: '卓上ライト検証', objective: '訴求の確認', discoveryChannel: 'google_search',
+      searchKeyword: '卓上 ライト', merchant: 'Example Shop', productName: '確認済みライト',
+      productUrl: 'https://example.com/product', affiliateUrl: '', priceAmount: 3980, currency: 'jpy', productNotes: '人間が商品ページを確認',
+      appealHypothesis: '省スペースを訴求', hookText: '暗い机が変わる', contentOutline: '比較して紹介', scriptText: '',
+      youtubeVideoId: 'video123', publicationTitle: '公開タイトル', publishedAt: '2026-10-10T01:00:00+09:00',
+    }
+    const denied = await fixture({ store, authorize: () => false })
+    expect((await fetch(`${denied}/api/revenue/analyses/${uuid}/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(input) })).status).toBe(401)
+    const response = await fetch(`${origin}/api/revenue/analyses/${uuid}/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(input) })
+    expect(response.status).toBe(201)
+    expect(store.createManualCampaign).toHaveBeenCalledWith(uuid, expect.objectContaining({
+      campaignName: '卓上ライト検証', productUrl: 'https://example.com/product', affiliateUrl: null,
+      currency: 'JPY', youtubeVideoId: 'video123', publishedAt: '2026-10-09T16:00:00.000Z',
+    }))
+  })
+
+  it('creates a draft Campaign without requiring a YouTube publication', async () => {
+    const store = { createManualCampaign: vi.fn(async () => ({ campaignId: uuid, publicationId: null, iterationStatus: 'draft' })) }
+    const origin = await fixture({ store })
+    const input = { idempotencyKey, campaignName: '公開前Campaign', discoveryChannel: 'google_search', searchKeyword: 'keyword', merchant: 'shop', productName: 'product', productUrl: 'https://example.com/product', currency: 'JPY', appealHypothesis: 'appeal', hookText: 'hook', contentOutline: 'outline', youtubeVideoId: '' }
+    const response = await fetch(`${origin}/api/revenue/analyses/${uuid}/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(input) })
+    expect(response.status).toBe(201)
+    expect((await response.json()).data).toMatchObject({ publicationId: null, iterationStatus: 'draft' })
+    expect(store.createManualCampaign).toHaveBeenCalledWith(uuid, expect.objectContaining({ youtubeVideoId: null, publicationTitle: null, publishedAt: null }))
+  })
+
+  it('registers a real YouTube publication later and validates only supplied IDs', async () => {
+    const store = { registerCampaignPublication: vi.fn(async () => ({ publicationId: uuid, iterationStatus: 'published' })) }
+    const origin = await fixture({ store })
+    const invalid = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/publications`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ youtubeVideoId: 'bad id' }) })
+    expect(invalid.status).toBe(400)
+    const response = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/publications`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ youtubeVideoId: 'realVideo1', publicationTitle: '公開済み', publishedAt: '2026-10-10T12:00:00+09:00' }) })
+    expect(response.status).toBe(201)
+    expect(store.registerCampaignPublication).toHaveBeenCalledWith(uuid, { youtubeVideoId: 'realVideo1', publicationTitle: '公開済み', publishedAt: '2026-10-10T03:00:00.000Z' })
+  })
+
+  it('returns the existing Campaign for an idempotent replay', async () => {
+    const store = { createManualCampaign: vi.fn(async () => ({ campaignId: uuid, iterationStatus: 'draft', created: false, idempotentReplay: true })) }
+    const origin = await fixture({ store })
+    const input = { idempotencyKey, campaignName: 'Campaign', discoveryChannel: 'direct', searchKeyword: 'keyword', merchant: 'shop', productName: 'product', productUrl: 'https://example.com/product', currency: 'JPY', appealHypothesis: 'appeal', hookText: 'hook', contentOutline: 'outline' }
+    const response = await fetch(`${origin}/api/revenue/analyses/${uuid}/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(input) })
+    expect(response.status).toBe(200)
+    expect((await response.json()).data).toMatchObject({ campaignId: uuid, created: false, idempotentReplay: true })
+    expect(store.createManualCampaign).toHaveBeenCalledWith(uuid, expect.objectContaining({ idempotencyKey }))
+  })
+
+  it('rejects insecure product URLs and malformed YouTube IDs before storage', async () => {
+    const store = { createManualCampaign: vi.fn() }
+    const origin = await fixture({ store })
+    const base = { idempotencyKey, campaignName: 'test', discoveryChannel: 'direct', searchKeyword: 'keyword', merchant: 'shop', productName: 'product', productUrl: 'https://example.com/product', currency: 'JPY', appealHypothesis: 'appeal', hookText: 'hook', contentOutline: 'outline', youtubeVideoId: 'video123' }
+    expect((await fetch(`${origin}/api/revenue/analyses/${uuid}/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ ...base, productUrl: 'http://example.com' }) })).status).toBe(400)
+    expect((await fetch(`${origin}/api/revenue/analyses/${uuid}/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ ...base, youtubeVideoId: 'bad id' }) })).status).toBe(400)
+    expect(store.createManualCampaign).not.toHaveBeenCalled()
   })
 
   it('uses a consistent safe error envelope for malformed JSON and service failures', async () => {

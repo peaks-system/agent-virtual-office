@@ -23,6 +23,62 @@ function errorBody(code, message, details = null) {
   return { error: { code, message, ...(details == null ? {} : { details }) } }
 }
 
+function boundedText(value, name, max, { optional = false } = {}) {
+  if (optional && (value == null || value === '')) return null
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > max) throw new TypeError(`Invalid ${name}`)
+  return value.trim()
+}
+
+function httpsUrl(value, name, { optional = false } = {}) {
+  const text = boundedText(value, name, 2048, { optional })
+  if (text == null) return null
+  let url
+  try { url = new URL(text) } catch { throw new TypeError(`Invalid ${name}`) }
+  if (url.protocol !== 'https:' || url.username || url.password) throw new TypeError(`Invalid ${name}`)
+  return url.toString()
+}
+
+function publicationInput(input) {
+  const youtubeVideoId = boundedText(input.youtubeVideoId, 'youtubeVideoId', 32, { optional: true })
+  if (youtubeVideoId != null && !/^[A-Za-z0-9_-]{6,32}$/.test(youtubeVideoId)) throw new TypeError('Invalid youtubeVideoId')
+  const title = boundedText(input.publicationTitle ?? input.title, 'publicationTitle', 200, { optional: true })
+  const publishedAt = input.publishedAt == null || input.publishedAt === '' ? null : input.publishedAt
+  if (publishedAt != null && (typeof publishedAt !== 'string' || !Number.isFinite(Date.parse(publishedAt)))) throw new TypeError('Invalid publishedAt')
+  if (youtubeVideoId == null && (title != null || publishedAt != null)) throw new TypeError('Publication metadata requires youtubeVideoId')
+  return { youtubeVideoId, publicationTitle: title, publishedAt: publishedAt == null ? null : new Date(publishedAt).toISOString() }
+}
+
+function manualCampaignInput(input) {
+  const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+  if (!UUID.test(idempotencyKey)) throw new TypeError('Invalid idempotencyKey')
+  const discoveryChannel = boundedText(input.discoveryChannel, 'discoveryChannel', 40)
+  if (!['amazon_search', 'rakuten_search', 'yahoo_search', 'google_search', 'direct'].includes(discoveryChannel)) throw new TypeError('Invalid discoveryChannel')
+  const currency = boundedText(input.currency || 'JPY', 'currency', 3).toUpperCase()
+  if (!/^[A-Z]{3}$/.test(currency)) throw new TypeError('Invalid currency')
+  const priceAmount = input.priceAmount == null || input.priceAmount === '' ? null : Number(input.priceAmount)
+  if (priceAmount != null && (!Number.isFinite(priceAmount) || priceAmount < 0)) throw new TypeError('Invalid priceAmount')
+  const publication = publicationInput(input)
+  return {
+    idempotencyKey,
+    campaignName: boundedText(input.campaignName, 'campaignName', 120),
+    objective: boundedText(input.objective, 'objective', 1000, { optional: true }),
+    discoveryChannel,
+    searchKeyword: boundedText(input.searchKeyword, 'searchKeyword', 128),
+    merchant: boundedText(input.merchant, 'merchant', 80),
+    productName: boundedText(input.productName, 'productName', 240),
+    productUrl: httpsUrl(input.productUrl, 'productUrl'),
+    affiliateUrl: httpsUrl(input.affiliateUrl, 'affiliateUrl', { optional: true }),
+    priceAmount,
+    currency,
+    productNotes: boundedText(input.productNotes, 'productNotes', 1000, { optional: true }),
+    appealHypothesis: boundedText(input.appealHypothesis, 'appealHypothesis', 1000),
+    hookText: boundedText(input.hookText, 'hookText', 500),
+    contentOutline: boundedText(input.contentOutline, 'contentOutline', 5000),
+    scriptText: boundedText(input.scriptText, 'scriptText', 20000, { optional: true }),
+    ...publication,
+  }
+}
+
 function createRevenueApi({
   authorize = () => true,
   permit = permitted,
@@ -88,7 +144,7 @@ function createRevenueApi({
     const pathname = new URL(req.url, 'http://local').pathname.replace(/^\/api\/revenue(?=\/|$)/, '') || '/'
     try {
       if (req.method === 'GET' && pathname === '/dashboard') {
-        if (!config.configured) return reply(res, 200, { data: { config, queries: [], opportunities: [], trackingOpportunities: [], latestJob: null, latestRun: null, latestTrackingRun: null } })
+        if (!config.configured) return reply(res, 200, { data: { config, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], latestJob: null, latestRun: null, latestTrackingRun: null } })
         const limitValue = Number(new URL(req.url, 'http://local').searchParams.get('limit') || 3)
         const limit = Number.isInteger(limitValue) ? Math.max(1, Math.min(limitValue, 3)) : 3
         return reply(res, 200, { data: { config, ...(await getStore().dashboard(limit)) } })
@@ -139,6 +195,23 @@ function createRevenueApi({
         const result = await getStore().enqueueProductSearch(productSearchMatch[1], today())
         return reply(res, result.created ? 201 : 200, { data: result })
       }
+      const manualCampaignMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/campaigns$/i)
+      if (req.method === 'POST' && manualCampaignMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!config.configured) return fail(res, 503, 'REVENUE_NOT_CONFIGURED', 'Revenue Labの環境変数を設定してください。', { missing: config.missing })
+        if (!UUID.test(manualCampaignMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'analysis idが正しくありません。')
+        const result = await getStore().createManualCampaign(manualCampaignMatch[1], manualCampaignInput(await body(req)))
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
+      const publicationMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/publications$/i)
+      if (req.method === 'POST' && publicationMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!config.configured) return fail(res, 503, 'REVENUE_NOT_CONFIGURED', 'Revenue Labの環境変数を設定してください。', { missing: config.missing })
+        if (!UUID.test(publicationMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'iteration idが正しくありません。')
+        const input = publicationInput(await body(req))
+        if (!input.youtubeVideoId) return fail(res, 400, 'VALIDATION_ERROR', 'YouTube Video IDを入力してください。')
+        return reply(res, 201, { data: await getStore().registerCampaignPublication(publicationMatch[1], input) })
+      }
       const reviewMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/reviews$/i)
       if (req.method === 'POST' && reviewMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
@@ -180,4 +253,4 @@ function createRevenueApi({
   return { handler, close() {} }
 }
 
-module.exports = { UUID, configurationStatus, createRevenueApi, errorBody }
+module.exports = { UUID, configurationStatus, createRevenueApi, errorBody, manualCampaignInput, publicationInput }

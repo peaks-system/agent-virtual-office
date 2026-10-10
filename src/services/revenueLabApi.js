@@ -67,4 +67,16 @@ export function createProductCandidateDecision(candidateId, analysisId, decision
   })
 }
 
+export function createManualCampaign(analysisId, input) {
+  return request(`/analyses/${encodeURIComponent(analysisId)}/campaigns`, {
+    method: 'POST', body: JSON.stringify(input),
+  })
+}
+
+export function registerCampaignPublication(iterationId, input) {
+  return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/publications`, {
+    method: 'POST', body: JSON.stringify(input),
+  })
+}
+
 export { request as revenueRequest }
