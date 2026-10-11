@@ -107,6 +107,21 @@ describe('Revenue Lab job handler and local worker', () => {
     expect(store.persistAnalysisSuccess).toHaveBeenCalledOnce()
   })
 
+  it('generates and persists a Creative Production revision through the runner-neutral worker', async () => {
+    const inputSnapshot = { campaign: { id: 'campaign-1' }, verified_product_facts: [], product_assets: [] }
+    const store = {
+      getCreativeProductionRequest: vi.fn(async () => ({ id: 'request-1', inputSnapshot, revisionNumber: 2 })),
+      markCreativeProductionRunning: vi.fn(async () => {}), persistCreativeProductionSuccess: vi.fn(async () => {}),
+      persistCreativeProductionFailure: vi.fn(async () => {}),
+    }
+    const result = { productionPlan: { target_format: 'youtube_shorts' }, resolvedModel: 'gpt-test', responseId: 'resp-1', usage: {} }
+    const creativeProducer = { plan: vi.fn(async () => result) }
+    const handler = createJobHandlers({ store, youtube: {}, creativeProducer }).get('creative.production.plan')
+    await expect(handler({ id: 'job-creative', payload: { creative_production_request_id: 'request-1' } })).resolves.toEqual({ creativeProductionRequestId: 'request-1', revisionNumber: 2 })
+    expect(creativeProducer.plan).toHaveBeenCalledWith(inputSnapshot)
+    expect(store.persistCreativeProductionSuccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'request-1' }), result)
+  })
+
   it('submits, persists, polls, and completes one provider-neutral video scene', async () => {
     const scene = { id: 'generation-1', runId: 'run-1', provider: 'pollo', providerVersion: 'platform-v1', requestedModel: 'pollo-v2', providerTaskId: null, promptSnapshot: '[背景のみ] 朝の机', durationSeconds: 5, aspectRatio: '9:16', resolution: '480p', attemptNumber: 1, status: 'queued' }
     const store = {

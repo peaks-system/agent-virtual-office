@@ -4,6 +4,8 @@ const { inputFingerprint } = require('./canonical-json.cjs')
 const { DEFAULT_MODEL, PROMPT_VERSION, SCHEMA_VERSION } = require('./analysis-schema.cjs')
 const { SCORE_PARAMETERS: PRODUCT_SCORE_PARAMETERS, SCORE_VERSION: PRODUCT_SCORE_VERSION } = require('./product-ranking.cjs')
 const { API_VERSION: RAKUTEN_API_VERSION, PROVIDER_ID: RAKUTEN_PROVIDER_ID } = require('./providers/rakuten-product-provider.cjs')
+const { DEFAULT_MODEL: CREATIVE_DEFAULT_MODEL, PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./creative-production-schema.cjs')
+const { DEFAULT_MODEL: POLLO_DEFAULT_MODEL, DEFAULT_RESOLUTION: POLLO_DEFAULT_RESOLUTION, PROVIDER_ID: POLLO_PROVIDER_ID, PROVIDER_VERSION: POLLO_PROVIDER_VERSION, normalizedDuration, validatedModel } = require('./providers/pollo-video-generation-provider.cjs')
 
 const PROFILE = 'revenue_lab'
 
@@ -71,6 +73,33 @@ function opportunityFromRow(row) {
     percentilePopulationSize: row.percentile_population_size,
     createdAt: row.created_at,
   }
+}
+
+function creativeProductFacts(product) {
+  const facts = []
+  const add = (id, label, value, source = 'curated_product') => {
+    if (value == null || value === '') return
+    facts.push({ id, label, value, source })
+  }
+  add('product.name', '商品名', product.product_name)
+  add('product.merchant', '販売元・ブランド', product.merchant)
+  add('product.price', '確認価格', product.price_amount == null ? null : {
+    amount: Number(product.price_amount), currency: product.currency,
+    display: product.currency === 'JPY' ? `${Number(product.price_amount)}円` : `${Number(product.price_amount)} ${product.currency || ''}`.trim(),
+  }, 'curated_product_price')
+  add('product.category', '商品カテゴリ', product.product_category)
+  for (const [index, [key, value]] of Object.entries(product.verified_facts || {}).entries()) {
+    const slug = String(key).replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'fact'
+    add(`verified.${index + 1}.${slug}`, `確認済み事実: ${key}`, value, 'human_verified')
+  }
+  const reserved = new Set(['product_name', 'merchant', 'product_url', 'affiliate_url', 'price_amount', 'currency', 'notes', 'assets'])
+  for (const [index, [key, value]] of Object.entries(product.facts_snapshot || {}).entries()) {
+    if (reserved.has(key) || value == null || typeof value === 'object') continue
+    const slug = String(key).replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'fact'
+    add(`snapshot.${index + 1}.${slug}`, `保存済み商品事実: ${key}`, value, 'curated_product_snapshot')
+    if (facts.length >= 30) break
+  }
+  return facts
 }
 
 function analysisContext(item, kind, rankPosition) {
@@ -315,9 +344,7 @@ function createSupabaseStore({
 
   async function manualCampaignsForProjects(projectIds) {
     if (!projectIds.length) return []
-    const campaigns = await request(
-      `campaigns?project_id=in.(${encodeURIComponent(projectIds.join(','))})&select=*&order=created_at.desc&limit=50`,
-    )
+    const campaigns = await request(`campaigns?project_id=in.(${encodeURIComponent(projectIds.join(','))})&select=*&order=created_at.desc&limit=50`)
     if (!campaigns.length) return []
     const campaignIds = campaigns.map(row => row.id)
     const [origins, iterations] = await Promise.all([
@@ -326,61 +353,80 @@ function createSupabaseStore({
     ])
     const productIds = [...new Set(iterations.map(row => row.curated_product_id).filter(Boolean))]
     const iterationIds = iterations.map(row => row.id)
-    const [products, publications] = await Promise.all([
+    const [products, publications, productAssets, productionRequests] = await Promise.all([
       productIds.length ? request(`curated_products?id=in.(${encodeURIComponent(productIds.join(','))})&select=*`) : [],
       iterationIds.length ? request(`campaign_publications?campaign_iteration_id=in.(${encodeURIComponent(iterationIds.join(','))})&select=*&order=created_at.asc`) : [],
+      productIds.length ? request(`product_assets?curated_product_id=in.(${encodeURIComponent(productIds.join(','))})&select=*&order=ordinal.asc`) : [],
+      iterationIds.length ? request(`creative_production_requests?campaign_iteration_id=in.(${encodeURIComponent(iterationIds.join(','))})&select=*&order=revision_number.desc`) : [],
     ])
+    const requestIds = productionRequests.map(row => row.id)
+    const plans = requestIds.length ? await request(`creative_production_plans?production_request_id=in.(${encodeURIComponent(requestIds.join(','))})&select=*`) : []
+    const planIds = plans.map(row => row.id)
+    const generations = planIds.length ? await request(`video_generation_scenes?creative_production_plan_id=in.(${encodeURIComponent(planIds.join(','))})&select=*&order=attempt_number.desc`) : []
+    const generationsByPlan = new Map()
+    for (const row of generations) {
+      const records = generationsByPlan.get(row.creative_production_plan_id) || []
+      records.push({ id: row.id, runId: row.run_id, planId: row.creative_production_plan_id, sceneNumber: row.creative_scene_number,
+        attemptNumber: row.attempt_number, provider: row.provider, providerVersion: row.provider_version, model: row.requested_model,
+        providerTaskStatus: row.provider_task_status, durationSeconds: row.duration_seconds, aspectRatio: row.aspect_ratio,
+        resolution: row.resolution, status: row.status, providerCost: row.provider_cost_amount == null ? null : Number(row.provider_cost_amount),
+        costCurrency: row.provider_cost_currency, costProvenance: row.cost_provenance, outputUrl: row.output_url,
+        safeErrorCode: row.safe_error_code, createdAt: row.created_at, submittedAt: row.submitted_at, completedAt: row.completed_at })
+      generationsByPlan.set(row.creative_production_plan_id, records)
+    }
+    const planByRequest = new Map(plans.map(row => [row.production_request_id, row]))
+    const productionByIteration = new Map()
+    for (const row of productionRequests) {
+      const plan = planByRequest.get(row.id); const records = productionByIteration.get(row.campaign_iteration_id) || []
+      records.push({ requestId: row.id, revisionNumber: row.revision_number, status: row.status, promptVersion: row.prompt_version,
+        schemaVersion: row.schema_version, requestedModel: row.requested_model, resolvedModel: row.resolved_model,
+        inputFingerprint: row.input_fingerprint, generatedAt: row.generated_at, errorCode: row.error_code,
+        planId: plan?.id || null, output: plan?.output_json || null, providerExport: plan?.provider_export || null,
+        videoGenerations: plan ? generationsByPlan.get(plan.id) || [] : [] })
+      productionByIteration.set(row.campaign_iteration_id, records)
+    }
+    const assetsByProduct = new Map()
+    for (const row of productAssets) {
+      const records = assetsByProduct.get(row.curated_product_id) || []
+      records.push({ id: row.id, ordinal: row.ordinal, assetRole: row.asset_role, assetKind: row.asset_kind,
+        assetUrl: row.asset_url, assetSource: row.asset_source, usagePermission: row.usage_permission, label: row.label,
+        humanVerifiedAt: row.human_verified_at, creativeEligible: ['owned', 'licensed', 'authorized_reference'].includes(row.usage_permission) })
+      assetsByProduct.set(row.curated_product_id, records)
+    }
     const productById = new Map(products.map(row => [row.id, row]))
     const publicationsByIteration = new Map()
     for (const row of publications) {
       const records = publicationsByIteration.get(row.campaign_iteration_id) || []
-      records.push({
-        id: row.id, platform: row.platform, youtubeVideoId: row.youtube_video_id,
-        youtubeChannelId: row.youtube_channel_id, canonicalUrl: row.canonical_url,
-        title: row.title, publishedAt: row.published_at, status: row.status,
-        initialMetadata: row.initial_metadata, createdAt: row.created_at,
-      })
+      records.push({ id: row.id, platform: row.platform, youtubeVideoId: row.youtube_video_id, youtubeChannelId: row.youtube_channel_id,
+        canonicalUrl: row.canonical_url, title: row.title, publishedAt: row.published_at, status: row.status,
+        initialMetadata: row.initial_metadata, createdAt: row.created_at })
       publicationsByIteration.set(row.campaign_iteration_id, records)
     }
     const originsByCampaign = new Map()
-    for (const row of origins) {
-      const records = originsByCampaign.get(row.campaign_id) || []
-      records.push({
-        id: row.id, contextKind: row.context_kind, opportunityId: row.opportunity_id,
-        trackingOpportunityId: row.tracking_opportunity_id, sourceQueryId: row.source_query_id,
-        rankPosition: row.rank_position, scoreVersion: row.score_version, originSnapshot: row.origin_snapshot,
-      })
-      originsByCampaign.set(row.campaign_id, records)
-    }
+    for (const row of origins) { const records = originsByCampaign.get(row.campaign_id) || []; records.push({ id: row.id,
+      contextKind: row.context_kind, opportunityId: row.opportunity_id, trackingOpportunityId: row.tracking_opportunity_id,
+      sourceQueryId: row.source_query_id, rankPosition: row.rank_position, scoreVersion: row.score_version,
+      originSnapshot: row.origin_snapshot }); originsByCampaign.set(row.campaign_id, records) }
     const iterationsByCampaign = new Map()
     for (const row of iterations) {
-      const product = productById.get(row.curated_product_id)
-      const records = iterationsByCampaign.get(row.campaign_id) || []
-      records.push({
-        id: row.id, iterationNumber: row.iteration_number, status: row.status,
-        sourceAnalysisId: row.source_analysis_id,
-        appealHypothesis: row.appeal_hypothesis, hookText: row.hook_text,
-        contentOutline: row.content_outline, scriptText: row.script_text,
-        treatmentFingerprint: row.treatment_fingerprint, lockedAt: row.locked_at,
-        product: product ? {
-          id: product.id, sourceKind: product.source_kind, discoveryChannel: product.discovery_channel,
+      const product = productById.get(row.curated_product_id); const records = iterationsByCampaign.get(row.campaign_id) || []
+      records.push({ id: row.id, iterationNumber: row.iteration_number, status: row.status, sourceAnalysisId: row.source_analysis_id,
+        appealHypothesis: row.appeal_hypothesis, hookText: row.hook_text, contentOutline: row.content_outline,
+        scriptText: row.script_text, treatmentFingerprint: row.treatment_fingerprint, lockedAt: row.locked_at,
+        product: product ? { id: product.id, sourceKind: product.source_kind, discoveryChannel: product.discovery_channel,
           searchKeyword: product.search_keyword, merchant: product.merchant, productName: product.product_name,
-          productUrl: product.product_url, affiliateUrl: product.affiliate_url,
-          priceAmount: product.price_amount == null ? null : Number(product.price_amount),
+          productUrl: product.product_url, affiliateUrl: product.affiliate_url, priceAmount: product.price_amount == null ? null : Number(product.price_amount),
           currency: product.currency, notes: product.notes, humanVerifiedAt: product.human_verified_at,
-        } : null,
-        publications: publicationsByIteration.get(row.id) || [],
-        publication: (publicationsByIteration.get(row.id) || [])[0] || null,
-      })
+          productCategory: product.product_category, verifiedFacts: product.verified_facts || {}, cautions: product.cautions,
+          isOwnProduct: product.is_own_product === true, factsSnapshot: product.facts_snapshot || {}, assets: assetsByProduct.get(product.id) || [] } : null,
+        publications: publicationsByIteration.get(row.id) || [], publication: (publicationsByIteration.get(row.id) || [])[0] || null,
+        productionPlans: productionByIteration.get(row.id) || [] })
       iterationsByCampaign.set(row.campaign_id, records)
     }
-    return campaigns.map(row => ({
-      id: row.id, projectId: row.project_id, sourceItemId: row.source_item_id,
-      analysisId: row.primary_analysis_id, name: row.name, objective: row.objective,
-      status: row.status, analysisSnapshot: row.analysis_snapshot, createdAt: row.created_at,
-      origins: originsByCampaign.get(row.id) || [],
-      iterations: iterationsByCampaign.get(row.id) || [],
-    }))
+    return campaigns.map(row => ({ id: row.id, projectId: row.project_id, sourceItemId: row.source_item_id,
+      analysisId: row.primary_analysis_id, name: row.name, objective: row.objective, status: row.status,
+      analysisSnapshot: row.analysis_snapshot, createdAt: row.created_at, origins: originsByCampaign.get(row.id) || [],
+      iterations: iterationsByCampaign.get(row.id) || [] }))
   }
 
   async function dashboard(limit = 3) {
@@ -711,6 +757,134 @@ function createSupabaseStore({
       p_analysis_id: analysisId, p_payload: payload, p_treatment_fingerprint: inputFingerprint(treatment),
       p_request_fingerprint: inputFingerprint(payload),
       p_idempotency_key: input.idempotencyKey,
+    })
+  }
+
+  async function enqueueCreativeProduction(iterationId, { idempotencyKey, model = CREATIVE_DEFAULT_MODEL } = {}) {
+    const iterations = await request(`campaign_iterations?id=eq.${encodeURIComponent(iterationId)}&select=*&limit=1`)
+    const iteration = iterations?.[0]
+    if (!iteration) throw new RevenueStoreError('CAMPAIGN_ITERATION_NOT_FOUND', 'Campaign iteration was not found', 404)
+    const [campaignRows, productRows, assetRows] = await Promise.all([
+      request(`campaigns?id=eq.${encodeURIComponent(iteration.campaign_id)}&select=*&limit=1`),
+      request(`curated_products?id=eq.${encodeURIComponent(iteration.curated_product_id)}&select=*&limit=1`),
+      request(`product_assets?curated_product_id=eq.${encodeURIComponent(iteration.curated_product_id)}&select=*&order=ordinal.asc`),
+    ])
+    const campaign = campaignRows?.[0]
+    const product = productRows?.[0]
+    if (!campaign || !product) throw new RevenueStoreError('CREATIVE_PRODUCTION_LINEAGE_NOT_FOUND', 'Campaign product lineage was not found', 404)
+    if (campaign.status === 'voided') throw new RevenueStoreError('CAMPAIGN_IMMUTABLE', 'Voided Campaign cannot create production plans', 409)
+    const facts = creativeProductFacts(product)
+    const input = {
+      contract: { target_format: 'youtube_shorts', aspect_ratio: '9:16', provider_neutral: true },
+      campaign: { id: campaign.id, name: campaign.name, objective: campaign.objective, lineage_kind: campaign.lineage_kind || 'opportunity' },
+      iteration: {
+        id: iteration.id, iteration_number: iteration.iteration_number, status: iteration.status,
+        purpose: campaign.objective || null, appeal_hypothesis: iteration.appeal_hypothesis,
+        hook: iteration.hook_text, outline: iteration.content_outline, script: iteration.script_text,
+      },
+      product: {
+        id: product.id, source_kind: product.source_kind, product_name: product.product_name,
+        merchant: product.merchant, product_category: product.product_category,
+        is_own_product: product.is_own_product === true, cautions: product.cautions || null,
+      },
+      verified_product_facts: facts,
+      product_assets: assetRows.map(row => ({
+        id: row.id, ordinal: row.ordinal, asset_kind: row.asset_kind,
+        asset_source: row.asset_source, usage_permission: row.usage_permission,
+        label: row.label, creative_eligible: ['owned', 'licensed', 'authorized_reference'].includes(row.usage_permission),
+      })),
+      constraints: [
+        'Use only verified_product_facts for product claims and cite fact IDs.',
+        'Never infer or generate the product body appearance.',
+        'Product display scenes use an eligible real Product Asset when available.',
+        'AI-generated scenes are backgrounds, people without a visible product, atmosphere, transitions, or effects only.',
+      ],
+    }
+    return rpc('enqueue_creative_production_plan', {
+      p_campaign_iteration_id: iterationId, p_input_snapshot: input,
+      p_input_fingerprint: inputFingerprint(input), p_prompt_version: CREATIVE_PROMPT_VERSION,
+      p_schema_version: CREATIVE_SCHEMA_VERSION, p_requested_model: model,
+      p_idempotency_key: idempotencyKey,
+    })
+  }
+
+  async function getCreativeProductionRequest(id) {
+    const rows = await request(`creative_production_requests?id=eq.${encodeURIComponent(id)}&select=*&limit=1`)
+    const row = rows?.[0]
+    return row ? { id: row.id, projectId: row.project_id, campaignId: row.campaign_id,
+      iterationId: row.campaign_iteration_id, productId: row.curated_product_id,
+      revisionNumber: row.revision_number, schemaVersion: row.schema_version,
+      inputSnapshot: row.input_snapshot, requestedModel: row.requested_model } : null
+  }
+
+  async function markCreativeProductionRunning(id) {
+    await request(`creative_production_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'running', error_code: null, updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistCreativeProductionSuccess(requestRow, result) {
+    const now = new Date().toISOString()
+    const plan = result.productionPlan
+    const providerExport = {
+      export_version: 'provider-neutral-shorts-v1', generation_provider: null,
+      target: { format: plan.target_format, aspect_ratio: plan.aspect_ratio, duration_seconds: plan.target_duration_seconds },
+      asset_bindings: plan.scenes.filter(scene => scene.product_asset_id).map(scene => ({ scene_number: scene.scene_number, product_asset_id: scene.product_asset_id })),
+      generation_prompts: plan.scenes.filter(scene => scene.ai_generation_prompt).map(scene => ({ scene_number: scene.scene_number, prompt: scene.ai_generation_prompt })),
+      timeline: plan.scenes,
+    }
+    await request('creative_production_plans?on_conflict=production_request_id', {
+      method: 'POST', body: {
+        production_request_id: requestRow.id, project_id: requestRow.projectId,
+        campaign_id: requestRow.campaignId, campaign_iteration_id: requestRow.iterationId,
+        curated_product_id: requestRow.productId, revision_number: requestRow.revisionNumber,
+        schema_version: requestRow.schemaVersion, output_json: plan, provider_export: providerExport,
+      }, prefer: 'resolution=ignore-duplicates,return=minimal',
+    })
+    await request(`creative_production_requests?id=eq.${encodeURIComponent(requestRow.id)}`, {
+      method: 'PATCH', body: { status: 'succeeded', resolved_model: result.resolvedModel,
+        openai_response_id: result.responseId, input_tokens: result.usage.inputTokens,
+        cached_input_tokens: result.usage.cachedInputTokens, output_tokens: result.usage.outputTokens,
+        reasoning_tokens: result.usage.reasoningTokens, generated_at: now, updated_at: now, error_code: null },
+      prefer: 'return=minimal',
+    })
+  }
+
+  async function persistCreativeProductionFailure(id, error) {
+    const status = error?.code === 'OPENAI_REFUSED' ? 'refused' : error?.code === 'OPENAI_INCOMPLETE' ? 'incomplete' : 'failed'
+    await request(`creative_production_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status, error_code: String(error?.code || 'CREATIVE_PRODUCTION_FAILED').slice(0, 80),
+        updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function enqueueVideoGeneration(planId, sceneNumber, {
+    idempotencyKey, regenerate = false, model = POLLO_DEFAULT_MODEL,
+    provider = POLLO_PROVIDER_ID, providerVersion = POLLO_PROVIDER_VERSION,
+    resolution = POLLO_DEFAULT_RESOLUTION,
+  } = {}) {
+    const rows = await request(`creative_production_plans?id=eq.${encodeURIComponent(planId)}&select=*&limit=1`)
+    const plan = rows?.[0]
+    if (!plan) throw new RevenueStoreError('VIDEO_GENERATION_PLAN_NOT_FOUND', 'Creative Production plan was not found', 404)
+    const scene = (plan.output_json?.scenes || []).find(item => Number(item.scene_number) === Number(sceneNumber))
+    if (!scene) throw new RevenueStoreError('VIDEO_GENERATION_SCENE_NOT_FOUND', 'Creative scene was not found', 404)
+    if (scene.visual_source_type !== 'ai_generated_scene' || !scene.ai_generation_prompt) {
+      throw new RevenueStoreError('VIDEO_GENERATION_SCENE_INELIGIBLE', 'Only AI-generated scenes can use a video provider', 409)
+    }
+    const requestedModel = validatedModel(model)
+    const durationSeconds = normalizedDuration(scene.duration_seconds)
+    const promptFingerprint = inputFingerprint({ prompt: scene.ai_generation_prompt })
+    const requestFingerprint = inputFingerprint({
+      plan_id: planId, scene_number: Number(sceneNumber), provider, provider_version: providerVersion,
+      model: requestedModel, prompt_fingerprint: promptFingerprint, duration_seconds: durationSeconds,
+      aspect_ratio: '9:16', resolution, audio_enabled: false,
+    })
+    return rpc('enqueue_video_generation_scene', {
+      p_creative_production_plan_id: planId, p_scene_number: Number(sceneNumber),
+      p_provider: provider, p_provider_version: providerVersion, p_requested_model: requestedModel,
+      p_prompt_fingerprint: promptFingerprint, p_request_fingerprint: requestFingerprint,
+      p_duration_seconds: durationSeconds, p_resolution: resolution,
+      p_idempotency_key: idempotencyKey, p_regenerate: regenerate === true,
     })
   }
 
@@ -1145,7 +1319,8 @@ function createSupabaseStore({
     getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
     enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
     persistProductSearchFailure, createProductDecision, createManualCampaign, registerCampaignPublication,
-    getVideoGenerationScene, markVideoGenerationSubmitting, markVideoGenerationPollingResume,
+    enqueueCreativeProduction, getCreativeProductionRequest, markCreativeProductionRunning, persistCreativeProductionSuccess,
+    persistCreativeProductionFailure, enqueueVideoGeneration, getVideoGenerationScene, markVideoGenerationSubmitting, markVideoGenerationPollingResume,
     persistVideoGenerationTask, persistVideoGenerationPolling, persistVideoGenerationPollingInterrupted,
     persistVideoGenerationSuccess, persistVideoGenerationFailure,
     listQueries, listTrackingCandidates, recoverTimedOutVideoGenerations, markTrackingMissing, markTrackingSeen, failTrackingRuns,
@@ -1154,4 +1329,4 @@ function createSupabaseStore({
   }
 }
 
-module.exports = { PROFILE, RevenueStoreError, analysisContext, createSupabaseStore, mergeAnalysisCandidates, opportunityFromRow, productSearchTerms, queryFromRow }
+module.exports = { PROFILE, RevenueStoreError, analysisContext, creativeProductFacts, createSupabaseStore, mergeAnalysisCandidates, opportunityFromRow, productSearchTerms, queryFromRow }

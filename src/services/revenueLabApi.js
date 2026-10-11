@@ -73,6 +73,18 @@ export function createManualCampaign(analysisId, input) {
   })
 }
 
+export function enqueueCreativeProductionPlan(iterationId, idempotencyKey) {
+  return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/production-plans`, {
+    method: 'POST', body: JSON.stringify({ idempotencyKey }),
+  })
+}
+
+export function enqueueVideoGeneration(planId, sceneNumber, idempotencyKey, regenerate = false) {
+  return request(`/creative-production-plans/${encodeURIComponent(planId)}/scenes/${encodeURIComponent(sceneNumber)}/video-generations`, {
+    method: 'POST', body: JSON.stringify({ idempotencyKey, regenerate }),
+  })
+}
+
 export function registerCampaignPublication(iterationId, input) {
   return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/publications`, {
     method: 'POST', body: JSON.stringify(input),

@@ -7,7 +7,7 @@ class RevenueJobError extends Error {
   constructor(code, message) { super(message); this.name = 'RevenueJobError'; this.code = code }
 }
 
-function createJobHandlers({ store, youtube, analyst, videoGenerationProvider, productProvider, clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), videoPollAttempts = 30, videoPollIntervalMs = 5000 } = {}) {
+function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGenerationProvider, productProvider, clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), videoPollAttempts = 30, videoPollIntervalMs = 5000 } = {}) {
   if (!store || !youtube) throw new TypeError('store and youtube are required')
 
   async function collectYouTube(job) {
@@ -214,6 +214,24 @@ function createJobHandlers({ store, youtube, analyst, videoGenerationProvider, p
     }
   }
 
+  async function createProductionPlan(job) {
+    const requestId = job?.payload?.creative_production_request_id
+    if (!requestId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'creative_production_request_id is required')
+    if (!creativeProducer) throw new RevenueJobError('OPENAI_NOT_CONFIGURED', 'Creative Production is not configured')
+    const request = await store.getCreativeProductionRequest(requestId)
+    if (!request) throw new RevenueJobError('CREATIVE_PRODUCTION_REQUEST_NOT_FOUND', 'Creative Production request was not found')
+    await store.markCreativeProductionRunning(requestId)
+    try {
+      const result = await creativeProducer.plan(request.inputSnapshot)
+      await store.persistCreativeProductionSuccess(request, result)
+      return { creativeProductionRequestId: requestId, revisionNumber: request.revisionNumber }
+    } catch (error) {
+      try { await store.persistCreativeProductionFailure(requestId, error) }
+      catch { console.error('[revenue-lab] Creative Production failure state could not be persisted', { requestId }) }
+      throw error instanceof RevenueJobError ? error : new RevenueJobError(error?.code || 'CREATIVE_PRODUCTION_FAILED', 'Creative Production failed')
+    }
+  }
+
   async function generateVideoScene(job) {
     const sceneId = job?.payload?.video_generation_scene_id
     if (!sceneId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'video_generation_scene_id is required')
@@ -279,6 +297,7 @@ function createJobHandlers({ store, youtube, analyst, videoGenerationProvider, p
     ['youtube.collect', collectYouTube],
     ['youtube.track', trackYouTube],
     ['opportunity.analyze', analyzeOpportunity],
+    ['creative.production.plan', createProductionPlan],
     ['video.generate.scene', generateVideoScene],
     ['product.search', searchProducts],
   ])

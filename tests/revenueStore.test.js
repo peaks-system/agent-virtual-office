@@ -130,6 +130,8 @@ describe('Revenue Lab Supabase store snapshots', () => {
       if (url.includes('/campaign_iterations?')) return response([{ id: 'iteration-1', campaign_id: 'campaign-1', iteration_number: 1, curated_product_id: 'product-1', source_analysis_id: 'analysis-1', status: 'published', appeal_hypothesis: 'appeal', hook_text: 'hook', content_outline: { text: 'outline' }, script_text: null, treatment_fingerprint: 'b'.repeat(64), locked_at: '2026-10-10T00:00:00Z' }])
       if (url.includes('/curated_products?')) return response([{ id: 'product-1', source_kind: 'manual', discovery_channel: 'google_search', search_keyword: 'keyword', merchant: 'Shop', product_name: 'Product', product_url: 'https://example.com/product', affiliate_url: null, price_amount: 1000, currency: 'JPY', notes: null, human_verified_at: '2026-10-10T00:00:00Z' }])
       if (url.includes('/campaign_publications?')) return response([{ id: 'publication-1', campaign_iteration_id: 'iteration-1', platform: 'youtube', youtube_video_id: 'video123', canonical_url: 'https://www.youtube.com/watch?v=video123', title: 'Published', published_at: '2026-10-10T00:00:00Z', status: 'published', initial_metadata: {}, created_at: '2026-10-10T00:00:00Z' }])
+      if (url.includes('/product_assets?')) return response([])
+      if (url.includes('/creative_production_requests?')) return response([])
       throw new Error(`Unexpected request: ${url} ${options?.method}`)
     })
     const store = createSupabaseStore({
@@ -159,7 +161,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
       origins: [{ contextKind: 'discovery', rankPosition: 1, scoreVersion: 'youtube-v1' }],
       iterations: [{ id: 'iteration-1', sourceAnalysisId: 'analysis-1', product: { productName: 'Product', discoveryChannel: 'google_search' }, publication: { youtubeVideoId: 'video123', status: 'published' } }],
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(15)
+    expect(fetchImpl).toHaveBeenCalledTimes(17)
   })
 
   it('creates the manual product, Campaign, Iteration, and publication atomically with a deterministic fingerprint', async () => {
@@ -201,6 +203,71 @@ describe('Revenue Lab Supabase store snapshots', () => {
     expect(await store.registerCampaignPublication('iteration-1', { youtubeVideoId: 'realVideo1', publicationTitle: null, publishedAt: null })).toMatchObject({ publicationId: 'publication-1', iterationStatus: 'ready_to_publish' })
     expect(calls[1]).toMatchObject({ body: { p_campaign_iteration_id: 'iteration-1', p_youtube_video_id: 'realVideo1', p_title: null, p_published_at: null } })
     expect(calls[1].url).toContain('/rpc/register_campaign_publication')
+  })
+
+  it('freezes Campaign, verified facts, and asset metadata before queueing a production revision', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null
+      calls.push({ url, body })
+      if (url.includes('/campaign_iterations?')) return response([{ id: 'iteration-1', campaign_id: 'campaign-1', curated_product_id: 'product-1', iteration_number: 1, status: 'draft', appeal_hypothesis: '時短', hook_text: '片付けが変わる', content_outline: { text: '実商品を紹介' }, script_text: null }])
+      if (url.includes('/campaigns?')) return response([{ id: 'campaign-1', name: 'Campaign', objective: '訴求を検証', status: 'active', lineage_kind: 'direct_product' }])
+      if (url.includes('/curated_products?')) return response([{ id: 'product-1', source_kind: 'direct_product', product_name: '確認済み商品', merchant: '自社', price_amount: 3980, currency: 'JPY', product_category: '収納', verified_facts: { 容量: '500ml', 材質: '確認済み素材' }, facts_snapshot: {}, is_own_product: true }])
+      if (url.includes('/product_assets?')) return response([{ id: 'asset-1', ordinal: 1, asset_kind: 'hero', asset_source: 'self_owned', usage_permission: 'owned', label: '正面', asset_url: 'https://secret.example/asset.jpg' }])
+      if (url.includes('/rpc/enqueue_creative_production_plan')) return response({ requestId: 'request-1', revisionNumber: 1, created: true })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await expect(store.enqueueCreativeProduction('iteration-1', { idempotencyKey: '22222222-2222-4222-8222-222222222222', model: 'gpt-test' })).resolves.toMatchObject({ revisionNumber: 1 })
+    const payload = calls.find(call => call.url.includes('/rpc/enqueue_creative_production_plan')).body
+    expect(payload).toMatchObject({
+      p_campaign_iteration_id: 'iteration-1', p_prompt_version: 'creative-production-planner-v1',
+      p_schema_version: 'creative-production-plan-v1', p_requested_model: 'gpt-test',
+      p_idempotency_key: '22222222-2222-4222-8222-222222222222',
+    })
+    expect(payload.p_input_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(payload.p_input_snapshot.product_assets[0]).toMatchObject({ id: 'asset-1', creative_eligible: true })
+    expect(payload.p_input_snapshot.product_assets[0]).not.toHaveProperty('asset_url')
+    expect(payload.p_input_snapshot.verified_product_facts.map(fact => fact.id)).toEqual(expect.arrayContaining(['product.name', 'product.price', 'verified.1.fact', 'verified.2.fact']))
+    expect(new Set(payload.p_input_snapshot.verified_product_facts.map(fact => fact.id)).size).toBe(payload.p_input_snapshot.verified_product_facts.length)
+  })
+
+  it('persists an immutable provider-neutral plan and makes worker retries insert-safe', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => { calls.push({ url, method: options.method, prefer: options.headers?.prefer, body: options.body ? JSON.parse(options.body) : null }); return response(null, 204) })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const plan = { target_format: 'youtube_shorts', aspect_ratio: '9:16', target_duration_seconds: 30, scenes: [{ scene_number: 1, product_asset_id: 'asset-1', ai_generation_prompt: null }] }
+    await store.persistCreativeProductionSuccess({ id: 'request-1', projectId: 'project-1', campaignId: 'campaign-1', iterationId: 'iteration-1', productId: 'product-1', revisionNumber: 2, schemaVersion: 'creative-production-plan-v1' }, { productionPlan: plan, resolvedModel: 'gpt-test', responseId: 'resp-1', usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 2, reasoningTokens: 0 } })
+    const insert = calls[0]
+    expect(insert.url).toContain('creative_production_plans?on_conflict=production_request_id')
+    expect(insert.prefer).toContain('resolution=ignore-duplicates')
+    expect(insert.body).toMatchObject({ revision_number: 2, output_json: plan, provider_export: { export_version: 'provider-neutral-shorts-v1', generation_provider: null } })
+    expect(calls[1].body).toMatchObject({ status: 'succeeded', resolved_model: 'gpt-test', openai_response_id: 'resp-1' })
+  })
+
+  it('queues only an immutable AI-generated scene with a deterministic provider fingerprint', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null; calls.push({ url, body })
+      if (url.includes('/creative_production_plans?')) return response([{ id: 'plan-1', output_json: { scenes: [
+        { scene_number: 1, visual_source_type: 'ai_generated_scene', ai_generation_prompt: '[背景・演出のみ。商品本体を描写しない] 朝の机', duration_seconds: 7 },
+        { scene_number: 2, visual_source_type: 'real_product_asset', ai_generation_prompt: null, duration_seconds: 5 },
+      ] } }])
+      if (url.includes('/rpc/enqueue_video_generation_scene')) return response({ runId: 'run-1', sceneGenerationId: 'generation-1', created: true })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await expect(store.enqueueVideoGeneration('plan-1', 1, { idempotencyKey: '22222222-2222-4222-8222-222222222222' })).resolves.toMatchObject({ created: true })
+    const payload = calls.find(call => call.url.includes('/rpc/enqueue_video_generation_scene')).body
+    expect(payload).toMatchObject({
+      p_creative_production_plan_id: 'plan-1', p_scene_number: 1, p_provider: 'pollo',
+      p_provider_version: 'platform-v1', p_requested_model: 'pollo-v2', p_duration_seconds: 10,
+      p_resolution: '480p', p_regenerate: false,
+    })
+    expect(payload.p_prompt_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(payload.p_request_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    await expect(store.enqueueVideoGeneration('plan-1', 2, { idempotencyKey: '33333333-3333-4333-8333-333333333333' })).rejects.toMatchObject({ code: 'VIDEO_GENERATION_SCENE_INELIGIBLE' })
+    expect(calls.filter(call => call.url.includes('/rpc/enqueue_video_generation_scene'))).toHaveLength(1)
   })
 
   it('defers polling without consuming a job attempt and revives the existing timed-out provider task', async () => {

@@ -4,6 +4,8 @@ const { permitted } = require('./staff-api.cjs')
 const { createSupabaseStore } = require('./revenue-lab/supabase-store.cjs')
 const { validHumanScore } = require('./revenue-lab/scoring.cjs')
 const { DEFAULT_MODEL } = require('./revenue-lab/analysis-schema.cjs')
+const { DEFAULT_MODEL: DEFAULT_CREATIVE_MODEL, PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./revenue-lab/creative-production-schema.cjs')
+const { DEFAULT_MODEL: DEFAULT_POLLO_MODEL, DEFAULT_RESOLUTION: DEFAULT_POLLO_RESOLUTION, PROVIDER_ID: POLLO_PROVIDER_ID, PROVIDER_VERSION: POLLO_PROVIDER_VERSION, validatedModel: validatedPolloModel } = require('./revenue-lab/providers/pollo-video-generation-provider.cjs')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -12,6 +14,16 @@ function configurationStatus(env = process.env) {
   return { configured: missing.length === 0, missing, analysis: {
     configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
     requestedModel: env.REVENUE_LAB_OPENAI_MODEL || DEFAULT_MODEL,
+  }, creativeProduction: {
+    configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
+    requestedModel: env.REVENUE_LAB_CREATIVE_PRODUCTION_MODEL || DEFAULT_CREATIVE_MODEL,
+    promptVersion: CREATIVE_PROMPT_VERSION, schemaVersion: CREATIVE_SCHEMA_VERSION,
+    targetFormat: 'youtube_shorts', aspectRatio: '9:16', provider: 'provider-neutral',
+  }, videoGeneration: {
+    configured: Boolean(env.POLLO_API_KEY), missing: env.POLLO_API_KEY ? [] : ['POLLO_API_KEY'],
+    provider: POLLO_PROVIDER_ID, providerVersion: POLLO_PROVIDER_VERSION,
+    requestedModel: validatedPolloModel(env.REVENUE_LAB_POLLO_MODEL || DEFAULT_POLLO_MODEL),
+    resolution: DEFAULT_POLLO_RESOLUTION, aspectRatio: '9:16', audioEnabled: false,
   }, products: {
     configured: Boolean(env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY),
     missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'].filter(key => !env[key]),
@@ -203,6 +215,34 @@ function createRevenueApi({
         const result = await getStore().createManualCampaign(manualCampaignMatch[1], manualCampaignInput(await body(req)))
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
+      const creativeProductionMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/production-plans$/i)
+      const videoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/video-generations$/i)
+      if (req.method === 'POST' && videoGenerationMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(videoGenerationMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'production plan idが正しくありません。')
+        const sceneNumber = Number(videoGenerationMatch[2])
+        if (!Number.isInteger(sceneNumber) || sceneNumber < 1 || sceneNumber > 16) return fail(res, 400, 'VALIDATION_ERROR', 'scene番号が正しくありません。')
+        if (!config.videoGeneration.configured) return fail(res, 503, 'POLLO_NOT_CONFIGURED', 'Pollo APIの環境変数を設定してください。', { missing: config.videoGeneration.missing })
+        const input = await body(req)
+        const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey) || (input.regenerate != null && typeof input.regenerate !== 'boolean')) return fail(res, 400, 'VALIDATION_ERROR', '動画生成リクエストが正しくありません。')
+        const result = await getStore().enqueueVideoGeneration(videoGenerationMatch[1], sceneNumber, {
+          idempotencyKey, regenerate: input.regenerate === true,
+          model: config.videoGeneration.requestedModel, provider: config.videoGeneration.provider,
+          providerVersion: config.videoGeneration.providerVersion, resolution: config.videoGeneration.resolution,
+        })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
+      if (req.method === 'POST' && creativeProductionMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(creativeProductionMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'iteration idが正しくありません。')
+        if (!config.creativeProduction.configured) return fail(res, 503, 'CREATIVE_PRODUCTION_NOT_CONFIGURED', 'Creative Productionの環境変数を設定してください。', { missing: config.creativeProduction.missing })
+        const input = await body(req)
+        const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
+        const result = await getStore().enqueueCreativeProduction(creativeProductionMatch[1], { idempotencyKey, model: config.creativeProduction.requestedModel })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
       const publicationMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/publications$/i)
       if (req.method === 'POST' && publicationMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
@@ -244,6 +284,14 @@ function createRevenueApi({
       if (error instanceof SyntaxError || error instanceof TypeError || inputCodes.has(error?.code)) {
         const status = error?.code === 'UNSUPPORTED_MEDIA_TYPE' ? 415 : error?.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400
         return fail(res, status, 'VALIDATION_ERROR', '入力内容を確認してください。')
+      }
+      if (/^CREATIVE_PRODUCTION_/.test(error?.code || '')) {
+        const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
+        return fail(res, status, error.code, 'Creative Productionの対象lineageまたは入力状態を確認してください。')
+      }
+      if (/^(?:VIDEO_GENERATION_|POLLO_)/.test(error?.code || '')) {
+        const status = error.status === 404 ? 404 : error.status === 409 ? 409 : error.code === 'POLLO_RATE_LIMITED' ? 429 : 400
+        return fail(res, status, error.code, '動画素材の生成処理を完了できませんでした。Provider設定とscene状態を確認してください。')
       }
       console.error('[revenue-lab] API request failed', { method: req.method, pathname, code: error?.code || 'REVENUE_API_ERROR' })
       return fail(res, 502, 'REVENUE_SERVICE_ERROR', 'Revenue Labの処理を完了できませんでした。接続設定を確認してください。')
