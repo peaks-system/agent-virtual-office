@@ -203,6 +203,70 @@ describe('Revenue Lab Supabase store snapshots', () => {
     expect(calls[1].url).toContain('/rpc/register_campaign_publication')
   })
 
+  it('defers polling without consuming a job attempt and revives the existing timed-out provider task', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null
+      calls.push({ url, method: options.method, body })
+      if (url.includes('/jobs?id=eq.job-live&status=eq.running')) return response([{ id: 'job-live' }])
+      if (url.includes('/jobs?job_type=eq.video.generate.scene')) return response([{
+        id: 'job-timeout', attempts: 1, status: 'failed', run_after: null, lease_expires_at: null,
+        error_code: 'JOB_FAILED', payload: { video_generation_scene_id: 'scene-timeout' },
+      }])
+      if (url.includes('/video_generation_scenes?id=eq.scene-timeout&provider_task_id=not.is.null')) {
+        return response([{
+          id: 'scene-timeout', run_id: 'run-timeout', status: 'polling',
+          provider_task_id: 'secret-task-id', provider_task_status: 'succeed',
+          safe_error_code: 'VIDEO_GENERATION_POLL_TIMEOUT',
+        }])
+      }
+      return response(null, 204)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await store.deferJob('job-live', 'worker-1', {
+      retryAfterSeconds: 30, attempts: 2,
+      error: { code: 'VIDEO_GENERATION_POLL_TIMEOUT', message: 'still pending' },
+    })
+    await expect(store.recoverTimedOutVideoGenerations()).resolves.toBe(1)
+    expect(calls.find(call => call.url.includes('/jobs?job_type=eq.video.generate.scene')).url).toContain('error_code=in.(VIDEO_GENERATION_POLL_TIMEOUT,JOB_FAILED)')
+    expect(calls.find(call => call.url.includes('/video_generation_scenes?id=eq.scene-timeout')).url).toContain('safe_error_code=eq.VIDEO_GENERATION_POLL_TIMEOUT')
+    const deferred = calls.find(call => call.url.includes('/jobs?id=eq.job-live'))
+    expect(deferred.body).toMatchObject({
+      status: 'pending', attempts: 1, worker_id: null, lease_expires_at: null,
+      completed_at: null, error_code: 'VIDEO_GENERATION_POLL_TIMEOUT',
+    })
+    const revivedJob = calls.find(call => call.url.includes('/jobs?id=eq.job-timeout'))
+    expect(revivedJob.url).toContain('status=in.(pending,failed)')
+    expect(revivedJob.body).toMatchObject({ status: 'pending', attempts: 0, completed_at: null })
+    expect(calls.find(call => call.url.includes('/video_generation_scenes?id=eq.scene-timeout') && call.method === 'PATCH').body).toMatchObject({
+      status: 'polling', safe_error_code: 'VIDEO_GENERATION_POLL_TIMEOUT', completed_at: null,
+    })
+    expect(calls.find(call => call.url.includes('/video_generation_runs?id=eq.run-timeout')).body).toMatchObject({
+      status: 'running', safe_error_code: 'VIDEO_GENERATION_POLL_TIMEOUT', completed_at: null,
+    })
+  })
+
+  it('finalizes the existing generation attempt and clears its prior polling timeout', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      calls.push({ url, body: options.body ? JSON.parse(options.body) : null })
+      return response(null, 204)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await store.persistVideoGenerationSuccess({ id: 'attempt-5', runId: 'run-5' }, {
+      providerTaskStatus: 'succeed', outputUrl: 'https://cdn.example/attempt-5.mp4',
+      providerCost: null, costCurrency: null, costProvenance: 'unavailable',
+    })
+    expect(calls.find(call => call.url.includes('/video_generation_scenes?id=eq.attempt-5')).body).toMatchObject({
+      status: 'succeeded', provider_task_status: 'succeed', output_url: 'https://cdn.example/attempt-5.mp4',
+      provider_cost_amount: null, provider_cost_currency: null, cost_provenance: 'unavailable',
+      safe_error_code: null,
+    })
+    expect(calls.find(call => call.url.includes('/video_generation_runs?id=eq.run-5')).body).toMatchObject({
+      status: 'succeeded', safe_error_code: null,
+    })
+  })
+
   it('restricts Discovery previous snapshots to discovery capture kind', async () => {
     const calls = []
     const fetchImpl = vi.fn(async url => {

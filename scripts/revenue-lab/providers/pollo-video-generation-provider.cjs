@@ -40,7 +40,7 @@ function providerError(status, operation) {
 function normalizedProviderStatus(payload) {
   const generation = Array.isArray(payload?.generations) ? payload.generations[0] : null
   const raw = String(generation?.status || payload?.status || 'pending').toLowerCase()
-  if (['succeeded', 'success', 'completed'].includes(raw)) return { status: 'succeeded', providerTaskStatus: raw, generation }
+  if (['succeed', 'succeeded', 'success', 'completed'].includes(raw)) return { status: 'succeeded', providerTaskStatus: raw, generation }
   if (['failed', 'failure', 'canceled', 'cancelled'].includes(raw)) return { status: 'failed', providerTaskStatus: raw, generation }
   return { status: 'polling', providerTaskStatus: raw.slice(0, 40), generation }
 }

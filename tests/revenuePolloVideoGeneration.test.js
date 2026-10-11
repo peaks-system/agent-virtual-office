@@ -58,6 +58,25 @@ describe('Pollo VideoGenerationProvider', () => {
     })
   })
 
+  it('normalizes wrapped provider status succeed to internal succeeded without inventing cost', async () => {
+    const fetchImpl = vi.fn(async () => response({
+      code: 200, message: 'success', data: {
+        taskId: 'task-attempt-5',
+        generations: [{ status: 'succeed', url: 'https://cdn.example/attempt-5.mp4', mediaType: 'video' }],
+      },
+    }))
+    const provider = createPolloVideoGenerationProvider({ apiKey: 'test-only', fetchImpl })
+    await expect(provider.getTaskStatus('task-attempt-5')).resolves.toEqual({
+      status: 'succeeded',
+      providerTaskStatus: 'succeed',
+      outputUrl: 'https://cdn.example/attempt-5.mp4',
+      providerCost: null,
+      costCurrency: null,
+      costProvenance: 'unavailable',
+      safeErrorCode: null,
+    })
+  })
+
   it('marks absent cost unavailable and seals provider errors without response bodies', async () => {
     const pending = createPolloVideoGenerationProvider({ apiKey: 'test-only', fetchImpl: vi.fn(async () => response({ status: 'processing', generations: [] })) })
     await expect(pending.getTaskStatus('task-1')).resolves.toMatchObject({ status: 'polling', providerCost: null, costCurrency: null, costProvenance: 'unavailable' })

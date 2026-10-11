@@ -107,6 +107,95 @@ describe('Revenue Lab job handler and local worker', () => {
     expect(store.persistAnalysisSuccess).toHaveBeenCalledOnce()
   })
 
+  it('submits, persists, polls, and completes one provider-neutral video scene', async () => {
+    const scene = { id: 'generation-1', runId: 'run-1', provider: 'pollo', providerVersion: 'platform-v1', requestedModel: 'pollo-v2', providerTaskId: null, promptSnapshot: '[背景のみ] 朝の机', durationSeconds: 5, aspectRatio: '9:16', resolution: '480p', attemptNumber: 1, status: 'queued' }
+    const store = {
+      getVideoGenerationScene: vi.fn(async () => scene), markVideoGenerationSubmitting: vi.fn(async () => {}),
+      markVideoGenerationPollingResume: vi.fn(async () => {}), persistVideoGenerationPollingInterrupted: vi.fn(async () => {}),
+      persistVideoGenerationTask: vi.fn(async () => {}), persistVideoGenerationPolling: vi.fn(async () => {}),
+      persistVideoGenerationSuccess: vi.fn(async () => {}), persistVideoGenerationFailure: vi.fn(async () => {}),
+    }
+    const videoGenerationProvider = {
+      id: 'pollo', version: 'platform-v1', model: 'pollo-v2',
+      submitScene: vi.fn(async () => ({ providerTaskId: 'task-1', status: 'polling', providerTaskStatus: 'pending' })),
+      getTaskStatus: vi.fn()
+        .mockResolvedValueOnce({ status: 'polling', providerTaskStatus: 'processing', providerCost: null, costProvenance: 'unavailable' })
+        .mockResolvedValueOnce({ status: 'succeeded', providerTaskStatus: 'succeeded', providerCost: 0.12, costCurrency: 'USD', costProvenance: 'actual', outputUrl: 'https://cdn.example/video.mp4' }),
+      normalizeResult: vi.fn(), normalizeError: vi.fn(error => error),
+    }
+    const sleep = vi.fn(async () => {})
+    const handler = createJobHandlers({ store, youtube: {}, videoGenerationProvider, sleep, videoPollAttempts: 2, videoPollIntervalMs: 250 }).get('video.generate.scene')
+    await expect(handler({ id: 'job-video', payload: { video_generation_scene_id: 'generation-1' } })).resolves.toEqual({ videoGenerationSceneId: 'generation-1', status: 'succeeded', attemptNumber: 1 })
+    expect(videoGenerationProvider.submitScene).toHaveBeenCalledWith({ prompt: scene.promptSnapshot, durationSeconds: 5, aspectRatio: '9:16', resolution: '480p' })
+    expect(store.persistVideoGenerationTask).toHaveBeenCalledBefore(store.persistVideoGenerationPolling)
+    expect(store.persistVideoGenerationSuccess).toHaveBeenCalledWith(scene, expect.objectContaining({ costProvenance: 'actual', providerCost: 0.12 }))
+    expect(sleep).toHaveBeenCalledWith(250)
+  })
+
+  it('resumes polling from a persisted provider task without submitting again', async () => {
+    const scene = { id: 'generation-2', runId: 'run-2', provider: 'pollo', providerVersion: 'platform-v1', requestedModel: 'pollo-v2', providerTaskId: 'task-existing', promptSnapshot: 'prompt', durationSeconds: 5, aspectRatio: '9:16', resolution: '480p', attemptNumber: 2, status: 'polling' }
+    const store = {
+      getVideoGenerationScene: vi.fn(async () => scene), markVideoGenerationSubmitting: vi.fn(async () => {}),
+      markVideoGenerationPollingResume: vi.fn(async () => {}), persistVideoGenerationPollingInterrupted: vi.fn(async () => {}),
+      persistVideoGenerationTask: vi.fn(async () => {}), persistVideoGenerationPolling: vi.fn(async () => {}),
+      persistVideoGenerationSuccess: vi.fn(async () => {}), persistVideoGenerationFailure: vi.fn(async () => {}),
+    }
+    const videoGenerationProvider = {
+      id: 'pollo', version: 'platform-v1', model: 'pollo-v2', submitScene: vi.fn(),
+      getTaskStatus: vi.fn(async () => ({ status: 'succeeded', providerTaskStatus: 'succeeded', providerCost: null, costCurrency: null, costProvenance: 'unavailable', outputUrl: 'https://cdn.example/resumed.mp4' })),
+      normalizeResult: vi.fn(), normalizeError: vi.fn(error => error),
+    }
+    const handler = createJobHandlers({ store, youtube: {}, videoGenerationProvider, videoPollAttempts: 1 }).get('video.generate.scene')
+    await expect(handler({ payload: { video_generation_scene_id: scene.id } })).resolves.toMatchObject({ status: 'succeeded', attemptNumber: 2 })
+    expect(videoGenerationProvider.submitScene).not.toHaveBeenCalled()
+    expect(videoGenerationProvider.getTaskStatus).toHaveBeenCalledWith('task-existing')
+    expect(store.markVideoGenerationPollingResume).toHaveBeenCalledWith(scene)
+    expect(store.markVideoGenerationSubmitting).not.toHaveBeenCalled()
+  })
+
+  it('keeps a provider task polling and defers the job instead of terminally failing on timeout', async () => {
+    const scene = { id: 'generation-timeout', runId: 'run-timeout', provider: 'pollo', providerVersion: 'platform-v1', requestedModel: 'pollo-v2', providerTaskId: 'task-paid', providerTaskStatus: 'waiting', promptSnapshot: 'prompt', durationSeconds: 5, aspectRatio: '9:16', resolution: '480p', attemptNumber: 1, status: 'polling' }
+    const store = {
+      getVideoGenerationScene: vi.fn(async () => scene), markVideoGenerationSubmitting: vi.fn(async () => {}),
+      markVideoGenerationPollingResume: vi.fn(async () => {}), persistVideoGenerationTask: vi.fn(async () => {}),
+      persistVideoGenerationPolling: vi.fn(async () => {}), persistVideoGenerationPollingInterrupted: vi.fn(async () => {}),
+      persistVideoGenerationSuccess: vi.fn(async () => {}), persistVideoGenerationFailure: vi.fn(async () => {}),
+    }
+    const videoGenerationProvider = {
+      id: 'pollo', version: 'platform-v1', model: 'pollo-v2', submitScene: vi.fn(),
+      getTaskStatus: vi.fn(async () => ({ status: 'polling', providerTaskStatus: 'waiting', providerCost: null, costProvenance: 'unavailable' })),
+      normalizeResult: vi.fn(), normalizeError: vi.fn(error => error),
+    }
+    const handler = createJobHandlers({ store, youtube: {}, videoGenerationProvider, sleep: vi.fn(async () => {}), videoPollAttempts: 2, videoPollIntervalMs: 250 }).get('video.generate.scene')
+    await expect(handler({ payload: { video_generation_scene_id: scene.id } })).rejects.toMatchObject({
+      code: 'VIDEO_GENERATION_POLL_TIMEOUT', deferJob: true,
+    })
+    expect(videoGenerationProvider.submitScene).not.toHaveBeenCalled()
+    expect(videoGenerationProvider.getTaskStatus).toHaveBeenCalledTimes(2)
+    expect(store.persistVideoGenerationPollingInterrupted).toHaveBeenCalledWith(scene, expect.objectContaining({ code: 'VIDEO_GENERATION_POLL_TIMEOUT' }))
+    expect(store.persistVideoGenerationFailure).not.toHaveBeenCalled()
+  })
+
+  it('marks only an explicit provider generation failure as terminal', async () => {
+    const scene = { id: 'generation-failed', runId: 'run-failed', provider: 'pollo', providerVersion: 'platform-v1', requestedModel: 'pollo-v2', providerTaskId: 'task-failed', providerTaskStatus: 'processing', promptSnapshot: 'prompt', durationSeconds: 5, aspectRatio: '9:16', resolution: '480p', attemptNumber: 1, status: 'polling' }
+    const store = {
+      getVideoGenerationScene: vi.fn(async () => scene), markVideoGenerationSubmitting: vi.fn(async () => {}),
+      markVideoGenerationPollingResume: vi.fn(async () => {}), persistVideoGenerationTask: vi.fn(async () => {}),
+      persistVideoGenerationPolling: vi.fn(async () => {}), persistVideoGenerationPollingInterrupted: vi.fn(async () => {}),
+      persistVideoGenerationSuccess: vi.fn(async () => {}), persistVideoGenerationFailure: vi.fn(async () => {}),
+    }
+    const videoGenerationProvider = {
+      id: 'pollo', version: 'platform-v1', model: 'pollo-v2', submitScene: vi.fn(),
+      getTaskStatus: vi.fn(async () => ({ status: 'failed', providerTaskStatus: 'failed', safeErrorCode: 'POLLO_GENERATION_FAILED' })),
+      normalizeResult: vi.fn(), normalizeError: vi.fn(error => error),
+    }
+    const handler = createJobHandlers({ store, youtube: {}, videoGenerationProvider, videoPollAttempts: 1 }).get('video.generate.scene')
+    await expect(handler({ payload: { video_generation_scene_id: scene.id } })).rejects.toMatchObject({ code: 'POLLO_GENERATION_FAILED' })
+    expect(store.persistVideoGenerationFailure).toHaveBeenCalledWith(scene, expect.objectContaining({ code: 'POLLO_GENERATION_FAILED' }))
+    expect(store.persistVideoGenerationPollingInterrupted).not.toHaveBeenCalled()
+    expect(videoGenerationProvider.submitScene).not.toHaveBeenCalled()
+  })
+
   it('searches one product analysis sequentially and persists deterministic candidates', async () => {
     const store = {
       getProductSearchRun: vi.fn(async () => ({ id: 'product-run', provider: 'rakuten-ichiba', providerApiVersion: '20260701', inputSnapshot: { keywords: ['便利グッズ', '収納'], hits_per_keyword: 10 } })),
@@ -180,5 +269,18 @@ describe('Revenue Lab job handler and local worker', () => {
     expect(boundedInteger('4999', 30000, 5000, 300000)).toBe(30000)
     expect(boundedInteger('5000', 30000, 5000, 300000)).toBe(5000)
     expect(boundedInteger('3601', 300, 60, 3600)).toBe(300)
+  })
+  it('recovers timed-out provider polling once and defers retryable jobs without finishing them', async () => {
+    const deferred = Object.assign(new Error('still waiting'), { code: 'VIDEO_GENERATION_POLL_TIMEOUT', deferJob: true, retryAfterSeconds: 30 })
+    const store = {
+      recoverTimedOutVideoGenerations: vi.fn(async () => 1),
+      claimNext: vi.fn(async () => ({ id: 'job-video', jobType: 'video.generate.scene', payload: {}, attempts: 2 })),
+      deferJob: vi.fn(async () => {}), finishJob: vi.fn(async () => {}),
+    }
+    const worker = createLocalWorker({ store, handlers: new Map([['video.generate.scene', vi.fn(async () => { throw deferred })]]), workerId: 'worker-test' })
+    await expect(worker.runOne()).resolves.toMatchObject({ deferred: true, errorCode: 'VIDEO_GENERATION_POLL_TIMEOUT' })
+    expect(store.recoverTimedOutVideoGenerations).toHaveBeenCalledTimes(1)
+    expect(store.deferJob).toHaveBeenCalledWith('job-video', 'worker-test', expect.objectContaining({ attempts: 2, retryAfterSeconds: 30 }))
+    expect(store.finishJob).not.toHaveBeenCalled()
   })
 })

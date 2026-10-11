@@ -714,6 +714,91 @@ function createSupabaseStore({
     })
   }
 
+  async function getVideoGenerationScene(id) {
+    const rows = await request(`video_generation_scenes?id=eq.${encodeURIComponent(id)}&select=*&limit=1`)
+    const row = rows?.[0]
+    return row ? {
+      id: row.id, runId: row.run_id, planId: row.creative_production_plan_id,
+      sceneNumber: row.creative_scene_number, attemptNumber: row.attempt_number,
+      provider: row.provider, providerVersion: row.provider_version, requestedModel: row.requested_model,
+      providerTaskId: row.provider_task_id, providerTaskStatus: row.provider_task_status,
+      promptSnapshot: row.prompt_snapshot,
+      durationSeconds: row.duration_seconds, aspectRatio: row.aspect_ratio, resolution: row.resolution,
+      status: row.status,
+    } : null
+  }
+
+  async function markVideoGenerationSubmitting(scene) {
+    const now = new Date().toISOString()
+    await Promise.all([
+      request(`video_generation_scenes?id=eq.${encodeURIComponent(scene.id)}`, { method: 'PATCH', body: { status: 'submitting', safe_error_code: null, updated_at: now }, prefer: 'return=minimal' }),
+      request(`video_generation_runs?id=eq.${encodeURIComponent(scene.runId)}`, { method: 'PATCH', body: { status: 'running', safe_error_code: null }, prefer: 'return=minimal' }),
+    ])
+  }
+
+  async function persistVideoGenerationTask(sceneId, receipt) {
+    await request(`video_generation_scenes?id=eq.${encodeURIComponent(sceneId)}`, {
+      method: 'PATCH', body: { provider_task_id: receipt.providerTaskId, provider_task_status: receipt.providerTaskStatus,
+        status: 'polling', submitted_at: new Date().toISOString(), updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistVideoGenerationPolling(sceneId, result) {
+    await request(`video_generation_scenes?id=eq.${encodeURIComponent(sceneId)}`, {
+      method: 'PATCH', body: { status: 'polling', provider_task_status: result.providerTaskStatus,
+        updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function markVideoGenerationPollingResume(scene) {
+    const now = new Date().toISOString()
+    await Promise.all([
+      request(`video_generation_scenes?id=eq.${encodeURIComponent(scene.id)}`, {
+        method: 'PATCH', body: { status: 'polling', safe_error_code: null, completed_at: null, updated_at: now }, prefer: 'return=minimal',
+      }),
+      request(`video_generation_runs?id=eq.${encodeURIComponent(scene.runId)}`, {
+        method: 'PATCH', body: { status: 'running', safe_error_code: null, completed_at: null }, prefer: 'return=minimal',
+      }),
+    ])
+  }
+
+  async function persistVideoGenerationPollingInterrupted(scene, error) {
+    const now = new Date().toISOString()
+    const code = String(error?.code || 'VIDEO_GENERATION_POLL_INTERRUPTED').slice(0, 80)
+    await Promise.all([
+      request(`video_generation_scenes?id=eq.${encodeURIComponent(scene.id)}`, {
+        method: 'PATCH', body: { status: 'polling', safe_error_code: code, completed_at: null, updated_at: now }, prefer: 'return=minimal',
+      }),
+      request(`video_generation_runs?id=eq.${encodeURIComponent(scene.runId)}`, {
+        method: 'PATCH', body: { status: 'running', safe_error_code: code, completed_at: null }, prefer: 'return=minimal',
+      }),
+    ])
+  }
+
+  async function persistVideoGenerationSuccess(scene, result) {
+    const now = new Date().toISOString()
+    await request(`video_generation_scenes?id=eq.${encodeURIComponent(scene.id)}`, {
+      method: 'PATCH', body: { status: 'succeeded', provider_task_status: result.providerTaskStatus,
+        provider_cost_amount: result.providerCost, provider_cost_currency: result.costCurrency,
+        cost_provenance: result.costProvenance, output_url: result.outputUrl,
+        safe_error_code: null, completed_at: now, updated_at: now }, prefer: 'return=minimal',
+    })
+    await request(`video_generation_runs?id=eq.${encodeURIComponent(scene.runId)}`, {
+      method: 'PATCH', body: { status: 'succeeded', safe_error_code: null, completed_at: now }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistVideoGenerationFailure(scene, error) {
+    const now = new Date().toISOString()
+    const code = String(error?.code || 'VIDEO_GENERATION_FAILED').slice(0, 80)
+    await request(`video_generation_scenes?id=eq.${encodeURIComponent(scene.id)}`, {
+      method: 'PATCH', body: { status: 'failed', safe_error_code: code, completed_at: now, updated_at: now }, prefer: 'return=minimal',
+    })
+    await request(`video_generation_runs?id=eq.${encodeURIComponent(scene.runId)}`, {
+      method: 'PATCH', body: { status: 'failed', safe_error_code: code, completed_at: now }, prefer: 'return=minimal',
+    })
+  }
+
   async function registerCampaignPublication(iterationId, input) {
     return rpc('register_campaign_publication', {
       p_campaign_iteration_id: iterationId,
@@ -889,6 +974,64 @@ function createSupabaseStore({
     })
   }
 
+  async function deferJob(jobId, workerId, { retryAfterSeconds = 30, attempts = 1, error = null } = {}) {
+    const delaySeconds = Math.max(30, Math.min(Number(retryAfterSeconds) || 30, 300))
+    const runAfter = new Date(Date.now() + delaySeconds * 1000).toISOString()
+    const rows = await request(`jobs?id=eq.${encodeURIComponent(jobId)}&status=eq.running&worker_id=eq.${encodeURIComponent(workerId)}&select=id`, {
+      method: 'PATCH',
+      body: {
+        status: 'pending', run_after: runAfter, attempts: Math.max(0, Number(attempts || 1) - 1),
+        lease_expires_at: null, worker_id: null, completed_at: null,
+        error_code: String(error?.code || 'JOB_DEFERRED').slice(0, 80),
+        error_message: String(error?.message || 'Job deferred').slice(0, 500),
+        updated_at: new Date().toISOString(),
+      },
+      prefer: 'return=representation',
+    })
+    if (!rows?.length) throw new RevenueStoreError('JOB_LEASE_LOST', 'Revenue Lab job lease is no longer owned')
+    return rows[0]
+  }
+
+  async function recoverTimedOutVideoGenerations() {
+    const jobs = await request('jobs?job_type=eq.video.generate.scene&status=in.(pending,failed)&error_code=in.(VIDEO_GENERATION_POLL_TIMEOUT,JOB_FAILED)&select=id,payload,attempts,status,run_after,lease_expires_at')
+    console.log('[revenue-lab] Video polling recovery scan', { recoveryCandidatesCount: jobs?.length || 0 })
+    let recovered = 0
+    for (const job of jobs || []) {
+      const sceneId = job?.payload?.video_generation_scene_id
+      if (!sceneId) continue
+      const scenes = await request(`video_generation_scenes?id=eq.${encodeURIComponent(sceneId)}&provider_task_id=not.is.null&safe_error_code=eq.VIDEO_GENERATION_POLL_TIMEOUT&select=id,run_id,status,provider_task_id,provider_task_status,safe_error_code&limit=1`)
+      const scene = scenes?.[0]
+      if (!scene) continue
+      const now = new Date().toISOString()
+      const nowMs = Date.now()
+      console.log('[revenue-lab] Video polling recovery candidate', {
+        jobStatusBefore: job.status,
+        hasProviderTaskId: Boolean(scene.provider_task_id),
+        sceneStatus: scene.status,
+        providerTaskStatus: scene.provider_task_status || null,
+        runAfterDue: !job.run_after || Date.parse(job.run_after) <= nowMs,
+        leaseActive: Boolean(job.lease_expires_at && Date.parse(job.lease_expires_at) > nowMs),
+      })
+      await Promise.all([
+        request(`video_generation_scenes?id=eq.${encodeURIComponent(scene.id)}`, {
+          method: 'PATCH', body: { status: 'polling', safe_error_code: 'VIDEO_GENERATION_POLL_TIMEOUT', completed_at: null, updated_at: now }, prefer: 'return=minimal',
+        }),
+        request(`video_generation_runs?id=eq.${encodeURIComponent(scene.run_id)}`, {
+          method: 'PATCH', body: { status: 'running', safe_error_code: 'VIDEO_GENERATION_POLL_TIMEOUT', completed_at: null }, prefer: 'return=minimal',
+        }),
+        request(`jobs?id=eq.${encodeURIComponent(job.id)}&status=in.(pending,failed)`, {
+          method: 'PATCH', body: {
+            status: 'pending', run_after: now, attempts: 0,
+            lease_expires_at: null, worker_id: null, completed_at: null, updated_at: now,
+          }, prefer: 'return=minimal',
+        }),
+      ])
+      recovered += 1
+    }
+    console.log('[revenue-lab] Video polling recovery complete', { recoveredJobCount: recovered, jobStatusAfter: recovered ? 'pending' : null })
+    return recovered
+  }
+
   async function listTrackingCandidates(sourceId, requestedDay, capturedAt) {
     const rows = await rpc('tracking_candidates', {
       p_source_id: sourceId, p_requested_day: requestedDay, p_captured_at: capturedAt,
@@ -998,11 +1141,14 @@ function createSupabaseStore({
     ? rpc('mark_tracking_targets_seen', { p_target_ids: targetIds, p_seen_at: seenAt }) : Promise.resolve(0)
 
   return {
-    claimNext, dashboard, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
+    claimNext, dashboard, deferJob, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
     getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
     enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
     persistProductSearchFailure, createProductDecision, createManualCampaign, registerCampaignPublication,
-    listQueries, listTrackingCandidates, markTrackingMissing, markTrackingSeen, failTrackingRuns,
+    getVideoGenerationScene, markVideoGenerationSubmitting, markVideoGenerationPollingResume,
+    persistVideoGenerationTask, persistVideoGenerationPolling, persistVideoGenerationPollingInterrupted,
+    persistVideoGenerationSuccess, persistVideoGenerationFailure,
+    listQueries, listTrackingCandidates, recoverTimedOutVideoGenerations, markTrackingMissing, markTrackingSeen, failTrackingRuns,
     persistCollection, persistTrackingRun, persistTrackingSnapshots, previousVideoSnapshots,
     startRun, startTrackingRun, updateQuery,
   }

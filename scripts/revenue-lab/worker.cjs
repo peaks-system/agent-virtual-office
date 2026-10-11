@@ -21,8 +21,16 @@ function createLocalWorker({
 } = {}) {
   if (!store || !(handlers instanceof Map)) throw new TypeError('store and handler map are required')
   let stopping = false
+  let recoveredVideoPolling = false
+
+  async function recoverVideoPollingOnce() {
+    if (recoveredVideoPolling) return
+    if (typeof store.recoverTimedOutVideoGenerations === 'function') await store.recoverTimedOutVideoGenerations()
+    recoveredVideoPolling = true
+  }
 
   async function runOne() {
+    await recoverVideoPollingOnce()
     const job = await store.claimNext(workerId, leaseSeconds)
     if (!job) return { claimed: false }
     const handler = handlers.get(job.jobType)
@@ -38,6 +46,15 @@ function createLocalWorker({
       return { claimed: true, succeeded: true, jobId: job.id, result }
     } catch (error) {
       const safe = { code: error?.code || 'JOB_FAILED', message: String(error?.message || 'Revenue Lab job failed').slice(0, 500) }
+      if (error?.deferJob === true && typeof store.deferJob === 'function') {
+        console.log('[revenue-lab] Job deferred for continued polling', { jobId: job.id, jobType: job.jobType, code: safe.code })
+        await store.deferJob(job.id, workerId, {
+          retryAfterSeconds: error.retryAfterSeconds,
+          attempts: job.attempts,
+          error: safe,
+        })
+        return { claimed: true, succeeded: false, deferred: true, jobId: job.id, errorCode: safe.code }
+      }
       console.error('[revenue-lab] Job failed', { jobId: job.id, jobType: job.jobType, code: safe.code })
       await store.finishJob(job.id, workerId, false, safe)
       return { claimed: true, succeeded: false, jobId: job.id, errorCode: safe.code }
