@@ -122,6 +122,41 @@ describe('Revenue Lab job handler and local worker', () => {
     expect(store.persistCreativeProductionSuccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'request-1' }), result)
   })
 
+  it('preserves safe Creative Production validator diagnostics before store persistence', async () => {
+    const inputSnapshot = { contract: { schema_version: 'creative-production-plan-v2' } }
+    const store = {
+      getCreativeProductionRequest: vi.fn(async () => ({
+        id: 'request-v2-failed', inputSnapshot, revisionNumber: 2,
+        promptVersion: 'creative-production-planner-v2', schemaVersion: 'creative-production-plan-v2',
+      })),
+      markCreativeProductionRunning: vi.fn(async () => {}), persistCreativeProductionSuccess: vi.fn(async () => {}),
+      persistCreativeProductionFailure: vi.fn(async () => {}),
+    }
+    const failure = Object.assign(new Error('safe validation failure'), {
+      code: 'CREATIVE_PRODUCTION_VALIDATION_FAILED', ruleId: 'V2_STATIC_FIRST_REQUIRED', fieldPath: '$.scenes',
+      safeDiagnostics: {
+        promptVersion: 'creative-production-planner-v2', schemaVersion: 'creative-production-plan-v2', route: 'v2',
+        openaiHttpStatus: 200, responseJsonParsed: true, structuredOutputSchemaValidated: true,
+        deterministicValidatorValidated: false, validatorRuleId: 'V2_STATIC_FIRST_REQUIRED', validatorFieldPath: '$.scenes',
+      },
+    })
+    const creativeProducer = { plan: vi.fn(async () => { throw failure }) }
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const handler = createJobHandlers({ store, youtube: {}, creativeProducer }).get('creative.production.plan')
+
+    await expect(handler({ id: 'job-v2-failed', payload: { creative_production_request_id: 'request-v2-failed' } }))
+      .rejects.toMatchObject({ code: 'CREATIVE_PRODUCTION_VALIDATION_FAILED' })
+    expect(store.persistCreativeProductionSuccess).not.toHaveBeenCalled()
+    expect(store.persistCreativeProductionFailure).toHaveBeenCalledWith('request-v2-failed', failure)
+    expect(log).toHaveBeenCalledWith('[revenue-lab] Creative Production planner failed', expect.objectContaining({
+      route: 'v2', openaiHttpStatus: 200, responseJsonParsed: true,
+      structuredOutputSchemaValidated: true, deterministicValidatorValidated: false,
+      validatorRuleId: 'V2_STATIC_FIRST_REQUIRED', validatorFieldPath: '$.scenes',
+      storeStage: 'before_store', originalSafeErrorCode: 'CREATIVE_PRODUCTION_VALIDATION_FAILED',
+    }))
+    log.mockRestore()
+  })
+
   it('submits, persists, polls, and completes one provider-neutral video scene', async () => {
     const scene = { id: 'generation-1', runId: 'run-1', provider: 'pollo', providerVersion: 'platform-v1', requestedModel: 'pollo-v2', providerTaskId: null, promptSnapshot: '[背景のみ] 朝の机', durationSeconds: 5, aspectRatio: '9:16', resolution: '480p', attemptNumber: 1, status: 'queued' }
     const store = {

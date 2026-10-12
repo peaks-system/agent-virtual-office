@@ -221,11 +221,30 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGen
     const request = await store.getCreativeProductionRequest(requestId)
     if (!request) throw new RevenueJobError('CREATIVE_PRODUCTION_REQUEST_NOT_FOUND', 'Creative Production request was not found')
     await store.markCreativeProductionRunning(requestId)
+    let storeAttempted = false
+    let storeSaved = false
     try {
       const result = await creativeProducer.plan(request.inputSnapshot)
+      storeAttempted = true
       await store.persistCreativeProductionSuccess(request, result)
+      storeSaved = true
       return { creativeProductionRequestId: requestId, revisionNumber: request.revisionNumber }
     } catch (error) {
+      const diagnostic = error?.safeDiagnostics || null
+      console.error('[revenue-lab] Creative Production planner failed', {
+        requestId,
+        promptVersion: diagnostic?.promptVersion || request.promptVersion || null,
+        schemaVersion: diagnostic?.schemaVersion || request.schemaVersion || request.inputSnapshot?.contract?.schema_version || null,
+        route: diagnostic?.route || null,
+        openaiHttpStatus: diagnostic?.openaiHttpStatus ?? error?.status ?? null,
+        responseJsonParsed: diagnostic?.responseJsonParsed ?? null,
+        structuredOutputSchemaValidated: diagnostic?.structuredOutputSchemaValidated ?? null,
+        deterministicValidatorValidated: diagnostic?.deterministicValidatorValidated ?? null,
+        validatorRuleId: diagnostic?.validatorRuleId || error?.ruleId || null,
+        validatorFieldPath: diagnostic?.validatorFieldPath || error?.fieldPath || null,
+        storeStage: storeSaved ? 'after_store' : storeAttempted ? 'store_save_failed' : 'before_store',
+        originalSafeErrorCode: error?.code || 'CREATIVE_PRODUCTION_FAILED',
+      })
       try { await store.persistCreativeProductionFailure(requestId, error) }
       catch { console.error('[revenue-lab] Creative Production failure state could not be persisted', { requestId }) }
       throw error instanceof RevenueJobError ? error : new RevenueJobError(error?.code || 'CREATIVE_PRODUCTION_FAILED', 'Creative Production failed')

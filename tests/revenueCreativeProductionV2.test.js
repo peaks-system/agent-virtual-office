@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 const require = createRequire(import.meta.url)
 const { createCreativeProductionClient } = require('../scripts/revenue-lab/creative-production-client.cjs')
 const {
-  AI_SCENE_SAFETY_PREFIX, CREATIVE_PRODUCTION_JSON_SCHEMA, IMAGE_MOTION_SAFETY_PREFIX,
-  PROMPT_VERSION, SCHEMA_VERSION, SYSTEM_PROMPT, validateCreativeProductionOutput,
+  AI_SCENE_SAFETY_PREFIX, ALLOWED_MOTION_MODES_BY_STRATEGY, CREATIVE_PRODUCTION_JSON_SCHEMA,
+  IMAGE_MOTION_SAFETY_PREFIX, MOTION_MODES, PROMPT_VERSION, SCHEMA_VERSION, SYSTEM_PROMPT,
+  validateCreativeProductionOutput,
 } = require('../scripts/revenue-lab/creative-production-schema-v2.cjs')
 
 const assetId = '11111111-1111-4111-8111-111111111111'
@@ -54,6 +55,43 @@ function validPlan() {
   }
 }
 
+function strategyScene(strategy, motionMode) {
+  const variants = {
+    static_product_scene: {
+      rendering_strategy: strategy, visual_source_type: 'real_product_asset', product_asset_id: assetId,
+      motion_instruction: { mode: motionMode, description: '編集時のmotion' }, requires_ai_generation: false,
+      recommended_model_class: 'none', preserve_product_identity: true, ai_generation_prompt: null,
+    },
+    image_motion_scene: {
+      rendering_strategy: strategy, visual_source_type: 'real_product_asset', product_asset_id: assetId,
+      motion_instruction: { mode: motionMode, description: '商品同一性を維持したmotion' }, requires_ai_generation: true,
+      recommended_model_class: 'product_preserving_i2v', preserve_product_identity: true,
+      ai_generation_prompt: `${IMAGE_MOTION_SAFETY_PREFIX} 背景だけに微細な動きを加える。`,
+    },
+    stylized_scene: {
+      rendering_strategy: strategy, visual_source_type: 'ai_generated_scene', product_asset_id: null,
+      motion_instruction: { mode: motionMode, description: '抽象演出のmotion' }, requires_ai_generation: true,
+      recommended_model_class: 'stylized_t2v', preserve_product_identity: false,
+      ai_generation_prompt: `${AI_SCENE_SAFETY_PREFIX} 整理された机を抽象的なイラストで表現する。`,
+    },
+    ai_generated_scene: {
+      rendering_strategy: strategy, visual_source_type: 'ai_generated_scene', product_asset_id: null,
+      motion_instruction: { mode: motionMode, description: '一般的な利用文脈のmotion' }, requires_ai_generation: true,
+      recommended_model_class: 'realistic_t2v', preserve_product_identity: false,
+      ai_generation_prompt: `${AI_SCENE_SAFETY_PREFIX} 一般的な整理された部屋を実写調で表現する。`,
+    },
+    text_only: {
+      rendering_strategy: strategy, visual_source_type: 'text_only', product_asset_id: null,
+      motion_instruction: { mode: motionMode, description: motionMode === 'none' ? '動きなし' : 'テキストにmotion' },
+      requires_ai_generation: false, recommended_model_class: 'none', preserve_product_identity: false,
+      ai_generation_prompt: null,
+    },
+  }
+  return scene({ scene_number: 2, start_seconds: 10, purpose: `${strategy} contract`,
+    on_screen_text: '利用イメージ', narration: '利用場面をイメージします。',
+    subtitle_segment_ids: ['sub-2'], product_fact_references: [], ...variants[strategy] })
+}
+
 describe('Creative Production Plan v2 Static-first', () => {
   it('uses a new immutable contract with provider-neutral model classes', () => {
     expect(PROMPT_VERSION).toBe('creative-production-planner-v2')
@@ -78,7 +116,7 @@ describe('Creative Production Plan v2 Static-first', () => {
 
     const inaccurateStylized = validPlan()
     inaccurateStylized.scenes[1].preserve_product_identity = true
-    expect(() => validateCreativeProductionOutput(inaccurateStylized, input)).toThrow(/AI-generated scene boundary/)
+    expect(() => validateCreativeProductionOutput(inaccurateStylized, input)).toThrow(/product identity/)
   })
 
   it('permits I2V only for owned or explicitly authorized snapshots', () => {
@@ -94,15 +132,73 @@ describe('Creative Production Plan v2 Static-first', () => {
     expect(() => validateCreativeProductionOutput(plan, notAuthorized)).toThrow(/I2V/)
   })
 
+  it('enforces every rendering strategy and motion mode combination from one contract table', () => {
+    for (const strategy of Object.keys(ALLOWED_MOTION_MODES_BY_STRATEGY)) {
+      for (const motionMode of [...MOTION_MODES, 'unsupported_motion']) {
+        const plan = validPlan()
+        plan.scenes[1] = strategyScene(strategy, motionMode)
+        const allowed = ALLOWED_MOTION_MODES_BY_STRATEGY[strategy].includes(motionMode)
+        if (allowed) expect(validateCreativeProductionOutput(plan, input)).toEqual(plan)
+        else {
+          let failure
+          try { validateCreativeProductionOutput(plan, input) } catch (error) { failure = error }
+          expect(failure).toMatchObject({
+            code: 'CREATIVE_PRODUCTION_VALIDATION_FAILED',
+            fieldPath: '$.scenes[1].motion_instruction.mode',
+          })
+          if (strategy === 'text_only' && MOTION_MODES.includes(motionMode)) {
+            expect(failure.ruleId).toBe('V2_TEXT_MOTION_MODE')
+          }
+        }
+      }
+    }
+  })
+
+  it('documents the text-only motion restriction in both prompt and Structured Output schema', () => {
+    const sceneSchema = CREATIVE_PRODUCTION_JSON_SCHEMA.properties.scenes.items.properties
+    expect(ALLOWED_MOTION_MODES_BY_STRATEGY.text_only).toEqual(['none'])
+    expect(SYSTEM_PROMPT).toContain('text_only: motion_instruction.mode must be none')
+    expect(sceneSchema.rendering_strategy.description).toContain('text_only requires motion_instruction.mode=none')
+    expect(sceneSchema.motion_instruction.properties.mode.description).toContain('For text_only this must be none')
+  })
+
   it('routes v2 requests through the v2 Structured Output schema', async () => {
     const fetchImpl = vi.fn(async (_url, options) => new Response(JSON.stringify({
       id: 'resp-v2', model: 'gpt-test', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(validPlan()) }] }],
       usage: {},
     }), { status: 200, headers: { 'content-type': 'application/json' } }))
     const client = createCreativeProductionClient({ apiKey: 'test-only', model: 'gpt-test', fetchImpl })
-    await client.plan(input)
+    const result = await client.plan(input)
     const request = JSON.parse(fetchImpl.mock.calls[0][1].body)
     expect(request.text.format.name).toBe('revenue_lab_creative_production_plan_v2')
     expect(request.input[0].content).toContain('Static-first')
+    expect(result.safeDiagnostics).toEqual(expect.objectContaining({
+      promptVersion: PROMPT_VERSION, schemaVersion: SCHEMA_VERSION, route: 'v2',
+      openaiHttpStatus: 200, responseJsonParsed: true,
+      structuredOutputSchemaValidated: true, deterministicValidatorValidated: true,
+    }))
+  })
+
+  it('reports a safe validator rule and field path without retaining response content', async () => {
+    const invalidPlan = validPlan()
+    invalidPlan.scenes[0].requires_ai_generation = true
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      id: 'resp-v2-invalid', model: 'gpt-test',
+      output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(invalidPlan) }] }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const client = createCreativeProductionClient({ apiKey: 'test-only', model: 'gpt-test', fetchImpl })
+
+    await expect(client.plan(input)).rejects.toMatchObject({
+      code: 'CREATIVE_PRODUCTION_VALIDATION_FAILED',
+      ruleId: 'V2_STATIC_AI_FLAG_FORBIDDEN',
+      fieldPath: '$.scenes[0].requires_ai_generation',
+      safeDiagnostics: {
+        promptVersion: PROMPT_VERSION, schemaVersion: SCHEMA_VERSION, route: 'v2',
+        openaiHttpStatus: 200, responseJsonParsed: true,
+        structuredOutputSchemaValidated: true, deterministicValidatorValidated: false,
+        validatorRuleId: 'V2_STATIC_AI_FLAG_FORBIDDEN',
+        validatorFieldPath: '$.scenes[0].requires_ai_generation',
+      },
+    })
   })
 })
