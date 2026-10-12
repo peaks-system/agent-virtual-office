@@ -1,11 +1,16 @@
 'use strict'
 
 const { outputText, OpenAIAnalysisError } = require('./openai-client.cjs')
-const { CREATIVE_PRODUCTION_JSON_SCHEMA, DEFAULT_MODEL, SYSTEM_PROMPT, validateCreativeProductionOutput } = require('./creative-production-schema.cjs')
+const v1 = require('./creative-production-schema.cjs')
+const v2 = require('./creative-production-schema-v2.cjs')
+
+function contractFor(input) {
+  return input?.contract?.schema_version === v2.SCHEMA_VERSION ? v2 : v1
+}
 
 function createCreativeProductionClient({
   apiKey = process.env.OPENAI_API_KEY,
-  model = process.env.REVENUE_LAB_CREATIVE_PRODUCTION_MODEL || DEFAULT_MODEL,
+  model = process.env.REVENUE_LAB_CREATIVE_PRODUCTION_MODEL || v2.DEFAULT_MODEL,
   fetchImpl = globalThis.fetch,
   endpoint = 'https://api.openai.com/v1/responses',
 } = {}) {
@@ -13,6 +18,7 @@ function createCreativeProductionClient({
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required')
 
   async function plan(input) {
+    const contract = contractFor(input)
     let response
     try {
       response = await fetchImpl(endpoint, {
@@ -20,8 +26,8 @@ function createCreativeProductionClient({
         headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
         body: JSON.stringify({
           model, store: false, reasoning: { effort: 'low' }, max_output_tokens: 4200,
-          input: [{ role: 'developer', content: SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(input) }],
-          text: { format: { type: 'json_schema', name: 'revenue_lab_creative_production_plan', strict: true, schema: CREATIVE_PRODUCTION_JSON_SCHEMA } },
+          input: [{ role: 'developer', content: contract.SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(input) }],
+          text: { format: { type: 'json_schema', name: `revenue_lab_creative_production_plan_${contract.SCHEMA_VERSION === v2.SCHEMA_VERSION ? 'v2' : 'v1'}`, strict: true, schema: contract.CREATIVE_PRODUCTION_JSON_SCHEMA } },
         }),
       })
     } catch { throw new OpenAIAnalysisError('OPENAI_TRANSPORT_ERROR', 'OpenAI creative production request failed') }
@@ -36,7 +42,7 @@ function createCreativeProductionClient({
       if (error instanceof OpenAIAnalysisError) throw error
       throw new OpenAIAnalysisError('OPENAI_INVALID_STRUCTURED_OUTPUT', 'OpenAI creative production output was invalid')
     }
-    validateCreativeProductionOutput(productionPlan, input)
+    contract.validateCreativeProductionOutput(productionPlan, input)
     return {
       productionPlan, responseId: payload.id || null, resolvedModel: payload.model || model,
       usage: {

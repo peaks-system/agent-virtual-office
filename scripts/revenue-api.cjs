@@ -4,7 +4,7 @@ const { permitted } = require('./staff-api.cjs')
 const { createSupabaseStore } = require('./revenue-lab/supabase-store.cjs')
 const { validHumanScore } = require('./revenue-lab/scoring.cjs')
 const { DEFAULT_MODEL } = require('./revenue-lab/analysis-schema.cjs')
-const { DEFAULT_MODEL: DEFAULT_CREATIVE_MODEL, PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./revenue-lab/creative-production-schema.cjs')
+const { DEFAULT_MODEL: DEFAULT_CREATIVE_MODEL, PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./revenue-lab/creative-production-schema-v2.cjs')
 const { DEFAULT_MODEL: DEFAULT_POLLO_MODEL, DEFAULT_RESOLUTION: DEFAULT_POLLO_RESOLUTION, PROVIDER_ID: POLLO_PROVIDER_ID, PROVIDER_VERSION: POLLO_PROVIDER_VERSION, validatedModel: validatedPolloModel } = require('./revenue-lab/providers/pollo-video-generation-provider.cjs')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i

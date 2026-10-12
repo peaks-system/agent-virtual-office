@@ -324,6 +324,17 @@ function PublicationRegistrationForm({ iterationId, busy, onRegister }) {
 }
 
 const visualSourceLabel = value => ({ real_product_asset: '実商品素材', ai_generated_scene: 'AI生成シーン', text_only: 'テキストのみ' })[value] || value
+const renderingStrategyLabel = value => ({
+  static_product_scene: '静止商品素材', image_motion_scene: '商品画像モーション',
+  stylized_scene: 'スタイライズ演出', ai_generated_scene: 'リアル系AI演出', text_only: 'テキストのみ',
+})[value] || value
+const modelClassLabel = value => ({
+  none: '生成モデル不要', stylized_t2v: 'スタイライズT2V', realistic_t2v: 'リアル系T2V',
+  product_preserving_i2v: '商品形状維持I2V',
+})[value] || value
+const isExistingPolloEligible = scene => scene.rendering_strategy
+  ? ['stylized_scene', 'ai_generated_scene'].includes(scene.rendering_strategy)
+  : scene.visual_source_type === 'ai_generated_scene'
 
 function safeGeneratedVideoUrl(value) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : null }
@@ -382,12 +393,12 @@ function CreativeProductionPanel({ iteration, config, videoGenerationConfig, bus
     } finally { submittingRef.current = false; setSubmitting(false) }
   }
   return <section className="revenue-creative-production" aria-label={`Creative Production Iteration ${iteration.iterationNumber}`}>
-    <div className="revenue-product-heading"><strong>Creative Production v1</strong><button type="button" className="corp-primary" disabled={busy || submitting || !config?.configured} onClick={generate}>{submitting ? '生成依頼中…' : revisions.length ? '新しいrevisionを生成' : '動画制作案を生成'}</button></div>
-    <p className="revenue-product-facts">YouTube Shorts・9:16のProvider-neutral制作案です。商品事実は保存済みfactsだけを引用し、商品本体のAI生成は行いません。</p>
+    <div className="revenue-product-heading"><strong>Creative Production Plan v2</strong><button type="button" className="corp-primary" disabled={busy || submitting || !config?.configured} onClick={generate}>{submitting ? '生成依頼中…' : revisions.length ? '新しいrevisionを生成' : '動画制作案を生成'}</button></div>
+    <p className="revenue-product-facts">実商品素材を第一選択にするStatic-first制作案です。v1 revisionは変更せず、新規生成だけv2として追加します。</p>
     {!config?.configured && <p className="revenue-warning">サーバー側のOPENAI_API_KEYを設定すると生成できます。</p>}
     {!revisions.length && <p>制作案はまだありません。</p>}
     <div className="revenue-production-revisions">{revisions.map((revision, index) => <details key={revision.requestId} open={index === 0}>
-      <summary>Revision {revision.revisionNumber} · {jobStatusLabel(revision.status)}{revision.generatedAt ? ` · ${publishedLabel(revision.generatedAt)}` : ''}</summary>
+      <summary>Revision {revision.revisionNumber} · {revision.schemaVersion === 'creative-production-plan-v2' ? 'v2 Static-first' : 'v1'} · {jobStatusLabel(revision.status)}{revision.generatedAt ? ` · ${publishedLabel(revision.generatedAt)}` : ''}</summary>
       {revision.status !== 'succeeded' && <p>{revision.status === 'failed' ? `生成に失敗しました（${revision.errorCode || 'CREATIVE_PRODUCTION_FAILED'}）` : 'Local Workerで制作案を生成しています。'}</p>}
       {revision.output && <div className="revenue-production-plan">
         <dl><div><dt>形式</dt><dd>YouTube Shorts / {revision.output.aspect_ratio}</dd></div><div><dt>目標尺</dt><dd>{revision.output.target_duration_seconds}秒</dd></div><div><dt>Creative目的</dt><dd>{revision.output.creative_objective}</dd></div><div><dt>CTA</dt><dd>{revision.output.cta?.text || '—'}</dd></div></dl>
@@ -396,12 +407,14 @@ function CreativeProductionPanel({ iteration, config, videoGenerationConfig, bus
         <div className="revenue-scene-list">{revision.output.scenes?.map(scene => {
           const asset = assets.get(scene.product_asset_id)
           return <article key={scene.scene_number} className={`revenue-scene is-${scene.visual_source_type}`}>
-            <header><strong>Scene {scene.scene_number}</strong><span>{scene.start_seconds}秒〜 / {scene.duration_seconds}秒 · {visualSourceLabel(scene.visual_source_type)}</span></header>
+            <header><strong>Scene {scene.scene_number}</strong><span>{scene.start_seconds}秒〜 / {scene.duration_seconds}秒 · {scene.rendering_strategy ? renderingStrategyLabel(scene.rendering_strategy) : visualSourceLabel(scene.visual_source_type)}</span></header>
             <p><b>目的:</b> {scene.purpose}</p><p><b>画面テキスト:</b> {scene.on_screen_text || 'なし'}</p><p><b>ナレーション:</b> {scene.narration || 'なし'}</p>
+            {scene.rendering_strategy && <div className="revenue-rendering-contract"><span>{scene.requires_ai_generation ? 'AI生成あり' : 'AI生成なし'}</span><span>{modelClassLabel(scene.recommended_model_class)}</span><span>{scene.preserve_product_identity ? '商品形状を維持' : '商品正確性は対象外'}</span></div>}
+            {scene.motion_instruction?.description && <p><b>Motion:</b> {scene.motion_instruction.description}（{scene.motion_instruction.mode}）</p>}
             {asset && <p><b>使用素材:</b> <a href={asset.assetUrl} target="_blank" rel="noopener noreferrer">{asset.label || asset.id}</a>（{asset.assetKind} / {asset.usagePermission}）</p>}
             {scene.visual_source_type === 'real_product_asset' && !asset && <p className="revenue-warning">使用素材ID: {scene.product_asset_id}</p>}
             {scene.ai_generation_prompt && <details><summary>AI生成prompt</summary><code>{scene.ai_generation_prompt}</code></details>}
-            {scene.visual_source_type === 'ai_generated_scene' && <SceneVideoGeneration planId={revision.planId} scene={scene} attempts={revision.videoGenerations} config={videoGenerationConfig} busy={busy} onGenerate={onGenerateVideo} />}
+            {isExistingPolloEligible(scene) && <SceneVideoGeneration planId={revision.planId} scene={scene} attempts={revision.videoGenerations} config={videoGenerationConfig} busy={busy} onGenerate={onGenerateVideo} />}
             <small>Fact refs: {scene.product_fact_references?.join(', ') || 'なし'}</small>
           </article>
         })}</div>

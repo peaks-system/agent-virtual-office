@@ -4,7 +4,8 @@ const { inputFingerprint } = require('./canonical-json.cjs')
 const { DEFAULT_MODEL, PROMPT_VERSION, SCHEMA_VERSION } = require('./analysis-schema.cjs')
 const { SCORE_PARAMETERS: PRODUCT_SCORE_PARAMETERS, SCORE_VERSION: PRODUCT_SCORE_VERSION } = require('./product-ranking.cjs')
 const { API_VERSION: RAKUTEN_API_VERSION, PROVIDER_ID: RAKUTEN_PROVIDER_ID } = require('./providers/rakuten-product-provider.cjs')
-const { DEFAULT_MODEL: CREATIVE_DEFAULT_MODEL, PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./creative-production-schema.cjs')
+const { DEFAULT_MODEL: CREATIVE_DEFAULT_MODEL, EXPORT_VERSION: CREATIVE_EXPORT_VERSION,
+  PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./creative-production-schema-v2.cjs')
 const { DEFAULT_MODEL: POLLO_DEFAULT_MODEL, DEFAULT_RESOLUTION: POLLO_DEFAULT_RESOLUTION, PROVIDER_ID: POLLO_PROVIDER_ID, PROVIDER_VERSION: POLLO_PROVIDER_VERSION, normalizedDuration, validatedModel } = require('./providers/pollo-video-generation-provider.cjs')
 
 const PROFILE = 'revenue_lab'
@@ -775,7 +776,7 @@ function createSupabaseStore({
     if (campaign.status === 'voided') throw new RevenueStoreError('CAMPAIGN_IMMUTABLE', 'Voided Campaign cannot create production plans', 409)
     const facts = creativeProductFacts(product)
     const input = {
-      contract: { target_format: 'youtube_shorts', aspect_ratio: '9:16', provider_neutral: true },
+      contract: { target_format: 'youtube_shorts', aspect_ratio: '9:16', provider_neutral: true, schema_version: CREATIVE_SCHEMA_VERSION },
       campaign: { id: campaign.id, name: campaign.name, objective: campaign.objective, lineage_kind: campaign.lineage_kind || 'opportunity' },
       iteration: {
         id: iteration.id, iteration_number: iteration.iteration_number, status: iteration.status,
@@ -788,16 +789,24 @@ function createSupabaseStore({
         is_own_product: product.is_own_product === true, cautions: product.cautions || null,
       },
       verified_product_facts: facts,
-      product_assets: assetRows.map(row => ({
-        id: row.id, ordinal: row.ordinal, asset_kind: row.asset_kind,
-        asset_source: row.asset_source, usage_permission: row.usage_permission,
-        label: row.label, creative_eligible: ['owned', 'licensed', 'authorized_reference'].includes(row.usage_permission),
-      })),
+      product_assets: assetRows.map(row => {
+        const explicitI2v = row.registered_facts?.i2v_allowed === true
+        const owned = row.usage_permission === 'owned'
+        return {
+          id: row.id, ordinal: row.ordinal, asset_kind: row.asset_kind,
+          asset_source: row.asset_source, usage_permission: row.usage_permission,
+          label: row.label,
+          static_eligible: ['owned', 'licensed', 'authorized_reference'].includes(row.usage_permission),
+          i2v_eligible: owned || explicitI2v,
+          i2v_permission_source: owned ? 'owned' : explicitI2v ? 'explicit' : 'not_confirmed',
+        }
+      }),
       constraints: [
         'Use only verified_product_facts for product claims and cite fact IDs.',
         'Never infer or generate the product body appearance.',
-        'Product display scenes use an eligible real Product Asset when available.',
-        'AI-generated scenes are backgrounds, people without a visible product, atmosphere, transitions, or effects only.',
+        'Use static_product_scene as the first choice for accurate product display.',
+        'Use image_motion_scene only when i2v_eligible is true and preserve product identity.',
+        'Use stylized or realistic AI scenes only when accurate product depiction is not required.',
       ],
     }
     return rpc('enqueue_creative_production_plan', {
@@ -826,12 +835,22 @@ function createSupabaseStore({
   async function persistCreativeProductionSuccess(requestRow, result) {
     const now = new Date().toISOString()
     const plan = result.productionPlan
+    const isV2 = requestRow.schemaVersion === CREATIVE_SCHEMA_VERSION
     const providerExport = {
-      export_version: 'provider-neutral-shorts-v1', generation_provider: null,
+      export_version: isV2 ? CREATIVE_EXPORT_VERSION : 'provider-neutral-shorts-v1', generation_provider: null,
       target: { format: plan.target_format, aspect_ratio: plan.aspect_ratio, duration_seconds: plan.target_duration_seconds },
       asset_bindings: plan.scenes.filter(scene => scene.product_asset_id).map(scene => ({ scene_number: scene.scene_number, product_asset_id: scene.product_asset_id })),
       generation_prompts: plan.scenes.filter(scene => scene.ai_generation_prompt).map(scene => ({ scene_number: scene.scene_number, prompt: scene.ai_generation_prompt })),
       timeline: plan.scenes,
+    }
+    if (isV2) {
+      providerExport.rendering_routes = plan.scenes.map(scene => ({
+        scene_number: scene.scene_number, rendering_strategy: scene.rendering_strategy,
+        recommended_model_class: scene.recommended_model_class,
+        requires_ai_generation: scene.requires_ai_generation,
+        preserve_product_identity: scene.preserve_product_identity,
+        motion_instruction: scene.motion_instruction,
+      }))
     }
     await request('creative_production_plans?on_conflict=production_request_id', {
       method: 'POST', body: {

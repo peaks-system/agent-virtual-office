@@ -70,6 +70,20 @@
   white-space: pre-wrap;
 }
 
+.revenue-rendering-contract {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.revenue-rendering-contract span {
+  background: color-mix(in srgb, #0f766e 9%, transparent);
+  border: 1px solid color-mix(in srgb, #0f766e 20%, transparent);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  padding: 3px 8px;
+}
+
 .revenue-video-generation {
   background: color-mix(in srgb, var(--corp-surface, #fff) 94%, #ddd6fe);
   border: 1px solid color-mix(in srgb, #7c3aed 24%, transparent);

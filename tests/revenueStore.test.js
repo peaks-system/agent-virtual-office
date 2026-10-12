@@ -213,7 +213,11 @@ describe('Revenue Lab Supabase store snapshots', () => {
       if (url.includes('/campaign_iterations?')) return response([{ id: 'iteration-1', campaign_id: 'campaign-1', curated_product_id: 'product-1', iteration_number: 1, status: 'draft', appeal_hypothesis: '時短', hook_text: '片付けが変わる', content_outline: { text: '実商品を紹介' }, script_text: null }])
       if (url.includes('/campaigns?')) return response([{ id: 'campaign-1', name: 'Campaign', objective: '訴求を検証', status: 'active', lineage_kind: 'direct_product' }])
       if (url.includes('/curated_products?')) return response([{ id: 'product-1', source_kind: 'direct_product', product_name: '確認済み商品', merchant: '自社', price_amount: 3980, currency: 'JPY', product_category: '収納', verified_facts: { 容量: '500ml', 材質: '確認済み素材' }, facts_snapshot: {}, is_own_product: true }])
-      if (url.includes('/product_assets?')) return response([{ id: 'asset-1', ordinal: 1, asset_kind: 'hero', asset_source: 'self_owned', usage_permission: 'owned', label: '正面', asset_url: 'https://secret.example/asset.jpg' }])
+      if (url.includes('/product_assets?')) return response([
+        { id: 'asset-1', ordinal: 1, asset_kind: 'hero', asset_source: 'self_owned', usage_permission: 'owned', label: '正面', asset_url: 'https://secret.example/asset.jpg' },
+        { id: 'asset-2', ordinal: 2, asset_kind: 'detail', asset_source: 'merchant', usage_permission: 'licensed', label: '詳細', asset_url: 'https://secret.example/detail.jpg' },
+        { id: 'asset-3', ordinal: 3, asset_kind: 'usage', asset_source: 'merchant', usage_permission: 'authorized_reference', registered_facts: { i2v_allowed: true }, label: '利用', asset_url: 'https://secret.example/use.jpg' },
+      ])
       if (url.includes('/rpc/enqueue_creative_production_plan')) return response({ requestId: 'request-1', revisionNumber: 1, created: true })
       throw new Error(`Unexpected request: ${url}`)
     })
@@ -221,12 +225,17 @@ describe('Revenue Lab Supabase store snapshots', () => {
     await expect(store.enqueueCreativeProduction('iteration-1', { idempotencyKey: '22222222-2222-4222-8222-222222222222', model: 'gpt-test' })).resolves.toMatchObject({ revisionNumber: 1 })
     const payload = calls.find(call => call.url.includes('/rpc/enqueue_creative_production_plan')).body
     expect(payload).toMatchObject({
-      p_campaign_iteration_id: 'iteration-1', p_prompt_version: 'creative-production-planner-v1',
-      p_schema_version: 'creative-production-plan-v1', p_requested_model: 'gpt-test',
+      p_campaign_iteration_id: 'iteration-1', p_prompt_version: 'creative-production-planner-v2',
+      p_schema_version: 'creative-production-plan-v2', p_requested_model: 'gpt-test',
       p_idempotency_key: '22222222-2222-4222-8222-222222222222',
     })
     expect(payload.p_input_fingerprint).toMatch(/^[0-9a-f]{64}$/)
-    expect(payload.p_input_snapshot.product_assets[0]).toMatchObject({ id: 'asset-1', creative_eligible: true })
+    expect(payload.p_input_snapshot.contract.schema_version).toBe('creative-production-plan-v2')
+    expect(payload.p_input_snapshot.product_assets[0]).toMatchObject({
+      id: 'asset-1', static_eligible: true, i2v_eligible: true, i2v_permission_source: 'owned',
+    })
+    expect(payload.p_input_snapshot.product_assets[1]).toMatchObject({ id: 'asset-2', static_eligible: true, i2v_eligible: false, i2v_permission_source: 'not_confirmed' })
+    expect(payload.p_input_snapshot.product_assets[2]).toMatchObject({ id: 'asset-3', static_eligible: true, i2v_eligible: true, i2v_permission_source: 'explicit' })
     expect(payload.p_input_snapshot.product_assets[0]).not.toHaveProperty('asset_url')
     expect(payload.p_input_snapshot.verified_product_facts.map(fact => fact.id)).toEqual(expect.arrayContaining(['product.name', 'product.price', 'verified.1.fact', 'verified.2.fact']))
     expect(new Set(payload.p_input_snapshot.verified_product_facts.map(fact => fact.id)).size).toBe(payload.p_input_snapshot.verified_product_facts.length)
@@ -243,6 +252,21 @@ describe('Revenue Lab Supabase store snapshots', () => {
     expect(insert.prefer).toContain('resolution=ignore-duplicates')
     expect(insert.body).toMatchObject({ revision_number: 2, output_json: plan, provider_export: { export_version: 'provider-neutral-shorts-v1', generation_provider: null } })
     expect(calls[1].body).toMatchObject({ status: 'succeeded', resolved_model: 'gpt-test', openai_response_id: 'resp-1' })
+  })
+
+  it('stores a v2 provider-neutral rendering route without changing the v1 export', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => { calls.push({ url, body: options.body ? JSON.parse(options.body) : null }); return response(null, 204) })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const scene = { scene_number: 1, rendering_strategy: 'static_product_scene', visual_source_type: 'real_product_asset', product_asset_id: 'asset-1',
+      requires_ai_generation: false, recommended_model_class: 'none', preserve_product_identity: true,
+      motion_instruction: { mode: 'slow_zoom_in', description: '編集時にズーム' }, ai_generation_prompt: null }
+    const plan = { target_format: 'youtube_shorts', aspect_ratio: '9:16', target_duration_seconds: 30, scenes: [scene] }
+    await store.persistCreativeProductionSuccess({ id: 'request-v2', projectId: 'project-1', campaignId: 'campaign-1', iterationId: 'iteration-1', productId: 'product-1', revisionNumber: 3, schemaVersion: 'creative-production-plan-v2' }, { productionPlan: plan, resolvedModel: 'gpt-test', responseId: 'resp-v2', usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 2, reasoningTokens: 0 } })
+    expect(calls[0].body.provider_export).toMatchObject({
+      export_version: 'provider-neutral-shorts-v2', generation_provider: null,
+      rendering_routes: [{ scene_number: 1, rendering_strategy: 'static_product_scene', recommended_model_class: 'none', requires_ai_generation: false, preserve_product_identity: true }],
+    })
   })
 
   it('queues only an immutable AI-generated scene with a deterministic provider fingerprint', async () => {
