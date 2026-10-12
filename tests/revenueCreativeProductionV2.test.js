@@ -94,11 +94,13 @@ function strategyScene(strategy, motionMode) {
 
 describe('Creative Production Plan v2 Static-first', () => {
   it('uses a new immutable contract with provider-neutral model classes', () => {
-    expect(PROMPT_VERSION).toBe('creative-production-planner-v2')
+    expect(PROMPT_VERSION).toBe('creative-production-planner-v2.2')
     expect(SCHEMA_VERSION).toBe('creative-production-plan-v2')
     expect(CREATIVE_PRODUCTION_JSON_SCHEMA.properties.scenes.items.properties.recommended_model_class.enum)
       .toEqual(['none', 'stylized_t2v', 'realistic_t2v', 'product_preserving_i2v'])
     expect(SYSTEM_PROMPT).toContain('static_product_scene first')
+    expect(SYSTEM_PROMPT).toContain('zero or one image_motion_scene')
+    expect(SYSTEM_PROMPT).toContain('product itself remains completely stationary')
     expect(SYSTEM_PROMPT).not.toMatch(/Pollo|Kling|Veo|Runway/)
     expect(validateCreativeProductionOutput(validPlan(), input)).toEqual(validPlan())
   })
@@ -119,7 +121,7 @@ describe('Creative Production Plan v2 Static-first', () => {
     expect(() => validateCreativeProductionOutput(inaccurateStylized, input)).toThrow(/product identity/)
   })
 
-  it('permits I2V only for owned or explicitly authorized snapshots', () => {
+  it('permits an I2V candidate only for an owned and explicitly eligible planner asset', () => {
     const plan = validPlan()
     plan.scenes.splice(1, 0, scene({ scene_number: 2, start_seconds: 10, duration_seconds: 5, purpose: '商品画像を軽く動かす',
       rendering_strategy: 'image_motion_scene', motion_instruction: { mode: 'provider_motion', description: '背景だけに微細な動きを加える' },
@@ -130,6 +132,36 @@ describe('Creative Production Plan v2 Static-first', () => {
     expect(validateCreativeProductionOutput(plan, input)).toEqual(plan)
     const notAuthorized = { ...input, product_assets: [{ ...input.product_assets[0], i2v_eligible: false, i2v_permission_source: 'not_confirmed' }] }
     expect(() => validateCreativeProductionOutput(plan, notAuthorized)).toThrow(/I2V/)
+    const notOwned = { ...input, product_assets: [{ ...input.product_assets[0], usage_permission: 'licensed', i2v_eligible: true, i2v_permission_source: 'explicit' }] }
+    expect(() => validateCreativeProductionOutput(plan, notOwned)).toThrow(/owned and I2V-eligible/)
+  })
+
+  it('allows at most one restrained I2V candidate while keeping other product scenes static', () => {
+    const plan = validPlan()
+    plan.scenes.splice(1, 0, scene({ scene_number: 2, start_seconds: 10, duration_seconds: 5, purpose: '商品を正確に見せる軽いプッシュイン',
+      rendering_strategy: 'image_motion_scene', motion_instruction: { mode: 'provider_motion', description: '商品本体は完全に静止し、カメラだけをゆっくりプッシュインする' },
+      requires_ai_generation: true, recommended_model_class: 'product_preserving_i2v',
+      ai_generation_prompt: `${IMAGE_MOTION_SAFETY_PREFIX} 商品本体は完全に静止し、カメラだけをゆっくりプッシュインする。`, subtitle_segment_ids: ['sub-2'], product_fact_references: [] }))
+    plan.scenes[2] = scene({ scene_number: 3, start_seconds: 15, duration_seconds: 5, purpose: '残りの商品提示',
+      subtitle_segment_ids: ['sub-2'], product_fact_references: [] })
+    plan.scenes[3].scene_number = 4
+    expect(validateCreativeProductionOutput(plan, input)).toEqual(plan)
+
+    plan.scenes.splice(2, 0, { ...plan.scenes[1], scene_number: 3, start_seconds: 15 })
+    plan.scenes[3].scene_number = 4; plan.scenes[3].start_seconds = 20
+    plan.scenes[4].scene_number = 5
+    expect(() => validateCreativeProductionOutput(plan, input)).toThrow(/at most one I2V scene/)
+  })
+
+  it('requires one I2V candidate when an owned eligible asset has a later accurate product scene', () => {
+    const plan = validPlan()
+    plan.scenes[1] = scene({ scene_number: 2, start_seconds: 10, purpose: '後続の商品特徴提示',
+      motion_instruction: { mode: 'slow_zoom_in', description: '編集時に緩やかにズームする' },
+      subtitle_segment_ids: ['sub-2'], product_fact_references: [] })
+    expect(() => validateCreativeProductionOutput(plan, input)).toThrow(/requires one restrained I2V candidate/)
+
+    const noEligibleAsset = { ...input, product_assets: [{ ...input.product_assets[0], i2v_eligible: false }] }
+    expect(validateCreativeProductionOutput(plan, noEligibleAsset)).toEqual(plan)
   })
 
   it('enforces every rendering strategy and motion mode combination from one contract table', () => {
@@ -138,10 +170,13 @@ describe('Creative Production Plan v2 Static-first', () => {
         const plan = validPlan()
         plan.scenes[1] = strategyScene(strategy, motionMode)
         const allowed = ALLOWED_MOTION_MODES_BY_STRATEGY[strategy].includes(motionMode)
-        if (allowed) expect(validateCreativeProductionOutput(plan, input)).toEqual(plan)
+        const motionContractInput = strategy === 'image_motion_scene' ? input : {
+          ...input, product_assets: input.product_assets.map(asset => ({ ...asset, i2v_eligible: false })),
+        }
+        if (allowed) expect(validateCreativeProductionOutput(plan, motionContractInput)).toEqual(plan)
         else {
           let failure
-          try { validateCreativeProductionOutput(plan, input) } catch (error) { failure = error }
+          try { validateCreativeProductionOutput(plan, motionContractInput) } catch (error) { failure = error }
           expect(failure).toMatchObject({
             code: 'CREATIVE_PRODUCTION_VALIDATION_FAILED',
             fieldPath: '$.scenes[1].motion_instruction.mode',

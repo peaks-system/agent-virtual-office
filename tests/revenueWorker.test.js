@@ -127,7 +127,7 @@ describe('Revenue Lab job handler and local worker', () => {
     const store = {
       getCreativeProductionRequest: vi.fn(async () => ({
         id: 'request-v2-failed', inputSnapshot, revisionNumber: 2,
-        promptVersion: 'creative-production-planner-v2', schemaVersion: 'creative-production-plan-v2',
+        promptVersion: 'creative-production-planner-v2.2', schemaVersion: 'creative-production-plan-v2',
       })),
       markCreativeProductionRunning: vi.fn(async () => {}), persistCreativeProductionSuccess: vi.fn(async () => {}),
       persistCreativeProductionFailure: vi.fn(async () => {}),
@@ -135,7 +135,7 @@ describe('Revenue Lab job handler and local worker', () => {
     const failure = Object.assign(new Error('safe validation failure'), {
       code: 'CREATIVE_PRODUCTION_VALIDATION_FAILED', ruleId: 'V2_STATIC_FIRST_REQUIRED', fieldPath: '$.scenes',
       safeDiagnostics: {
-        promptVersion: 'creative-production-planner-v2', schemaVersion: 'creative-production-plan-v2', route: 'v2',
+        promptVersion: 'creative-production-planner-v2.2', schemaVersion: 'creative-production-plan-v2', route: 'v2',
         openaiHttpStatus: 200, responseJsonParsed: true, structuredOutputSchemaValidated: true,
         deterministicValidatorValidated: false, validatorRuleId: 'V2_STATIC_FIRST_REQUIRED', validatorFieldPath: '$.scenes',
       },

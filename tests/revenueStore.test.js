@@ -225,7 +225,7 @@ describe('Revenue Lab Supabase store snapshots', () => {
     await expect(store.enqueueCreativeProduction('iteration-1', { idempotencyKey: '22222222-2222-4222-8222-222222222222', model: 'gpt-test' })).resolves.toMatchObject({ revisionNumber: 1 })
     const payload = calls.find(call => call.url.includes('/rpc/enqueue_creative_production_plan')).body
     expect(payload).toMatchObject({
-      p_campaign_iteration_id: 'iteration-1', p_prompt_version: 'creative-production-planner-v2',
+      p_campaign_iteration_id: 'iteration-1', p_prompt_version: 'creative-production-planner-v2.2',
       p_schema_version: 'creative-production-plan-v2', p_requested_model: 'gpt-test',
       p_idempotency_key: '22222222-2222-4222-8222-222222222222',
     })

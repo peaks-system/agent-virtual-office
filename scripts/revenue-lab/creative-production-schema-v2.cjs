@@ -4,7 +4,7 @@ const {
   AI_SCENE_SAFETY_PREFIX, ASPECT_RATIO, DEFAULT_MODEL, TARGET_FORMAT,
 } = require('./creative-production-schema.cjs')
 
-const PROMPT_VERSION = 'creative-production-planner-v2'
+const PROMPT_VERSION = 'creative-production-planner-v2.2'
 const SCHEMA_VERSION = 'creative-production-plan-v2'
 const EXPORT_VERSION = 'provider-neutral-shorts-v2'
 const RENDERING_STRATEGIES = [
@@ -55,7 +55,7 @@ const CREATIVE_PRODUCTION_JSON_SCHEMA = {
         duration_seconds: { type: 'number', exclusiveMinimum: 0 }, purpose: { type: 'string' },
         rendering_strategy: {
           type: 'string', enum: RENDERING_STRATEGIES,
-          description: 'Rendering contract: text_only requires motion_instruction.mode=none; image_motion_scene allows subtle_parallax or provider_motion; static_product_scene forbids provider_motion.',
+          description: 'Rendering contract: text_only requires motion_instruction.mode=none; the entire plan allows at most one image_motion_scene using subtle_parallax or provider_motion; static_product_scene forbids provider_motion.',
         },
         visual_source_type: { type: 'string', enum: ['real_product_asset', 'ai_generated_scene', 'text_only'] },
         product_asset_id: { type: ['string', 'null'] },
@@ -100,7 +100,8 @@ The rendering strategy and motion contract is strict:
 - stylized_scene and ai_generated_scene: choose one declared motion mode appropriate for the generated video.
 - text_only: motion_instruction.mode must be none, and motion_instruction.description must explicitly state that no motion is applied. Never use pan, zoom, fade, parallax, or provider motion for text_only.
 When an eligible product asset exists, the first accurate product display must be static_product_scene. Use composition-time pan, zoom, fade, and text overlay without calling a video provider.
-image_motion_scene is allowed only with an asset whose i2v_eligible field is true. Preserve product shape, color, logo, labels, buttons, and perceived dimensions. Its prompt must start exactly with ${IMAGE_MOTION_SAFETY_PREFIX}.
+Use zero or one image_motion_scene across the entire plan, never more than one. When an owned asset has i2v_eligible=true and the plan contains any later accurate product scene after the first static product display, you must make the single strongest early reveal or feature scene image_motion_scene. A plan with no such later scene may use zero. All other accurate product scenes must remain static_product_scene.
+image_motion_scene is allowed only with an asset whose usage_permission is owned and whose i2v_eligible field is true, and only when accurate product display is the scene's primary purpose. The product itself remains completely stationary; request only a very slow camera push-in or extremely subtle background-only motion. Preserve product shape, proportions, color, material appearance, logo position, labels, buttons, openings, and perceived dimensions. Its prompt must start exactly with ${IMAGE_MOTION_SAFETY_PREFIX}.
 stylized_scene is only for animation, illustration, or CG atmosphere where accurate product depiction is not required. It must not show or identify the product body.
 ai_generated_scene is realistic generic context only and must not reconstruct the product. AI T2V prompts must start exactly with ${AI_SCENE_SAFETY_PREFIX}.
 Do not include product names, brands, logos, package designs, product specifications, or a visible product body in stylized or realistic T2V prompts.
@@ -164,7 +165,7 @@ function validateSceneStrategy(scene, assets, input, scenePath) {
     return
   }
   if (strategy === 'image_motion_scene') {
-    if (!asset?.i2v_eligible) fail('I2V scene requires an eligible Product Asset', 'V2_I2V_ASSET_REQUIRED', `${scenePath}.product_asset_id`)
+    if (asset?.usage_permission !== 'owned' || !asset.i2v_eligible) fail('I2V scene requires an owned and I2V-eligible Product Asset', 'V2_I2V_ASSET_REQUIRED', `${scenePath}.product_asset_id`)
     if (typeof scene.ai_generation_prompt !== 'string' || !scene.ai_generation_prompt.startsWith(IMAGE_MOTION_SAFETY_PREFIX)) {
       fail('I2V prompt is missing the product-preservation safety prefix', 'V2_I2V_SAFETY_PREFIX', `${scenePath}.ai_generation_prompt`)
     }
@@ -218,6 +219,7 @@ function validateCreativeProductionOutput(value, input) {
   let expectedScene = 1
   let hasStaticProductScene = false
   let firstIdentityStrategy = null
+  let imageMotionSceneCount = 0
   for (const [sceneIndex, scene] of (value.scenes || []).entries()) {
     const scenePath = `$.scenes[${sceneIndex}]`
     if (scene.scene_number !== expectedScene || scene.start_seconds < 0 || scene.duration_seconds <= 0
@@ -228,11 +230,23 @@ function validateCreativeProductionOutput(value, input) {
     validateVerifiedNumericClaims(`${scene.on_screen_text} ${scene.narration}`, factText, 'Scene', scenePath)
     validateSceneStrategy(scene, assets, input, scenePath)
     if (scene.rendering_strategy === 'static_product_scene') hasStaticProductScene = true
+    if (scene.rendering_strategy === 'image_motion_scene') {
+      imageMotionSceneCount += 1
+      if (imageMotionSceneCount > 1) fail('A plan may contain at most one I2V scene', 'V2_I2V_SCENE_LIMIT', `${scenePath}.rendering_strategy`)
+    }
     if (scene.preserve_product_identity && !firstIdentityStrategy) firstIdentityStrategy = scene.rendering_strategy
   }
   const hasStaticEligibleAsset = [...assets.values()].some(asset => asset.static_eligible)
   if (hasStaticEligibleAsset && !hasStaticProductScene) fail('Static-first requires a static product scene when an eligible asset exists', 'V2_STATIC_FIRST_REQUIRED', '$.scenes')
   if (firstIdentityStrategy && firstIdentityStrategy !== 'static_product_scene') fail('The first accurate product display must be static_product_scene', 'V2_STATIC_FIRST_ORDER', '$.scenes')
+  const accurateProductScenes = value.scenes.filter(scene => scene.preserve_product_identity)
+  const hasLaterOwnedEligibleProductScene = accurateProductScenes.slice(1).some(scene => {
+    const asset = assets.get(scene.product_asset_id)
+    return asset?.usage_permission === 'owned' && asset.i2v_eligible
+  })
+  if (hasLaterOwnedEligibleProductScene && imageMotionSceneCount === 0) {
+    fail('A later accurate product scene with an owned eligible asset requires one restrained I2V candidate', 'V2_I2V_CANDIDATE_REQUIRED', '$.scenes')
+  }
   if (!value.scenes?.length || !value.subtitle_segments?.length || value.cta?.placement_seconds > value.target_duration_seconds) fail('Incomplete production timeline', 'V2_TIMELINE_INCOMPLETE', '$')
   validateFactReferences(value.cta.product_fact_references, factIds, 'CTA', '$.cta.product_fact_references')
   validateVerifiedNumericClaims(value.cta.text, factText, 'CTA', '$.cta.text')
