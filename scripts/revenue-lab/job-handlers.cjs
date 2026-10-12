@@ -2,12 +2,15 @@
 
 const { scoreYouTubePopulation, scoreYouTubeTrackingPopulation } = require('./scoring.cjs')
 const { rankProductCandidates } = require('./product-ranking.cjs')
+const { createImageToVideoRequest } = require('./image-to-video-request.cjs')
 
 class RevenueJobError extends Error {
   constructor(code, message) { super(message); this.name = 'RevenueJobError'; this.code = code }
 }
 
-function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGenerationProvider, productProvider, clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), videoPollAttempts = 30, videoPollIntervalMs = 5000 } = {}) {
+function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGenerationProvider,
+  imageToVideoProvider, productAssetBlobStore, productProvider, clock = () => new Date(),
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), videoPollAttempts = 30, videoPollIntervalMs = 5000 } = {}) {
   if (!store || !youtube) throw new TypeError('store and youtube are required')
 
   async function collectYouTube(job) {
@@ -254,22 +257,46 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGen
   async function generateVideoScene(job) {
     const sceneId = job?.payload?.video_generation_scene_id
     if (!sceneId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'video_generation_scene_id is required')
-    if (!videoGenerationProvider) throw new RevenueJobError('POLLO_NOT_CONFIGURED', 'Video generation provider is not configured')
     const scene = await store.getVideoGenerationScene(sceneId)
     if (!scene) throw new RevenueJobError('VIDEO_GENERATION_SCENE_NOT_FOUND', 'Video generation scene was not found')
-    if (scene.provider !== videoGenerationProvider.id || scene.providerVersion !== videoGenerationProvider.version
-      || scene.requestedModel !== videoGenerationProvider.model) {
+    const provider = scene.generationMode === 'image_to_video' ? imageToVideoProvider : videoGenerationProvider
+    if (!provider) throw new RevenueJobError('POLLO_NOT_CONFIGURED', 'Video generation provider is not configured')
+    if (scene.provider !== provider.id || scene.providerVersion !== provider.version
+      || scene.requestedModel !== provider.model) {
       throw new RevenueJobError('VIDEO_GENERATION_PROVIDER_MISMATCH', 'Video generation provider configuration does not match the queued scene')
     }
     if (scene.status === 'succeeded') return { videoGenerationSceneId: sceneId, status: 'succeeded', attemptNumber: scene.attemptNumber }
+    if (scene.submissionUncertain || scene.status === 'submission_uncertain') {
+      throw new RevenueJobError('VIDEO_GENERATION_SUBMISSION_UNCERTAIN', 'The existing attempt requires human review before any new submit')
+    }
     let providerTaskId = scene.providerTaskId
     try {
       if (!providerTaskId) {
         await store.markVideoGenerationSubmitting(scene)
-        const receipt = await videoGenerationProvider.submitScene({
-          prompt: scene.promptSnapshot, durationSeconds: scene.durationSeconds,
-          aspectRatio: scene.aspectRatio, resolution: scene.resolution,
-        })
+        let providerRequest
+        if (scene.generationMode === 'image_to_video') {
+          if (!productAssetBlobStore || !scene.inputAssetSnapshot?.immutable_object_key) {
+            throw Object.assign(new Error('Private Product Asset storage is unavailable'), { code: 'ASSET_STORAGE_NOT_CONFIGURED' })
+          }
+          const temporaryUrl = await productAssetBlobStore.createTemporaryReadUrl(scene.inputAssetSnapshot.immutable_object_key, 3600)
+          providerRequest = createImageToVideoRequest({
+            prompt: scene.promptSnapshot, negativePrompt: scene.negativePromptSnapshot,
+            promptBuilderVersion: scene.promptBuilderVersion,
+            inputImage: {
+              temporaryUrl, revisionId: scene.inputAssetRevisionId,
+              contentSha256: scene.inputAssetSnapshot.content_sha256,
+              contentType: scene.inputAssetSnapshot.content_type,
+              pixelWidth: Number(scene.inputAssetSnapshot.pixel_width),
+              pixelHeight: Number(scene.inputAssetSnapshot.pixel_height),
+            },
+            durationSeconds: scene.durationSeconds, aspectRatio: scene.aspectRatio,
+            resolution: scene.resolution, audioEnabled: false,
+          }, provider.capabilityManifest)
+        } else {
+          providerRequest = { prompt: scene.promptSnapshot, durationSeconds: scene.durationSeconds,
+            aspectRatio: scene.aspectRatio, resolution: scene.resolution }
+        }
+        const receipt = await provider.submitScene(providerRequest)
         providerTaskId = receipt.providerTaskId
         await store.persistVideoGenerationTask(sceneId, receipt)
       } else {
@@ -277,7 +304,7 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGen
       }
       const attempts = Math.max(1, Math.min(Number(videoPollAttempts) || 30, 120))
       for (let index = 0; index < attempts; index += 1) {
-        const result = await videoGenerationProvider.getTaskStatus(providerTaskId)
+        const result = await provider.getTaskStatus(providerTaskId)
         if (result.status === 'succeeded') {
           await store.persistVideoGenerationSuccess(scene, result)
           return { videoGenerationSceneId: sceneId, status: 'succeeded', attemptNumber: scene.attemptNumber }
@@ -297,13 +324,19 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGen
     } catch (rawError) {
       if (providerTaskId && rawError?.code !== 'POLLO_GENERATION_FAILED' && rawError?.code !== 'VIDEO_GENERATION_FAILED') {
         const pendingError = rawError?.code === 'VIDEO_GENERATION_POLL_TIMEOUT'
-          ? rawError : videoGenerationProvider.normalizeError(rawError)
+          ? rawError : provider.normalizeError(rawError)
         await store.persistVideoGenerationPollingInterrupted(scene, pendingError)
         pendingError.deferJob = true
         pendingError.retryAfterSeconds = Math.max(30, Number(rawError?.retryAfterSeconds) || 30)
         throw pendingError
       }
-      const error = /^VIDEO_GENERATION_/.test(rawError?.code || '') ? rawError : videoGenerationProvider.normalizeError(rawError)
+      const normalized = /^VIDEO_GENERATION_/.test(rawError?.code || '') ? rawError : provider.normalizeError(rawError)
+      if (scene.generationMode === 'image_to_video' && !providerTaskId
+        && ['POLLO_TRANSPORT_ERROR', 'POLLO_INVALID_RESPONSE'].includes(normalized?.code)) {
+        await store.persistVideoGenerationSubmissionUncertain(scene, Object.assign(normalized, { code: 'VIDEO_GENERATION_SUBMISSION_UNCERTAIN' }))
+        throw new RevenueJobError('VIDEO_GENERATION_SUBMISSION_UNCERTAIN', 'Video generation submit outcome is uncertain')
+      }
+      const error = normalized
       if (rawError?.code !== 'VIDEO_GENERATION_FAILED' && rawError?.code !== 'POLLO_GENERATION_FAILED') {
         try { await store.persistVideoGenerationFailure(scene, error) }
         catch { console.error('[revenue-lab] Video generation failure state could not be persisted', { sceneId }) }

@@ -1,6 +1,6 @@
 'use strict'
 
-const NORMALIZED_STATUSES = ['queued', 'submitting', 'polling', 'succeeded', 'failed']
+const NORMALIZED_STATUSES = ['queued', 'submitting', 'polling', 'submission_uncertain', 'succeeded', 'failed']
 const COST_PROVENANCE = ['actual', 'estimated', 'unavailable']
 
 class VideoGenerationProviderError extends Error {

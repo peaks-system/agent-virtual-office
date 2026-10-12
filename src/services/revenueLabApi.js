@@ -85,6 +85,18 @@ export function enqueueVideoGeneration(planId, sceneNumber, idempotencyKey, rege
   })
 }
 
+export function createProductAssetRevision(assetId, i2vAllowed, createNineSixteen = true) {
+  return request(`/product-assets/${encodeURIComponent(assetId)}/revisions`, {
+    method: 'POST', body: JSON.stringify({ i2vAllowed, createNineSixteen }),
+  })
+}
+
+export function enqueueImageVideoGeneration(planId, sceneNumber, assetRevisionId, idempotencyKey, regenerate = false) {
+  return request(`/creative-production-plans/${encodeURIComponent(planId)}/scenes/${encodeURIComponent(sceneNumber)}/image-video-generations`, {
+    method: 'POST', body: JSON.stringify({ assetRevisionId, idempotencyKey, regenerate }),
+  })
+}
+
 export function registerCampaignPublication(iterationId, input) {
   return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/publications`, {
     method: 'POST', body: JSON.stringify(input),

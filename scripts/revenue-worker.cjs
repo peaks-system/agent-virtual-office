@@ -8,6 +8,8 @@ const { createYouTubeClient } = require('./revenue-lab/youtube-client.cjs')
 const { createOpenAIAnalysisClient } = require('./revenue-lab/openai-client.cjs')
 const { createCreativeProductionClient } = require('./revenue-lab/creative-production-client.cjs')
 const { createPolloVideoGenerationProvider } = require('./revenue-lab/providers/pollo-video-generation-provider.cjs')
+const { createPolloWanVideoGenerationProvider } = require('./revenue-lab/providers/pollo-wan-video-generation-provider.cjs')
+const { createSupabaseProductAssetBlobStore } = require('./revenue-lab/product-asset-blob-store.cjs')
 const { createRakutenProductProvider } = require('./revenue-lab/providers/rakuten-product-provider.cjs')
 
 async function main() {
@@ -16,9 +18,13 @@ async function main() {
   const analyst = process.env.OPENAI_API_KEY ? createOpenAIAnalysisClient() : null
   const creativeProducer = process.env.OPENAI_API_KEY ? createCreativeProductionClient({ model: process.env.REVENUE_LAB_CREATIVE_PRODUCTION_MODEL || undefined }) : null
   const videoGenerationProvider = process.env.POLLO_API_KEY ? createPolloVideoGenerationProvider({ model: process.env.REVENUE_LAB_POLLO_MODEL || undefined }) : null
+  const imageToVideoProvider = process.env.POLLO_API_KEY ? createPolloWanVideoGenerationProvider() : null
+  const productAssetBlobStore = process.env.REVENUE_LAB_PRODUCT_ASSET_BUCKET
+    ? createSupabaseProductAssetBlobStore({ url: process.env.SUPABASE_URL, serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY, bucket: process.env.REVENUE_LAB_PRODUCT_ASSET_BUCKET }) : null
   const productProvider = process.env.RAKUTEN_APPLICATION_ID && process.env.RAKUTEN_ACCESS_KEY ? createRakutenProductProvider() : null
   const handlers = createJobHandlers({
-    store, youtube, analyst, creativeProducer, videoGenerationProvider, productProvider,
+    store, youtube, analyst, creativeProducer, videoGenerationProvider, imageToVideoProvider,
+    productAssetBlobStore, productProvider,
     videoPollAttempts: Number(process.env.REVENUE_LAB_POLLO_POLL_ATTEMPTS) || 30,
     videoPollIntervalMs: Number(process.env.REVENUE_LAB_POLLO_POLL_INTERVAL_MS) || 5000,
   })

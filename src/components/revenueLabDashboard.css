@@ -125,3 +125,21 @@
   max-height: 420px;
   max-width: 100%;
 }
+
+.revenue-image-video-generation {
+  background: color-mix(in srgb, var(--corp-surface, #fff) 94%, #ccfbf1);
+  border-color: color-mix(in srgb, #0f766e 32%, transparent);
+}
+
+.revenue-image-video-generation .revenue-check {
+  align-items: flex-start;
+  display: flex;
+  gap: 8px;
+}
+
+.revenue-image-video-generation .revenue-check input { margin-top: 3px; }
+
+.revenue-image-video-generation code {
+  display: inline;
+  font-size: 0.8rem;
+}

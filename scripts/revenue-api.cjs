@@ -6,6 +6,10 @@ const { validHumanScore } = require('./revenue-lab/scoring.cjs')
 const { DEFAULT_MODEL } = require('./revenue-lab/analysis-schema.cjs')
 const { DEFAULT_MODEL: DEFAULT_CREATIVE_MODEL, PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./revenue-lab/creative-production-schema-v2.cjs')
 const { DEFAULT_MODEL: DEFAULT_POLLO_MODEL, DEFAULT_RESOLUTION: DEFAULT_POLLO_RESOLUTION, PROVIDER_ID: POLLO_PROVIDER_ID, PROVIDER_VERSION: POLLO_PROVIDER_VERSION, validatedModel: validatedPolloModel } = require('./revenue-lab/providers/pollo-video-generation-provider.cjs')
+const { ADAPTER_VERSION: WAN_ADAPTER_VERSION, MANIFEST: WAN_MANIFEST, MODEL: WAN_MODEL,
+  PROVIDER_ID: WAN_PROVIDER_ID, PROVIDER_VERSION: WAN_PROVIDER_VERSION } = require('./revenue-lab/providers/pollo-wan-video-generation-provider.cjs')
+const { createSupabaseProductAssetBlobStore } = require('./revenue-lab/product-asset-blob-store.cjs')
+const { createProductAssetRevisionService, ProductAssetRevisionError } = require('./revenue-lab/product-asset-revision-service.cjs')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -24,6 +28,12 @@ function configurationStatus(env = process.env) {
     provider: POLLO_PROVIDER_ID, providerVersion: POLLO_PROVIDER_VERSION,
     requestedModel: validatedPolloModel(env.REVENUE_LAB_POLLO_MODEL || DEFAULT_POLLO_MODEL),
     resolution: DEFAULT_POLLO_RESOLUTION, aspectRatio: '9:16', audioEnabled: false,
+  }, imageToVideo: {
+    configured: Boolean(env.POLLO_API_KEY && env.REVENUE_LAB_PRODUCT_ASSET_BUCKET),
+    missing: ['POLLO_API_KEY', 'REVENUE_LAB_PRODUCT_ASSET_BUCKET'].filter(key => !env[key]),
+    provider: WAN_PROVIDER_ID, providerVersion: WAN_PROVIDER_VERSION, providerAdapterVersion: WAN_ADAPTER_VERSION,
+    requestedModel: WAN_MODEL, resolution: '720p', durationSeconds: 5, aspectRatio: '9:16',
+    audioEnabled: false, promptBuilderVersion: 'product-i2v-identity-v1', capabilityManifest: WAN_MANIFEST,
   }, products: {
     configured: Boolean(env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY),
     missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'].filter(key => !env[key]),
@@ -95,14 +105,27 @@ function createRevenueApi({
   authorize = () => true,
   permit = permitted,
   store,
+  assetRevisionService,
   env = process.env,
   today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tokyo' }),
 } = {}) {
   let storage = store || null
+  let assetRevisions = assetRevisionService || null
   const config = configurationStatus(env)
   const getStore = () => {
     if (!storage) storage = createSupabaseStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY })
     return storage
+  }
+  const getAssetRevisionService = () => {
+    if (!assetRevisions) {
+      if (!env.REVENUE_LAB_PRODUCT_ASSET_BUCKET) throw new ProductAssetRevisionError('ASSET_STORAGE_NOT_CONFIGURED', 'Private Product Asset storage is not configured', 503)
+      const blobStore = createSupabaseProductAssetBlobStore({
+        url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+        bucket: env.REVENUE_LAB_PRODUCT_ASSET_BUCKET,
+      })
+      assetRevisions = createProductAssetRevisionService({ store: getStore(), blobStore })
+    }
+    return assetRevisions
   }
   const reply = (res, status, value) => {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
@@ -217,6 +240,40 @@ function createRevenueApi({
       }
       const creativeProductionMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/production-plans$/i)
       const videoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/video-generations$/i)
+      const imageVideoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/image-video-generations$/i)
+      const assetRevisionMatch = pathname.match(/^\/product-assets\/([0-9a-f-]{36})\/revisions$/i)
+      if (req.method === 'POST' && assetRevisionMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(assetRevisionMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'Product Asset IDが正しくありません。')
+        if (!config.imageToVideo.configured) return fail(res, 503, 'ASSET_STORAGE_NOT_CONFIGURED', 'I2V用のprivate storageを設定してください。', { missing: config.imageToVideo.missing })
+        const input = await body(req)
+        if (typeof input.i2vAllowed !== 'boolean' || (input.createNineSixteen != null && typeof input.createNineSixteen !== 'boolean')) {
+          return fail(res, 400, 'VALIDATION_ERROR', 'Asset Revision設定が正しくありません。')
+        }
+        const result = await getAssetRevisionService().createFromSource(assetRevisionMatch[1], {
+          i2vAllowed: input.i2vAllowed, createNineSixteen: input.createNineSixteen === true,
+        })
+        return reply(res, 201, { data: result })
+      }
+      if (req.method === 'POST' && imageVideoGenerationMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(imageVideoGenerationMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'production plan idが正しくありません。')
+        const sceneNumber = Number(imageVideoGenerationMatch[2])
+        if (!Number.isInteger(sceneNumber) || sceneNumber < 1 || sceneNumber > 16) return fail(res, 400, 'VALIDATION_ERROR', 'scene番号が正しくありません。')
+        if (!config.imageToVideo.configured) return fail(res, 503, 'IMAGE_TO_VIDEO_NOT_CONFIGURED', 'Wan I2Vとprivate storageを設定してください。', { missing: config.imageToVideo.missing })
+        const input = await body(req)
+        const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey) || !UUID.test(input.assetRevisionId || '')
+          || (input.regenerate != null && typeof input.regenerate !== 'boolean')) {
+          return fail(res, 400, 'VALIDATION_ERROR', 'I2V生成リクエストが正しくありません。')
+        }
+        const result = await getStore().enqueueImageVideoGeneration(imageVideoGenerationMatch[1], sceneNumber, input.assetRevisionId, {
+          idempotencyKey, regenerate: input.regenerate === true, model: config.imageToVideo.requestedModel,
+          provider: config.imageToVideo.provider, providerVersion: config.imageToVideo.providerVersion,
+          providerAdapterVersion: config.imageToVideo.providerAdapterVersion,
+        })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
       if (req.method === 'POST' && videoGenerationMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
         if (!UUID.test(videoGenerationMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'production plan idが正しくありません。')
@@ -292,6 +349,10 @@ function createRevenueApi({
       if (/^(?:VIDEO_GENERATION_|POLLO_)/.test(error?.code || '')) {
         const status = error.status === 404 ? 404 : error.status === 409 ? 409 : error.code === 'POLLO_RATE_LIMITED' ? 429 : 400
         return fail(res, status, error.code, '動画素材の生成処理を完了できませんでした。Provider設定とscene状態を確認してください。')
+      }
+      if (error instanceof ProductAssetRevisionError || /^(?:ASSET_|PRODUCT_ASSET_)/.test(error?.code || '')) {
+        const status = Number(error.status) || (error.code === 'PRODUCT_ASSET_NOT_FOUND' ? 404 : 400)
+        return fail(res, status, error.code, 'Product Asset Revisionを作成または利用できませんでした。素材・権限・Storage設定を確認してください。')
       }
       console.error('[revenue-lab] API request failed', { method: req.method, pathname, code: error?.code || 'REVENUE_API_ERROR' })
       return fail(res, 502, 'REVENUE_SERVICE_ERROR', 'Revenue Labの処理を完了できませんでした。接続設定を確認してください。')

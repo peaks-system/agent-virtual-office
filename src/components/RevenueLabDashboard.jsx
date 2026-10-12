@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { createManualCampaign as createManualCampaignRequest, createProductCandidateDecision, enqueueCreativeProductionPlan, enqueueVideoGeneration, createRevenueAnalysisReview, enqueueEnabledRevenueQueries, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, loadRevenueDashboard, registerCampaignPublication, updateRevenueQuery } from '../services/revenueLabApi'
+import { createManualCampaign as createManualCampaignRequest, createProductAssetRevision, createProductCandidateDecision, enqueueCreativeProductionPlan, enqueueImageVideoGeneration, enqueueVideoGeneration, createRevenueAnalysisReview, enqueueEnabledRevenueQueries, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, loadRevenueDashboard, registerCampaignPublication, updateRevenueQuery } from '../services/revenueLabApi'
 import './revenueLabDashboard.css'
 
-const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] }, creativeProduction: { configured: false, missing: ['OPENAI_API_KEY'] }, videoGeneration: { configured: false, missing: ['POLLO_API_KEY'], provider: 'pollo', requestedModel: 'pollo-v2' }, products: { configured: false, missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], latestJob: null, latestRun: null, latestTrackingRun: null }
+const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] }, creativeProduction: { configured: false, missing: ['OPENAI_API_KEY'] }, videoGeneration: { configured: false, missing: ['POLLO_API_KEY'], provider: 'pollo', requestedModel: 'pollo-v2' }, imageToVideo: { configured: false, missing: ['POLLO_API_KEY', 'REVENUE_LAB_PRODUCT_ASSET_BUCKET'], provider: 'pollo', requestedModel: 'wan-v2-2-flash' }, products: { configured: false, missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], latestJob: null, latestRun: null, latestTrackingRun: null }
 
 export function scoreLabel(value) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—'
@@ -81,7 +81,7 @@ export function nextCollectionLabel(value = new Date()) {
 }
 
 function jobStatusLabel(status) {
-  return ({ queued: '待機中', running: '実行中', succeeded: '成功', failed: '失敗', skipped: '対象外' })[status] || status || '—'
+  return ({ queued: '待機中', running: '実行中', polling: '生成中', submission_uncertain: '送信結果不明', succeeded: '成功', failed: '失敗', skipped: '対象外' })[status] || status || '—'
 }
 
 function QueryEditor({ query, busy, onSave }) {
@@ -376,7 +376,62 @@ function SceneVideoGeneration({ planId, scene, attempts = [], config, busy, onGe
   </section>
 }
 
-function CreativeProductionPanel({ iteration, config, videoGenerationConfig, busy, onGenerate, onGenerateVideo }) {
+function SceneImageVideoGeneration({ planId, scene, asset, attempts = [], config, busy, onCreateRevision, onGenerate }) {
+  const [submitting, setSubmitting] = useState(false)
+  const [permissionConfirmed, setPermissionConfirmed] = useState(false)
+  const keyRef = useRef(newCampaignIdempotencyKey())
+  const revisions = (asset?.revisions || []).filter(item => item.availabilityStatus === 'available')
+  const revision = revisions.find(item => item.i2vAllowed && item.permissionSnapshot === 'owned'
+    && item.pixelWidth * 16 === item.pixelHeight * 9)
+  const latest = attempts.filter(item => item.sceneNumber === scene.scene_number && item.generationMode === 'image_to_video')
+    .sort((a, b) => b.attemptNumber - a.attemptNumber)[0]
+  const active = ['queued', 'submitting', 'polling', 'submission_uncertain'].includes(latest?.status) || latest?.submissionUncertain
+  const previewUrl = safeGeneratedVideoUrl(latest?.outputUrl)
+  const createRevision = async () => {
+    if (!asset || !permissionConfirmed || busy || submitting) return
+    setSubmitting(true)
+    try { await onCreateRevision(asset.id, true, true) } finally { setSubmitting(false) }
+  }
+  const generate = async regenerate => {
+    if (!revision || active || busy || submitting || !config?.configured) return
+    setSubmitting(true)
+    try {
+      await onGenerate(planId, scene.scene_number, revision.id, keyRef.current, regenerate)
+      keyRef.current = newCampaignIdempotencyKey()
+    } finally { setSubmitting(false) }
+  }
+  const cost = latest?.costProvenance === 'actual' && latest.providerCost != null
+    ? `${latest.costCurrency || 'USD'} ${Number(latest.providerCost).toFixed(4)}（実績）`
+    : latest?.costProvenance === 'estimated' && latest.providerCost != null
+      ? `${latest.costCurrency || ''} ${Number(latest.providerCost).toFixed(4)}（推定）` : '取得不可'
+  return <section className="revenue-video-generation revenue-image-video-generation">
+    <div><strong>商品画像I2V</strong><span>{config?.requestedModel || 'wan-v2-2-flash'} · 5秒 · 720p · 9:16 · 音声なし</span></div>
+    {!revision && <div className="revenue-i2v-revision-setup">
+      <p>生成前に、元画像と9:16余白画像をimmutable revisionとして保存します。</p>
+      <label><input type="checkbox" checked={permissionConfirmed} onChange={event => setPermissionConfirmed(event.target.checked)} /> このowned素材をI2Vへ使用する権限を確認しました</label>
+      <button type="button" disabled={busy || submitting || !permissionConfirmed || asset?.usagePermission !== 'owned' || !config?.configured} onClick={createRevision}>{submitting ? 'Revision作成中…' : 'I2V用Asset Revisionを作成'}</button>
+    </div>}
+    {revision && <dl>
+      <div><dt>Asset revision</dt><dd>#{revision.revisionNumber} · {revision.derivationType}{revision.parentRevisionId ? ` · parent ${revision.parentRevisionId.slice(0, 8)}…` : ''}</dd></div>
+      <div><dt>SHA-256</dt><dd><code>{revision.contentSha256.slice(0, 12)}…</code></dd></div>
+      <div><dt>Dimensions</dt><dd>{revision.pixelWidth} × {revision.pixelHeight}</dd></div>
+      <div><dt>Permission</dt><dd>{revision.permissionSnapshot} / I2V {revision.i2vAllowed ? '許可' : '未許可'}</dd></div>
+      <div><dt>Prompt Builder</dt><dd>{latest?.promptBuilderVersion || config?.promptBuilderVersion}</dd></div>
+      <div><dt>Attempt</dt><dd>{latest ? `#${latest.attemptNumber}` : '未送信'}</dd></div>
+      <div><dt>Provider task</dt><dd>{latest?.providerTaskStatus || '未送信'}</dd></div>
+      <div><dt>Normalized status</dt><dd>{jobStatusLabel(latest?.status)}</dd></div>
+      <div><dt>Cost</dt><dd>{cost}</dd></div>
+    </dl>}
+    {latest?.submissionUncertain && <p className="revenue-warning"><strong>送信結果不明:</strong> 二重課金防止のため新規submitを停止しています。人間による確認が必要です。</p>}
+    {latest?.safeErrorCode && <p className="revenue-warning">Safe error: {latest.safeErrorCode}</p>}
+    {previewUrl && <video controls preload="metadata" src={previewUrl}>生成動画を再生できません。</video>}
+    {revision && <button type="button" className="corp-primary" disabled={busy || submitting || active || !config?.configured} onClick={() => generate(Boolean(latest))}>
+      {submitting ? '送信中…' : active ? latest?.submissionUncertain ? '送信結果を確認してください' : '生成中…' : latest ? '再生成' : 'Wan 2.2 Flashで商品画像を動画化'}
+    </button>}
+  </section>
+}
+
+function CreativeProductionPanel({ iteration, config, videoGenerationConfig, imageToVideoConfig, busy, onGenerate, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo }) {
   const [submitting, setSubmitting] = useState(false)
   const keyRef = useRef(newCampaignIdempotencyKey())
   const submittingRef = useRef(false)
@@ -415,6 +470,7 @@ function CreativeProductionPanel({ iteration, config, videoGenerationConfig, bus
             {scene.visual_source_type === 'real_product_asset' && !asset && <p className="revenue-warning">使用素材ID: {scene.product_asset_id}</p>}
             {scene.ai_generation_prompt && <details><summary>AI生成prompt</summary><code>{scene.ai_generation_prompt}</code></details>}
             {isExistingPolloEligible(scene) && <SceneVideoGeneration planId={revision.planId} scene={scene} attempts={revision.videoGenerations} config={videoGenerationConfig} busy={busy} onGenerate={onGenerateVideo} />}
+            {scene.rendering_strategy === 'image_motion_scene' && asset && <SceneImageVideoGeneration planId={revision.planId} scene={scene} asset={asset} attempts={revision.videoGenerations} config={imageToVideoConfig} busy={busy} onCreateRevision={onCreateAssetRevision} onGenerate={onGenerateImageVideo} />}
             <small>Fact refs: {scene.product_fact_references?.join(', ') || 'なし'}</small>
           </article>
         })}</div>
@@ -424,7 +480,7 @@ function CreativeProductionPanel({ iteration, config, videoGenerationConfig, bus
   </section>
 }
 
-function CampaignBoard({ campaigns = [], creativeProductionConfig, videoGenerationConfig, busy, onGenerateProduction, onGenerateVideo, onRegisterPublication }) {
+function CampaignBoard({ campaigns = [], creativeProductionConfig, videoGenerationConfig, imageToVideoConfig, busy, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication }) {
   return <section className="revenue-campaign-board" aria-labelledby="campaign-board-heading">
     <div className="revenue-section-heading"><div><p className="revenue-kicker">CAMPAIGN LEARNING LINEAGE</p><h2 id="campaign-board-heading">Campaign実験台帳</h2><p>Opportunityから商品、訴求、Iteration、公開動画までを一続きで確認します。</p></div><span>{campaigns.length} Campaign</span></div>
     {!campaigns.length && <div className="revenue-state"><h3>Campaignはまだありません</h3><p>AI分析カードから人間が商品を確認し、最初のIterationを登録してください。</p></div>}
@@ -435,7 +491,7 @@ function CampaignBoard({ campaigns = [], creativeProductionConfig, videoGenerati
         <div className="revenue-product-heading"><strong>Iteration #{iteration.iterationNumber}</strong><span>{iterationStatusLabel(iteration.status)}</span></div>
         {iteration.product && <div className="revenue-selected-product"><div><b>{iteration.product.productName}</b><small>{iteration.product.merchant || '販売元未入力'} · {iteration.product.discoveryChannel} · 検索語「{iteration.product.searchKeyword}」</small></div><a href={iteration.product.affiliateUrl || iteration.product.productUrl} target="_blank" rel="noopener noreferrer">商品を確認</a></div>}
         <dl><div><dt>訴求仮説</dt><dd>{iteration.appealHypothesis}</dd></div><div><dt>Hook</dt><dd>{iteration.hookText}</dd></div><div><dt>台本・構成</dt><dd className="revenue-prewrap">{iteration.contentOutline?.text || '—'}</dd></div>{iteration.scriptText && <div><dt>台本本文</dt><dd className="revenue-prewrap">{iteration.scriptText}</dd></div>}</dl>
-        <CreativeProductionPanel iteration={iteration} config={creativeProductionConfig} videoGenerationConfig={videoGenerationConfig} busy={busy} onGenerate={onGenerateProduction} onGenerateVideo={onGenerateVideo} />
+        <CreativeProductionPanel iteration={iteration} config={creativeProductionConfig} videoGenerationConfig={videoGenerationConfig} imageToVideoConfig={imageToVideoConfig} busy={busy} onGenerate={onGenerateProduction} onGenerateVideo={onGenerateVideo} onCreateAssetRevision={onCreateAssetRevision} onGenerateImageVideo={onGenerateImageVideo} />
         {iteration.publication && <div className="revenue-publication"><span>YouTube Video ID: {iteration.publication.youtubeVideoId}</span><a href={iteration.publication.canonicalUrl || `https://www.youtube.com/watch?v=${encodeURIComponent(iteration.publication.youtubeVideoId)}`} target="_blank" rel="noopener noreferrer">公開動画を開く</a></div>}
         {!iteration.publication && <PublicationRegistrationForm iterationId={iteration.id} busy={busy} onRegister={onRegisterPublication} />}
         <details><summary>監査情報</summary><p>Iteration: {iteration.id}<br />Treatment fingerprint: {iteration.treatmentFingerprint || '—'}<br />AI Analysis: {iteration.sourceAnalysisId || campaign.primaryAnalysisId || '—'}</p></details>
@@ -444,7 +500,7 @@ function CampaignBoard({ campaigns = [], creativeProductionConfig, videoGenerati
   </section>
 }
 
-export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onGenerateProduction, onGenerateVideo, onRegisterPublication, onSave }) {
+export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication, onSave }) {
   if (!state) return <main className="revenue-shell" aria-busy="true"><div className="revenue-state"><h2>Revenue Lab</h2><p>収益機会を読み込んでいます…</p></div></main>
   const eligible = state.queries.filter(query => query.enabled && !queryNeedsScores(query))
   const enabledQueries = state.queries.filter(query => query.enabled)
@@ -481,7 +537,7 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, o
     </section>
     <OpportunitySection title="本日の発掘TOP3" description="本日のsearch.listで発掘した候補です。過去動画が再登場する場合もあります。" items={state.opportunities || []} configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
     <OpportunitySection title="継続観測・急伸TOP3" description="発見後7日間、6時間以上の間隔で実測した成長候補です。" items={state.trackingOpportunities || []} tracking configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
-    <CampaignBoard campaigns={state.campaigns || []} creativeProductionConfig={state.config.creativeProduction} videoGenerationConfig={state.config.videoGeneration} busy={busy} onGenerateProduction={onGenerateProduction} onGenerateVideo={onGenerateVideo} onRegisterPublication={onRegisterPublication} />
+    <CampaignBoard campaigns={state.campaigns || []} creativeProductionConfig={state.config.creativeProduction} videoGenerationConfig={state.config.videoGeneration} imageToVideoConfig={state.config.imageToVideo} busy={busy} onGenerateProduction={onGenerateProduction} onGenerateVideo={onGenerateVideo} onCreateAssetRevision={onCreateAssetRevision} onGenerateImageVideo={onGenerateImageVideo} onRegisterPublication={onRegisterPublication} />
     <details className="revenue-score-guide"><summary>スコアについて</summary><dl>
       <div><dt>Breakout Score</dt><dd>再生速度、チャンネル規模比、反応率、鮮度から「通常より勢いがあるか」を示します。</dd></div>
       <div><dt>Opportunity Score</dt><dd>Breakout Scoreを70%、Buyer IntentとCommerce Fitを各15%で補正した企画候補順位です。</dd></div>
@@ -517,5 +573,5 @@ export default function RevenueLabDashboard() {
   const review = (analysis, decision) => perform(() => createRevenueAnalysisReview(
     analysis.id, decision, decision === analysis.output?.recommendation ? 'agree' : 'disagree',
   )).catch(() => {})
-  return <RevenueLabView state={state} error={error} busy={busy} onReload={reload} onRun={queries => { perform(() => enqueueEnabledRevenueQueries(queries)).catch(() => {}) }} onTrack={() => { perform(enqueueRevenueTracking).catch(() => {}) }} onAnalyze={() => { perform(() => enqueueRevenueAnalysis(1)).catch(() => {}) }} onReview={review} onProductSearch={analysisId => { perform(() => enqueueProductSearch(analysisId)).catch(() => {}) }} onProductDecision={(candidateId, analysisId, decision) => { perform(() => createProductCandidateDecision(candidateId, analysisId, decision)).catch(() => {}) }} onCreateCampaign={(analysisId, input) => perform(() => createManualCampaignRequest(analysisId, input))} onGenerateProduction={(iterationId, idempotencyKey) => perform(() => enqueueCreativeProductionPlan(iterationId, idempotencyKey))} onGenerateVideo={(planId, sceneNumber, idempotencyKey, regenerate) => perform(() => enqueueVideoGeneration(planId, sceneNumber, idempotencyKey, regenerate))} onRegisterPublication={(iterationId, input) => { perform(() => registerCampaignPublication(iterationId, input)).catch(() => {}) }} onSave={(id, values) => { perform(() => updateRevenueQuery(id, values)).catch(() => {}) }} />
+  return <RevenueLabView state={state} error={error} busy={busy} onReload={reload} onRun={queries => { perform(() => enqueueEnabledRevenueQueries(queries)).catch(() => {}) }} onTrack={() => { perform(enqueueRevenueTracking).catch(() => {}) }} onAnalyze={() => { perform(() => enqueueRevenueAnalysis(1)).catch(() => {}) }} onReview={review} onProductSearch={analysisId => { perform(() => enqueueProductSearch(analysisId)).catch(() => {}) }} onProductDecision={(candidateId, analysisId, decision) => { perform(() => createProductCandidateDecision(candidateId, analysisId, decision)).catch(() => {}) }} onCreateCampaign={(analysisId, input) => perform(() => createManualCampaignRequest(analysisId, input))} onGenerateProduction={(iterationId, idempotencyKey) => perform(() => enqueueCreativeProductionPlan(iterationId, idempotencyKey))} onGenerateVideo={(planId, sceneNumber, idempotencyKey, regenerate) => perform(() => enqueueVideoGeneration(planId, sceneNumber, idempotencyKey, regenerate))} onCreateAssetRevision={(assetId, i2vAllowed, createNineSixteen) => perform(() => createProductAssetRevision(assetId, i2vAllowed, createNineSixteen))} onGenerateImageVideo={(planId, sceneNumber, revisionId, idempotencyKey, regenerate) => perform(() => enqueueImageVideoGeneration(planId, sceneNumber, revisionId, idempotencyKey, regenerate))} onRegisterPublication={(iterationId, input) => { perform(() => registerCampaignPublication(iterationId, input)).catch(() => {}) }} onSave={(id, values) => { perform(() => updateRevenueQuery(id, values)).catch(() => {}) }} />
 }

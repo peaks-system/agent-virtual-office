@@ -7,6 +7,9 @@ const { API_VERSION: RAKUTEN_API_VERSION, PROVIDER_ID: RAKUTEN_PROVIDER_ID } = r
 const { DEFAULT_MODEL: CREATIVE_DEFAULT_MODEL, EXPORT_VERSION: CREATIVE_EXPORT_VERSION,
   PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./creative-production-schema-v2.cjs')
 const { DEFAULT_MODEL: POLLO_DEFAULT_MODEL, DEFAULT_RESOLUTION: POLLO_DEFAULT_RESOLUTION, PROVIDER_ID: POLLO_PROVIDER_ID, PROVIDER_VERSION: POLLO_PROVIDER_VERSION, normalizedDuration, validatedModel } = require('./providers/pollo-video-generation-provider.cjs')
+const { ADAPTER_VERSION: WAN_ADAPTER_VERSION, MODEL: WAN_MODEL,
+  PROVIDER_ID: WAN_PROVIDER_ID, PROVIDER_VERSION: WAN_PROVIDER_VERSION } = require('./providers/pollo-wan-video-generation-provider.cjs')
+const { buildProductIdentityPrompt } = require('./product-i2v-prompt-builder.cjs')
 
 const PROFILE = 'revenue_lab'
 
@@ -360,6 +363,10 @@ function createSupabaseStore({
       productIds.length ? request(`product_assets?curated_product_id=in.(${encodeURIComponent(productIds.join(','))})&select=*&order=ordinal.asc`) : [],
       iterationIds.length ? request(`creative_production_requests?campaign_iteration_id=in.(${encodeURIComponent(iterationIds.join(','))})&select=*&order=revision_number.desc`) : [],
     ])
+    const productAssetIds = productAssets.map(row => row.id)
+    const productAssetRevisions = productAssetIds.length ? await request(
+      `product_asset_revisions?product_asset_id=in.(${encodeURIComponent(productAssetIds.join(','))})&select=*&order=revision_number.desc`,
+    ) : []
     const requestIds = productionRequests.map(row => row.id)
     const plans = requestIds.length ? await request(`creative_production_plans?production_request_id=in.(${encodeURIComponent(requestIds.join(','))})&select=*`) : []
     const planIds = plans.map(row => row.id)
@@ -370,8 +377,28 @@ function createSupabaseStore({
       records.push({ id: row.id, runId: row.run_id, planId: row.creative_production_plan_id, sceneNumber: row.creative_scene_number,
         attemptNumber: row.attempt_number, provider: row.provider, providerVersion: row.provider_version, model: row.requested_model,
         providerTaskStatus: row.provider_task_status, durationSeconds: row.duration_seconds, aspectRatio: row.aspect_ratio,
+        providerAdapterVersion: row.provider_adapter_version,
+        generationMode: row.generation_mode || 'text_to_video', inputAssetId: row.input_asset_id,
+        inputAssetRevisionId: row.input_asset_revision_id,
+        inputAssetSnapshot: row.input_asset_snapshot ? {
+          product_asset_id: row.input_asset_snapshot.product_asset_id,
+          asset_revision_id: row.input_asset_snapshot.asset_revision_id,
+          revision_number: row.input_asset_snapshot.revision_number,
+          content_sha256: row.input_asset_snapshot.content_sha256,
+          content_type: row.input_asset_snapshot.content_type,
+          byte_size: row.input_asset_snapshot.byte_size,
+          pixel_width: row.input_asset_snapshot.pixel_width,
+          pixel_height: row.input_asset_snapshot.pixel_height,
+          permission_snapshot: row.input_asset_snapshot.permission_snapshot,
+          i2v_allowed_snapshot: row.input_asset_snapshot.i2v_allowed_snapshot,
+          parent_revision_id: row.input_asset_snapshot.parent_revision_id,
+          derivation_type: row.input_asset_snapshot.derivation_type,
+          transformation_fingerprint: row.input_asset_snapshot.transformation_fingerprint,
+        } : null,
         resolution: row.resolution, status: row.status, providerCost: row.provider_cost_amount == null ? null : Number(row.provider_cost_amount),
         costCurrency: row.provider_cost_currency, costProvenance: row.cost_provenance, outputUrl: row.output_url,
+        promptBuilderVersion: row.prompt_builder_version, generationInputFingerprint: row.generation_input_fingerprint,
+        submissionUncertain: row.submission_uncertain === true,
         safeErrorCode: row.safe_error_code, createdAt: row.created_at, submittedAt: row.submitted_at, completedAt: row.completed_at })
       generationsByPlan.set(row.creative_production_plan_id, records)
     }
@@ -386,12 +413,27 @@ function createSupabaseStore({
         videoGenerations: plan ? generationsByPlan.get(plan.id) || [] : [] })
       productionByIteration.set(row.campaign_iteration_id, records)
     }
+    const revisionsByAsset = new Map()
+    for (const row of productAssetRevisions) {
+      const records = revisionsByAsset.get(row.product_asset_id) || []
+      records.push({
+        id: row.id, revisionNumber: row.revision_number, contentSha256: row.content_sha256,
+        contentType: row.content_type, byteSize: Number(row.byte_size), pixelWidth: row.pixel_width,
+        pixelHeight: row.pixel_height, permissionSnapshot: row.permission_snapshot,
+        i2vAllowed: row.i2v_allowed_snapshot === true, parentRevisionId: row.parent_revision_id,
+        derivationType: row.derivation_type, derivationSpec: row.derivation_spec,
+        transformationFingerprint: row.transformation_fingerprint,
+        availabilityStatus: row.availability_status, capturedAt: row.captured_at,
+      })
+      revisionsByAsset.set(row.product_asset_id, records)
+    }
     const assetsByProduct = new Map()
     for (const row of productAssets) {
       const records = assetsByProduct.get(row.curated_product_id) || []
       records.push({ id: row.id, ordinal: row.ordinal, assetRole: row.asset_role, assetKind: row.asset_kind,
         assetUrl: row.asset_url, assetSource: row.asset_source, usagePermission: row.usage_permission, label: row.label,
-        humanVerifiedAt: row.human_verified_at, creativeEligible: ['owned', 'licensed', 'authorized_reference'].includes(row.usage_permission) })
+        humanVerifiedAt: row.human_verified_at, creativeEligible: ['owned', 'licensed', 'authorized_reference'].includes(row.usage_permission),
+        revisions: revisionsByAsset.get(row.id) || [] })
       assetsByProduct.set(row.curated_product_id, records)
     }
     const productById = new Map(products.map(row => [row.id, row]))
@@ -907,6 +949,78 @@ function createSupabaseStore({
     })
   }
 
+  async function getProductAsset(id) {
+    const rows = await request(`product_assets?id=eq.${encodeURIComponent(id)}&select=*&limit=1`)
+    const row = rows?.[0]
+    return row ? {
+      id: row.id, curatedProductId: row.curated_product_id, assetUrl: row.asset_url,
+      usagePermission: row.usage_permission, assetKind: row.asset_kind, label: row.label,
+    } : null
+  }
+
+  async function registerProductAssetRevision(assetId, revision) {
+    const row = await rpc('register_product_asset_revision', {
+      p_product_asset_id: assetId, p_source_url_snapshot: revision.sourceUrl,
+      p_storage_provider: revision.storageProvider, p_storage_bucket: revision.storageBucket,
+      p_immutable_object_key: revision.immutableObjectKey, p_content_sha256: revision.contentSha256,
+      p_content_type: revision.contentType, p_byte_size: revision.byteSize,
+      p_pixel_width: revision.pixelWidth, p_pixel_height: revision.pixelHeight,
+      p_i2v_allowed: revision.i2vAllowed === true, p_parent_revision_id: revision.parentRevisionId,
+      p_derivation_type: revision.derivationType, p_derivation_spec: revision.derivationSpec,
+      p_transformation_fingerprint: revision.derivationFingerprint,
+    })
+    return {
+      id: row.id, productAssetId: row.product_asset_id, revisionNumber: row.revision_number,
+    }
+  }
+
+  async function enqueueImageVideoGeneration(planId, sceneNumber, assetRevisionId, {
+    idempotencyKey, regenerate = false, model = WAN_MODEL, provider = WAN_PROVIDER_ID,
+    providerVersion = WAN_PROVIDER_VERSION, providerAdapterVersion = WAN_ADAPTER_VERSION,
+  } = {}) {
+    if (model !== WAN_MODEL || provider !== WAN_PROVIDER_ID || providerVersion !== WAN_PROVIDER_VERSION) {
+      throw new RevenueStoreError('VIDEO_GENERATION_PROVIDER_MISMATCH', 'Unsupported I2V provider configuration', 409)
+    }
+    const [plans, revisions] = await Promise.all([
+      request(`creative_production_plans?id=eq.${encodeURIComponent(planId)}&select=*&limit=1`),
+      request(`product_asset_revisions?id=eq.${encodeURIComponent(assetRevisionId)}&select=*&limit=1`),
+    ])
+    const plan = plans?.[0]; const revision = revisions?.[0]
+    if (!plan) throw new RevenueStoreError('VIDEO_GENERATION_PLAN_NOT_FOUND', 'Creative Production plan was not found', 404)
+    if (!revision) throw new RevenueStoreError('PRODUCT_ASSET_REVISION_NOT_FOUND', 'Product Asset revision was not found', 404)
+    const scene = (plan.output_json?.scenes || []).find(item => Number(item.scene_number) === Number(sceneNumber))
+    if (!scene || scene.rendering_strategy !== 'image_motion_scene' || scene.visual_source_type !== 'real_product_asset') {
+      throw new RevenueStoreError('VIDEO_GENERATION_SCENE_INELIGIBLE', 'Only image-motion scenes can use I2V', 409)
+    }
+    if (scene.product_asset_id !== revision.product_asset_id || revision.permission_snapshot !== 'owned'
+      || revision.i2v_allowed_snapshot !== true || revision.pixel_width * 16 !== revision.pixel_height * 9) {
+      throw new RevenueStoreError('ASSET_I2V_PERMISSION_DENIED', 'A verified owned 9:16 revision with explicit I2V permission is required', 409)
+    }
+    const prompts = buildProductIdentityPrompt()
+    const promptFingerprint = inputFingerprint({ positive_prompt: prompts.positivePrompt, negative_prompt: prompts.negativePrompt })
+    const generationInput = {
+      plan_revision: plan.revision_number, plan_id: planId, scene_number: Number(sceneNumber),
+      provider, provider_version: providerVersion, adapter_version: providerAdapterVersion, model,
+      asset_revision_id: revision.id, asset_sha256: revision.content_sha256,
+      derivation_fingerprint: revision.transformation_fingerprint,
+      prompt_builder_version: prompts.version, positive_prompt: prompts.positivePrompt,
+      negative_prompt: prompts.negativePrompt, duration_seconds: 5, resolution: '720p',
+      aspect_ratio: '9:16', audio_enabled: false,
+    }
+    const generationInputFingerprint = inputFingerprint(generationInput)
+    const requestFingerprint = inputFingerprint({ ...generationInput, generation_input_fingerprint: generationInputFingerprint })
+    return rpc('enqueue_image_video_generation_scene', {
+      p_creative_production_plan_id: planId, p_scene_number: Number(sceneNumber), p_provider: provider,
+      p_provider_version: providerVersion, p_provider_adapter_version: providerAdapterVersion,
+      p_requested_model: model, p_asset_revision_id: assetRevisionId,
+      p_positive_prompt: prompts.positivePrompt, p_negative_prompt: prompts.negativePrompt,
+      p_prompt_builder_version: prompts.version, p_prompt_fingerprint: promptFingerprint,
+      p_generation_input_fingerprint: generationInputFingerprint, p_request_fingerprint: requestFingerprint,
+      p_duration_seconds: 5, p_resolution: '720p', p_idempotency_key: idempotencyKey,
+      p_regenerate: regenerate === true,
+    })
+  }
+
   async function getVideoGenerationScene(id) {
     const rows = await request(`video_generation_scenes?id=eq.${encodeURIComponent(id)}&select=*&limit=1`)
     const row = rows?.[0]
@@ -916,6 +1030,10 @@ function createSupabaseStore({
       provider: row.provider, providerVersion: row.provider_version, requestedModel: row.requested_model,
       providerTaskId: row.provider_task_id, providerTaskStatus: row.provider_task_status,
       promptSnapshot: row.prompt_snapshot,
+      negativePromptSnapshot: row.negative_prompt_snapshot, promptBuilderVersion: row.prompt_builder_version,
+      generationMode: row.generation_mode || 'text_to_video', inputAssetId: row.input_asset_id,
+      inputAssetRevisionId: row.input_asset_revision_id, inputAssetSnapshot: row.input_asset_snapshot,
+      providerAdapterVersion: row.provider_adapter_version, submissionUncertain: row.submission_uncertain === true,
       durationSeconds: row.duration_seconds, aspectRatio: row.aspect_ratio, resolution: row.resolution,
       status: row.status,
     } : null
@@ -990,6 +1108,20 @@ function createSupabaseStore({
     await request(`video_generation_runs?id=eq.${encodeURIComponent(scene.runId)}`, {
       method: 'PATCH', body: { status: 'failed', safe_error_code: code, completed_at: now }, prefer: 'return=minimal',
     })
+  }
+
+  async function persistVideoGenerationSubmissionUncertain(scene, error) {
+    const now = new Date().toISOString()
+    const code = String(error?.code || 'VIDEO_GENERATION_SUBMISSION_UNCERTAIN').slice(0, 80)
+    await Promise.all([
+      request(`video_generation_scenes?id=eq.${encodeURIComponent(scene.id)}`, {
+        method: 'PATCH', body: { status: 'submission_uncertain', submission_uncertain: true,
+          safe_error_code: code, completed_at: null, updated_at: now }, prefer: 'return=minimal',
+      }),
+      request(`video_generation_runs?id=eq.${encodeURIComponent(scene.runId)}`, {
+        method: 'PATCH', body: { status: 'submission_uncertain', safe_error_code: code, completed_at: null }, prefer: 'return=minimal',
+      }),
+    ])
   }
 
   async function registerCampaignPublication(iterationId, input) {
@@ -1339,9 +1471,10 @@ function createSupabaseStore({
     enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
     persistProductSearchFailure, createProductDecision, createManualCampaign, registerCampaignPublication,
     enqueueCreativeProduction, getCreativeProductionRequest, markCreativeProductionRunning, persistCreativeProductionSuccess,
-    persistCreativeProductionFailure, enqueueVideoGeneration, getVideoGenerationScene, markVideoGenerationSubmitting, markVideoGenerationPollingResume,
+    persistCreativeProductionFailure, enqueueVideoGeneration, enqueueImageVideoGeneration, getVideoGenerationScene, markVideoGenerationSubmitting, markVideoGenerationPollingResume,
     persistVideoGenerationTask, persistVideoGenerationPolling, persistVideoGenerationPollingInterrupted,
-    persistVideoGenerationSuccess, persistVideoGenerationFailure,
+    persistVideoGenerationSuccess, persistVideoGenerationFailure, persistVideoGenerationSubmissionUncertain,
+    getProductAsset, registerProductAssetRevision,
     listQueries, listTrackingCandidates, recoverTimedOutVideoGenerations, markTrackingMissing, markTrackingSeen, failTrackingRuns,
     persistCollection, persistTrackingRun, persistTrackingSnapshots, previousVideoSnapshots,
     startRun, startTrackingRun, updateQuery,
