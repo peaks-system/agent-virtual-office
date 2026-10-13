@@ -3,12 +3,14 @@
 const { scoreYouTubePopulation, scoreYouTubeTrackingPopulation } = require('./scoring.cjs')
 const { rankProductCandidates } = require('./product-ranking.cjs')
 const { createImageToVideoRequest } = require('./image-to-video-request.cjs')
+const { createHash } = require('node:crypto')
 
 class RevenueJobError extends Error {
   constructor(code, message) { super(message); this.name = 'RevenueJobError'; this.code = code }
 }
 
-function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGenerationProvider,
+function createJobHandlers({ store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
+  finalCompositionProvider, compositionBlobStore, videoGenerationProvider,
   imageToVideoProvider, productAssetBlobStore, productProvider, clock = () => new Date(),
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), videoPollAttempts = 30, videoPollIntervalMs = 5000 } = {}) {
   if (!store || !youtube) throw new TypeError('store and youtube are required')
@@ -345,11 +347,70 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, videoGen
     }
   }
 
+  async function createThreePicksPlan(job) {
+    const requestId = job?.payload?.creative_archetype_request_id
+    if (!requestId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'creative_archetype_request_id is required')
+    if (!multiProductShortsPlanner) throw new RevenueJobError('OPENAI_NOT_CONFIGURED', 'Three Picks planning is not configured')
+    const request = await store.getThreePicksRequest(requestId)
+    if (!request) throw new RevenueJobError('THREE_PICKS_REQUEST_NOT_FOUND', 'Three Picks request was not found')
+    await store.markThreePicksRunning(requestId)
+    try {
+      const result = await multiProductShortsPlanner.plan(request.inputSnapshot)
+      const saved = await store.persistThreePicksSuccess(request, result)
+      return { creativeArchetypeRequestId: requestId, planId: saved.planId, revisionNumber: request.revisionNumber }
+    } catch (error) {
+      try { await store.persistThreePicksFailure(requestId, error) }
+      catch { console.error('[revenue-lab] Three Picks failure state could not be persisted', { requestId }) }
+      throw new RevenueJobError(error?.code || 'THREE_PICKS_PLAN_FAILED', 'Three Picks planning failed')
+    }
+  }
+
+  async function composeFinalShort(job) {
+    const requestId = job?.payload?.final_composition_request_id
+    if (!requestId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'final_composition_request_id is required')
+    if (!finalCompositionProvider || !compositionBlobStore || !productAssetBlobStore) {
+      throw new RevenueJobError('COMPOSITION_NOT_CONFIGURED', 'Local composition is not configured')
+    }
+    const composition = await store.getFinalCompositionRequest(requestId)
+    if (!composition) throw new RevenueJobError('COMPOSITION_REQUEST_NOT_FOUND', 'Final composition request was not found')
+    if (composition.provider !== finalCompositionProvider.id || composition.providerVersion !== finalCompositionProvider.version) {
+      throw new RevenueJobError('COMPOSITION_PROVIDER_MISMATCH', 'Final composition provider does not match the request')
+    }
+    await store.markFinalCompositionRendering(requestId)
+    try {
+      const assets = new Map()
+      for (const asset of composition.assets) {
+        const bytes = await productAssetBlobStore.readImmutable(asset.immutableObjectKey)
+        const digest = createHash('sha256').update(bytes).digest('hex')
+        if (digest !== asset.contentSha256) throw new RevenueJobError('COMPOSITION_ASSET_HASH_MISMATCH', 'Product Asset bytes failed integrity verification')
+        assets.set(asset.id, bytes)
+      }
+      const rendered = await finalCompositionProvider.render({ manifest: composition.renderManifest, assets })
+      const contentSha256 = createHash('sha256').update(rendered.bytes).digest('hex')
+      const immutableObjectKey = `shorts-outputs/${composition.campaignId}/${contentSha256}.mp4`
+      await compositionBlobStore.putImmutable(immutableObjectKey, rendered.bytes)
+      await store.persistFinalCompositionSuccess(composition, {
+        storageProvider: compositionBlobStore.provider, storageBucket: compositionBlobStore.bucket,
+        immutableObjectKey, contentSha256, byteSize: rendered.bytes.length,
+        durationSeconds: rendered.durationSeconds, pixelWidth: rendered.pixelWidth,
+        pixelHeight: rendered.pixelHeight, fps: rendered.fps,
+      })
+      return { finalCompositionRequestId: requestId, status: 'succeeded' }
+    } catch (rawError) {
+      const error = finalCompositionProvider.normalizeError(rawError)
+      try { await store.persistFinalCompositionFailure(requestId, error) }
+      catch { console.error('[revenue-lab] Composition failure state could not be persisted', { requestId }) }
+      throw new RevenueJobError(error.code || 'COMPOSITION_FAILED', 'Final composition failed')
+    }
+  }
+
   return new Map([
     ['youtube.collect', collectYouTube],
     ['youtube.track', trackYouTube],
     ['opportunity.analyze', analyzeOpportunity],
     ['creative.production.plan', createProductionPlan],
+    ['creative.archetype.plan', createThreePicksPlan],
+    ['creative.compose.final', composeFinalShort],
     ['video.generate.scene', generateVideoScene],
     ['product.search', searchProducts],
   ])

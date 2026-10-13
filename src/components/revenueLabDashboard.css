@@ -143,3 +143,69 @@
   display: inline;
   font-size: 0.8rem;
 }
+
+.revenue-three-picks-intake,
+.revenue-three-picks-panel {
+  border: 1px solid rgba(30, 112, 82, .25);
+  border-radius: 16px;
+  padding: 18px;
+  background: rgba(247, 252, 249, .92);
+}
+
+.revenue-three-picks-selects,
+.revenue-three-picks-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.revenue-three-picks-selects label,
+.revenue-three-picks-cards article {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.revenue-three-picks-cards article {
+  padding: 14px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(26, 65, 50, .08);
+}
+
+.revenue-three-picks-cards article > span {
+  color: #1e7052;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.revenue-three-picks-lineage,
+.revenue-composition-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.revenue-three-picks-lineage span,
+.revenue-composition-status {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(30, 112, 82, .08);
+}
+
+.revenue-three-picks-panel video {
+  display: block;
+  width: min(280px, 100%);
+  max-height: 500px;
+  margin-top: 12px;
+  border-radius: 12px;
+  background: #111;
+}
+
+@media (max-width: 820px) {
+  .revenue-three-picks-selects,
+  .revenue-three-picks-cards { grid-template-columns: 1fr; }
+}

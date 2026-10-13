@@ -10,6 +10,9 @@ const { DEFAULT_MODEL: POLLO_DEFAULT_MODEL, DEFAULT_RESOLUTION: POLLO_DEFAULT_RE
 const { ADAPTER_VERSION: WAN_ADAPTER_VERSION, MODEL: WAN_MODEL,
   PROVIDER_ID: WAN_PROVIDER_ID, PROVIDER_VERSION: WAN_PROVIDER_VERSION } = require('./providers/pollo-wan-video-generation-provider.cjs')
 const { buildProductIdentityPrompt } = require('./product-i2v-prompt-builder.cjs')
+const { DEFAULT_MODEL: THREE_PICKS_DEFAULT_MODEL, PROMPT_VERSION: THREE_PICKS_PROMPT_VERSION,
+  SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION } = require('./multi-product-shorts-schema.cjs')
+const { COMPOSITION_VERSION, buildProductCards, buildRenderManifest } = require('./multi-product-shorts-composition.cjs')
 
 const PROFILE = 'revenue_lab'
 
@@ -355,13 +358,23 @@ function createSupabaseStore({
       request(`campaign_origins?campaign_id=in.(${encodeURIComponent(campaignIds.join(','))})&select=*&order=created_at.asc`),
       request(`campaign_iterations?campaign_id=in.(${encodeURIComponent(campaignIds.join(','))})&select=*&order=iteration_number.asc`),
     ])
-    const productIds = [...new Set(iterations.map(row => row.curated_product_id).filter(Boolean))]
+    const productSetIds = [...new Set(iterations.map(row => row.product_set_id).filter(Boolean))]
+    const [productSets, productSetItems] = await Promise.all([
+      productSetIds.length ? request(`campaign_product_sets?id=in.(${encodeURIComponent(productSetIds.join(','))})&select=*`) : [],
+      productSetIds.length ? request(`campaign_product_set_items?product_set_id=in.(${encodeURIComponent(productSetIds.join(','))})&select=*&order=presentation_order.asc`) : [],
+    ])
+    const productSetItemIds = productSetItems.map(row => row.id)
+    const productIds = [...new Set([...iterations.map(row => row.curated_product_id), ...productSetItems.map(row => row.curated_product_id)].filter(Boolean))]
     const iterationIds = iterations.map(row => row.id)
-    const [products, publications, productAssets, productionRequests] = await Promise.all([
+    const multiIterationIds = iterations.filter(row => row.product_set_id).map(row => row.id)
+    const [products, publications, productAssets, productionRequests, productDestinations, archetypeRequests, compositionRequests] = await Promise.all([
       productIds.length ? request(`curated_products?id=in.(${encodeURIComponent(productIds.join(','))})&select=*`) : [],
       iterationIds.length ? request(`campaign_publications?campaign_iteration_id=in.(${encodeURIComponent(iterationIds.join(','))})&select=*&order=created_at.asc`) : [],
       productIds.length ? request(`product_assets?curated_product_id=in.(${encodeURIComponent(productIds.join(','))})&select=*&order=ordinal.asc`) : [],
       iterationIds.length ? request(`creative_production_requests?campaign_iteration_id=in.(${encodeURIComponent(iterationIds.join(','))})&select=*&order=revision_number.desc`) : [],
+      productSetItemIds.length ? request(`campaign_product_destinations?product_set_item_id=in.(${encodeURIComponent(productSetItemIds.join(','))})&select=*`) : [],
+      multiIterationIds.length ? request(`creative_archetype_requests?campaign_iteration_id=in.(${encodeURIComponent(multiIterationIds.join(','))})&select=*&order=revision_number.desc`) : [],
+      multiIterationIds.length ? request(`final_composition_requests?campaign_iteration_id=in.(${encodeURIComponent(multiIterationIds.join(','))})&select=*&order=created_at.desc`) : [],
     ])
     const productAssetIds = productAssets.map(row => row.id)
     const productAssetRevisions = productAssetIds.length ? await request(
@@ -413,6 +426,57 @@ function createSupabaseStore({
         videoGenerations: plan ? generationsByPlan.get(plan.id) || [] : [] })
       productionByIteration.set(row.campaign_iteration_id, records)
     }
+    const archetypeRequestIds = archetypeRequests.map(row => row.id)
+    const archetypePlans = archetypeRequestIds.length ? await request(
+      `creative_archetype_plans?request_id=in.(${encodeURIComponent(archetypeRequestIds.join(','))})&select=*`,
+    ) : []
+    const archetypePlanIds = archetypePlans.map(row => row.id)
+    const productCards = archetypePlanIds.length ? await request(
+      `creative_product_cards?creative_archetype_plan_id=in.(${encodeURIComponent(archetypePlanIds.join(','))})&select=*&order=pick_number.asc`,
+    ) : []
+    const compositionRequestIds = compositionRequests.map(row => row.id)
+    const compositionOutputs = compositionRequestIds.length ? await request(
+      `final_composition_outputs?composition_request_id=in.(${encodeURIComponent(compositionRequestIds.join(','))})&select=*`,
+    ) : []
+    const cardsByPlan = new Map()
+    for (const row of productCards) {
+      const records = cardsByPlan.get(row.creative_archetype_plan_id) || []
+      records.push({ id: row.id, productSetItemId: row.product_set_item_id,
+        productAssetRevisionId: row.product_asset_revision_id, pickNumber: row.pick_number,
+        rankPosition: row.rank_position, productName: row.product_name_snapshot,
+        shortAppeal: row.short_appeal, verifiedFactRef: row.verified_fact_ref,
+        verifiedFact: row.verified_fact_snapshot, price: row.price_snapshot,
+        cardTemplateVersion: row.card_template_version })
+      cardsByPlan.set(row.creative_archetype_plan_id, records)
+    }
+    const outputByCompositionRequest = new Map(compositionOutputs.map(row => [row.composition_request_id, {
+      id: row.id, contentSha256: row.content_sha256, byteSize: Number(row.byte_size),
+      durationSeconds: Number(row.duration_seconds), pixelWidth: row.pixel_width,
+      pixelHeight: row.pixel_height, fps: Number(row.fps), compositionFingerprint: row.composition_fingerprint,
+    }]))
+    const compositionsByPlan = new Map()
+    for (const row of compositionRequests) {
+      const records = compositionsByPlan.get(row.creative_archetype_plan_id) || []
+      records.push({ id: row.id, status: row.status, provider: row.provider,
+        providerVersion: row.provider_version, compositionFingerprint: row.composition_fingerprint,
+        safeErrorCode: row.safe_error_code, createdAt: row.created_at, completedAt: row.completed_at,
+        output: outputByCompositionRequest.get(row.id) || null })
+      compositionsByPlan.set(row.creative_archetype_plan_id, records)
+    }
+    const archetypePlanByRequest = new Map(archetypePlans.map(row => [row.request_id, row]))
+    const archetypesByIteration = new Map()
+    for (const row of archetypeRequests) {
+      const plan = archetypePlanByRequest.get(row.id)
+      const records = archetypesByIteration.get(row.campaign_iteration_id) || []
+      records.push({ requestId: row.id, revisionNumber: row.revision_number, status: row.status,
+        promptVersion: row.prompt_version, schemaVersion: row.schema_version,
+        requestedModel: row.requested_model, resolvedModel: row.resolved_model,
+        safeErrorCode: row.safe_error_code, generatedAt: row.generated_at,
+        planId: plan?.id || null, output: plan?.output_json || null,
+        productCards: plan ? cardsByPlan.get(plan.id) || [] : [],
+        compositions: plan ? compositionsByPlan.get(plan.id) || [] : [] })
+      archetypesByIteration.set(row.campaign_iteration_id, records)
+    }
     const revisionsByAsset = new Map()
     for (const row of productAssetRevisions) {
       const records = revisionsByAsset.get(row.product_asset_id) || []
@@ -436,6 +500,33 @@ function createSupabaseStore({
         revisions: revisionsByAsset.get(row.id) || [] })
       assetsByProduct.set(row.curated_product_id, records)
     }
+    const revisionById = new Map(productAssetRevisions.map(row => [row.id, row]))
+    const destinationByItem = new Map(productDestinations.map(row => [row.product_set_item_id, row]))
+    const itemsBySet = new Map()
+    for (const row of productSetItems) {
+      const records = itemsBySet.get(row.product_set_id) || []
+      const product = productById.get(row.curated_product_id)
+      const revision = revisionById.get(row.product_asset_revision_id)
+      const destination = destinationByItem.get(row.id)
+      records.push({ id: row.id, presentationOrder: row.presentation_order,
+        rankPosition: row.rank_position, productName: row.product_name_snapshot,
+        verifiedFactRef: row.verified_fact_ref, verifiedFact: row.verified_fact_snapshot,
+        price: row.price_snapshot, productSnapshot: row.product_snapshot,
+        product: product ? { id: product.id, productName: product.product_name, merchant: product.merchant,
+          productUrl: product.product_url, affiliateUrl: product.affiliate_url } : null,
+        assetRevision: revision ? { id: revision.id, revisionNumber: revision.revision_number,
+          contentSha256: revision.content_sha256, contentType: revision.content_type,
+          byteSize: Number(revision.byte_size), pixelWidth: revision.pixel_width, pixelHeight: revision.pixel_height,
+          permissionSnapshot: revision.permission_snapshot, availabilityStatus: revision.availability_status } : null,
+        destination: destination ? { id: destination.id, kind: destination.destination_kind,
+          url: destination.destination_url, snapshot: destination.lineage_snapshot } : null })
+      itemsBySet.set(row.product_set_id, records)
+    }
+    const productSetById = new Map(productSets.map(row => [row.id, {
+      id: row.id, archetype: row.archetype, selectionMode: row.selection_mode,
+      status: row.status, selectionFingerprint: row.selection_fingerprint,
+      createdAt: row.created_at, lockedAt: row.locked_at, items: itemsBySet.get(row.id) || [],
+    }]))
     const productById = new Map(products.map(row => [row.id, row]))
     const publicationsByIteration = new Map()
     for (const row of publications) {
@@ -453,7 +544,7 @@ function createSupabaseStore({
     const iterationsByCampaign = new Map()
     for (const row of iterations) {
       const product = productById.get(row.curated_product_id); const records = iterationsByCampaign.get(row.campaign_id) || []
-      records.push({ id: row.id, iterationNumber: row.iteration_number, status: row.status, sourceAnalysisId: row.source_analysis_id,
+      records.push({ id: row.id, iterationNumber: row.iteration_number, status: row.status, sourceAnalysisId: row.source_analysis_id, productSetId: row.product_set_id,
         appealHypothesis: row.appeal_hypothesis, hookText: row.hook_text, contentOutline: row.content_outline,
         scriptText: row.script_text, treatmentFingerprint: row.treatment_fingerprint, lockedAt: row.locked_at,
         product: product ? { id: product.id, sourceKind: product.source_kind, discoveryChannel: product.discovery_channel,
@@ -463,11 +554,13 @@ function createSupabaseStore({
           productCategory: product.product_category, verifiedFacts: product.verified_facts || {}, cautions: product.cautions,
           isOwnProduct: product.is_own_product === true, factsSnapshot: product.facts_snapshot || {}, assets: assetsByProduct.get(product.id) || [] } : null,
         publications: publicationsByIteration.get(row.id) || [], publication: (publicationsByIteration.get(row.id) || [])[0] || null,
-        productionPlans: productionByIteration.get(row.id) || [] })
+        productionPlans: productionByIteration.get(row.id) || [],
+        productSet: row.product_set_id ? productSetById.get(row.product_set_id) || null : null,
+        archetypePlans: archetypesByIteration.get(row.id) || [] })
       iterationsByCampaign.set(row.campaign_id, records)
     }
     return campaigns.map(row => ({ id: row.id, projectId: row.project_id, sourceItemId: row.source_item_id,
-      analysisId: row.primary_analysis_id, name: row.name, objective: row.objective, status: row.status,
+      analysisId: row.primary_analysis_id, lineageKind: row.lineage_kind || 'opportunity', name: row.name, objective: row.objective, status: row.status,
       analysisSnapshot: row.analysis_snapshot, createdAt: row.created_at, origins: originsByCampaign.get(row.id) || [],
       iterations: iterationsByCampaign.get(row.id) || [] }))
   }
@@ -803,10 +896,201 @@ function createSupabaseStore({
     })
   }
 
+  async function createThreePicksCampaign(input) {
+    const project = await getDefaultProject()
+    if (!project) throw new RevenueStoreError('PROJECT_NOT_FOUND', 'Revenue Lab project was not found', 404)
+    if (!Array.isArray(input.items) || input.items.length !== 3
+      || new Set(input.items.map(item => item.curatedProductId)).size !== 3) {
+      throw new RevenueStoreError('THREE_PICKS_VALIDATION_ERROR', 'Exactly three distinct products are required', 400)
+    }
+    const payload = {
+      archetype: 'three_picks_v1', selection_mode: 'human',
+      campaign: { name: input.campaignName, objective: input.objective || null },
+      creative: { appeal_hypothesis: input.appealHypothesis || null },
+      items: input.items.map((item, index) => ({
+        curated_product_id: item.curatedProductId,
+        product_asset_revision_id: item.productAssetRevisionId,
+        verified_fact_ref: item.verifiedFactRef,
+        presentation_order: index + 1,
+        rank_position: null,
+      })),
+    }
+    return rpc('create_three_picks_campaign', {
+      p_project_id: project.id, p_payload: payload,
+      p_selection_fingerprint: inputFingerprint({ archetype: payload.archetype, selection_mode: payload.selection_mode, items: payload.items }),
+      p_treatment_fingerprint: inputFingerprint({ archetype: payload.archetype, campaign: payload.campaign, creative: payload.creative, items: payload.items }),
+      p_idempotency_key: input.idempotencyKey,
+    })
+  }
+
+  async function enqueueThreePicksPlan(iterationId, { idempotencyKey, model = THREE_PICKS_DEFAULT_MODEL } = {}) {
+    const iterations = await request(`campaign_iterations?id=eq.${encodeURIComponent(iterationId)}&select=*&limit=1`)
+    const iteration = iterations?.[0]
+    if (!iteration?.product_set_id || iteration.curated_product_id) throw new RevenueStoreError('THREE_PICKS_ITERATION_NOT_FOUND', 'Three Picks iteration was not found', 404)
+    const [campaignRows, setRows, itemRows] = await Promise.all([
+      request(`campaigns?id=eq.${encodeURIComponent(iteration.campaign_id)}&select=*&limit=1`),
+      request(`campaign_product_sets?id=eq.${encodeURIComponent(iteration.product_set_id)}&select=*&limit=1`),
+      request(`campaign_product_set_items?product_set_id=eq.${encodeURIComponent(iteration.product_set_id)}&select=*&order=presentation_order.asc`),
+    ])
+    const campaign = campaignRows?.[0]; const set = setRows?.[0]
+    if (!campaign || !set || set.status !== 'locked' || itemRows.length !== 3) throw new RevenueStoreError('THREE_PICKS_LINEAGE_INVALID', 'Three Picks lineage is incomplete', 409)
+    const input = {
+      contract: { archetype: 'three_picks_v1', ranking_allowed: false,
+        prompt_version: THREE_PICKS_PROMPT_VERSION, schema_version: THREE_PICKS_SCHEMA_VERSION },
+      campaign: { id: campaign.id, name: campaign.name, objective: campaign.objective },
+      iteration: { id: iteration.id, appeal_hypothesis: iteration.appeal_hypothesis },
+      products: itemRows.map(row => ({
+        product_set_item_id: row.id, product_name: row.product_name_snapshot,
+        allowed_verified_fact_refs: [row.verified_fact_ref], verified_fact: row.verified_fact_snapshot,
+        price: row.price_snapshot, original_presentation_order: row.presentation_order,
+      })),
+    }
+    return rpc('enqueue_three_picks_plan', {
+      p_campaign_iteration_id: iteration.id, p_input_snapshot: input,
+      p_input_fingerprint: inputFingerprint(input), p_prompt_version: THREE_PICKS_PROMPT_VERSION,
+      p_schema_version: THREE_PICKS_SCHEMA_VERSION, p_requested_model: model,
+      p_idempotency_key: idempotencyKey,
+    })
+  }
+
+  async function getThreePicksRequest(id) {
+    const rows = await request(`creative_archetype_requests?id=eq.${encodeURIComponent(id)}&select=*&limit=1`)
+    const row = rows?.[0]
+    return row ? { id: row.id, projectId: row.project_id, campaignId: row.campaign_id,
+      iterationId: row.campaign_iteration_id, productSetId: row.product_set_id,
+      revisionNumber: row.revision_number, promptVersion: row.prompt_version,
+      schemaVersion: row.schema_version, requestedModel: row.requested_model,
+      inputSnapshot: row.input_snapshot } : null
+  }
+
+  async function markThreePicksRunning(id) {
+    await request(`creative_archetype_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'running', safe_error_code: null, updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistThreePicksSuccess(requestRow, result) {
+    const itemRows = await request(`campaign_product_set_items?product_set_id=eq.${encodeURIComponent(requestRow.productSetId)}&select=*&order=presentation_order.asc`)
+    const itemIds = itemRows.map(row => row.id)
+    const [destinations, revisions] = await Promise.all([
+      request(`campaign_product_destinations?product_set_item_id=in.(${encodeURIComponent(itemIds.join(','))})&select=*`),
+      request(`product_asset_revisions?id=in.(${encodeURIComponent(itemRows.map(row => row.product_asset_revision_id).join(','))})&select=*`),
+    ])
+    const destinationByItem = new Map(destinations.map(row => [row.product_set_item_id, row]))
+    const revisionById = new Map(revisions.map(row => [row.id, row]))
+    const items = itemRows.map(row => {
+      const destination = destinationByItem.get(row.id); const revision = revisionById.get(row.product_asset_revision_id)
+      return { id: row.id, productName: row.product_name_snapshot, verifiedFactRef: row.verified_fact_ref,
+        verifiedFact: row.verified_fact_snapshot, price: row.price_snapshot,
+        destination: { id: destination.id, snapshot: destination.lineage_snapshot },
+        assetRevision: { id: revision.id, contentSha256: revision.content_sha256 } }
+    })
+    const cards = buildProductCards(result.productionPlan, items)
+    const rendered = buildRenderManifest({ requestId: requestRow.id, planRevision: requestRow.revisionNumber,
+      campaignId: requestRow.campaignId, iterationId: requestRow.iterationId,
+      productSetId: requestRow.productSetId, plan: result.productionPlan, cards })
+    const inserted = await request('creative_archetype_plans', {
+      method: 'POST', body: { request_id: requestRow.id, project_id: requestRow.projectId,
+        campaign_id: requestRow.campaignId, campaign_iteration_id: requestRow.iterationId,
+        product_set_id: requestRow.productSetId, revision_number: requestRow.revisionNumber,
+        archetype: 'three_picks_v1', schema_version: requestRow.schemaVersion,
+        output_json: result.productionPlan, composition_manifest: rendered.manifest }, prefer: 'return=representation',
+    })
+    const plan = inserted?.[0]
+    await request('creative_product_cards', {
+      method: 'POST', body: cards.map(card => ({ creative_archetype_plan_id: plan.id,
+        product_set_item_id: card.product_set_item_id, product_destination_id: card.product_destination_id,
+        product_asset_revision_id: card.product_asset_revision_id, pick_number: card.pick_number,
+        rank_position: null, product_name_snapshot: card.product_name, short_appeal: card.short_appeal,
+        verified_fact_ref: card.verified_fact_ref, verified_fact_snapshot: card.verified_fact,
+        price_snapshot: card.price, card_template_version: card.card_template_version, card_snapshot: card })),
+      prefer: 'return=minimal',
+    })
+    const now = new Date().toISOString()
+    await request(`creative_archetype_requests?id=eq.${encodeURIComponent(requestRow.id)}`, {
+      method: 'PATCH', body: { status: 'succeeded', resolved_model: result.resolvedModel,
+        openai_response_id: result.responseId, input_tokens: result.usage.inputTokens,
+        cached_input_tokens: result.usage.cachedInputTokens, output_tokens: result.usage.outputTokens,
+        reasoning_tokens: result.usage.reasoningTokens, generated_at: now, updated_at: now, safe_error_code: null }, prefer: 'return=minimal',
+    })
+    return { planId: plan.id, compositionFingerprint: rendered.compositionFingerprint }
+  }
+
+  async function persistThreePicksFailure(id, error) {
+    const status = error?.code === 'OPENAI_REFUSED' ? 'refused' : error?.code === 'OPENAI_INCOMPLETE' ? 'incomplete' : 'failed'
+    await request(`creative_archetype_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status, safe_error_code: String(error?.code || 'THREE_PICKS_PLAN_FAILED').slice(0, 80),
+        updated_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function enqueueFinalComposition(planId, { idempotencyKey } = {}) {
+    const plans = await request(`creative_archetype_plans?id=eq.${encodeURIComponent(planId)}&select=*&limit=1`)
+    const plan = plans?.[0]
+    if (!plan?.composition_manifest) throw new RevenueStoreError('COMPOSITION_PLAN_NOT_FOUND', 'Three Picks plan was not found', 404)
+    const compositionFingerprint = inputFingerprint({ version: COMPOSITION_VERSION, manifest: plan.composition_manifest })
+    return rpc('enqueue_final_composition', { p_creative_archetype_plan_id: plan.id,
+      p_provider: 'local_ffmpeg', p_provider_version: COMPOSITION_VERSION,
+      p_composition_fingerprint: compositionFingerprint, p_render_manifest: plan.composition_manifest,
+      p_idempotency_key: idempotencyKey })
+  }
+
+  async function getFinalCompositionRequest(id) {
+    const rows = await request(`final_composition_requests?id=eq.${encodeURIComponent(id)}&select=*&limit=1`)
+    const row = rows?.[0]
+    if (!row) return null
+    const cards = await request(`creative_product_cards?creative_archetype_plan_id=eq.${encodeURIComponent(row.creative_archetype_plan_id)}&select=*`)
+    const revisions = await request(`product_asset_revisions?id=in.(${encodeURIComponent(cards.map(card => card.product_asset_revision_id).join(','))})&select=*`)
+    return { id: row.id, projectId: row.project_id, campaignId: row.campaign_id,
+      iterationId: row.campaign_iteration_id, planId: row.creative_archetype_plan_id,
+      provider: row.provider, providerVersion: row.provider_version,
+      compositionFingerprint: row.composition_fingerprint, renderManifest: row.render_manifest,
+      assets: revisions.map(revision => ({ id: revision.id, immutableObjectKey: revision.immutable_object_key,
+        contentSha256: revision.content_sha256 })) }
+  }
+
+  async function markFinalCompositionRendering(id) {
+    await request(`final_composition_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'rendering', safe_error_code: null, started_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistFinalCompositionSuccess(composition, output) {
+    const now = new Date().toISOString()
+    await request('final_composition_outputs', { method: 'POST', body: {
+      composition_request_id: composition.id, project_id: composition.projectId,
+      campaign_id: composition.campaignId, campaign_iteration_id: composition.iterationId,
+      storage_provider: output.storageProvider, storage_bucket: output.storageBucket,
+      immutable_object_key: output.immutableObjectKey, content_sha256: output.contentSha256,
+      content_type: 'video/mp4', byte_size: output.byteSize,
+      duration_seconds: output.durationSeconds, pixel_width: output.pixelWidth,
+      pixel_height: output.pixelHeight, fps: output.fps,
+      composition_fingerprint: composition.compositionFingerprint, render_manifest: composition.renderManifest,
+    }, prefer: 'return=minimal' })
+    await request(`final_composition_requests?id=eq.${encodeURIComponent(composition.id)}`, {
+      method: 'PATCH', body: { status: 'succeeded', safe_error_code: null, completed_at: now }, prefer: 'return=minimal',
+    })
+  }
+
+  async function persistFinalCompositionFailure(id, error) {
+    await request(`final_composition_requests?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: { status: 'failed', safe_error_code: String(error?.code || 'COMPOSITION_FAILED').slice(0, 80),
+        completed_at: new Date().toISOString() }, prefer: 'return=minimal',
+    })
+  }
+
+  async function getFinalCompositionOutput(id) {
+    const rows = await request(`final_composition_outputs?id=eq.${encodeURIComponent(id)}&select=id,immutable_object_key&limit=1`)
+    return rows?.[0] ? { id: rows[0].id, immutableObjectKey: rows[0].immutable_object_key } : null
+  }
+
   async function enqueueCreativeProduction(iterationId, { idempotencyKey, model = CREATIVE_DEFAULT_MODEL } = {}) {
     const iterations = await request(`campaign_iterations?id=eq.${encodeURIComponent(iterationId)}&select=*&limit=1`)
     const iteration = iterations?.[0]
     if (!iteration) throw new RevenueStoreError('CAMPAIGN_ITERATION_NOT_FOUND', 'Campaign iteration was not found', 404)
+    if (!iteration.curated_product_id || iteration.product_set_id) {
+      throw new RevenueStoreError('CREATIVE_PRODUCTION_SINGLE_PRODUCT_REQUIRED', 'Legacy Creative Production requires a single-product iteration', 409)
+    }
     const [campaignRows, productRows, assetRows] = await Promise.all([
       request(`campaigns?id=eq.${encodeURIComponent(iteration.campaign_id)}&select=*&limit=1`),
       request(`curated_products?id=eq.${encodeURIComponent(iteration.curated_product_id)}&select=*&limit=1`),
@@ -1469,7 +1753,11 @@ function createSupabaseStore({
     claimNext, dashboard, deferJob, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
     getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
     enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
-    persistProductSearchFailure, createProductDecision, createManualCampaign, registerCampaignPublication,
+    persistProductSearchFailure, createProductDecision, createManualCampaign,
+    createThreePicksCampaign, enqueueThreePicksPlan, getThreePicksRequest, markThreePicksRunning,
+    persistThreePicksSuccess, persistThreePicksFailure, enqueueFinalComposition,
+    getFinalCompositionRequest, markFinalCompositionRendering, persistFinalCompositionSuccess,
+    persistFinalCompositionFailure, getFinalCompositionOutput, registerCampaignPublication,
     enqueueCreativeProduction, getCreativeProductionRequest, markCreativeProductionRunning, persistCreativeProductionSuccess,
     persistCreativeProductionFailure, enqueueVideoGeneration, enqueueImageVideoGeneration, getVideoGenerationScene, markVideoGenerationSubmitting, markVideoGenerationPollingResume,
     persistVideoGenerationTask, persistVideoGenerationPolling, persistVideoGenerationPollingInterrupted,

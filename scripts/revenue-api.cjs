@@ -10,6 +10,10 @@ const { ADAPTER_VERSION: WAN_ADAPTER_VERSION, MANIFEST: WAN_MANIFEST, MODEL: WAN
   PROVIDER_ID: WAN_PROVIDER_ID, PROVIDER_VERSION: WAN_PROVIDER_VERSION } = require('./revenue-lab/providers/pollo-wan-video-generation-provider.cjs')
 const { createSupabaseProductAssetBlobStore } = require('./revenue-lab/product-asset-blob-store.cjs')
 const { createProductAssetRevisionService, ProductAssetRevisionError } = require('./revenue-lab/product-asset-revision-service.cjs')
+const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_MODEL, PROMPT_VERSION: THREE_PICKS_PROMPT_VERSION,
+  SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION } = require('./revenue-lab/multi-product-shorts-schema.cjs')
+const { COMPOSITION_VERSION } = require('./revenue-lab/multi-product-shorts-composition.cjs')
+const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -34,6 +38,21 @@ function configurationStatus(env = process.env) {
     provider: WAN_PROVIDER_ID, providerVersion: WAN_PROVIDER_VERSION, providerAdapterVersion: WAN_ADAPTER_VERSION,
     requestedModel: WAN_MODEL, resolution: '720p', durationSeconds: 5, aspectRatio: '9:16',
     audioEnabled: false, promptBuilderVersion: 'product-i2v-identity-v1', capabilityManifest: WAN_MANIFEST,
+  }, productAssetRevisions: {
+    configured: Boolean(env.REVENUE_LAB_PRODUCT_ASSET_BUCKET),
+    missing: env.REVENUE_LAB_PRODUCT_ASSET_BUCKET ? [] : ['REVENUE_LAB_PRODUCT_ASSET_BUCKET'],
+  }, multiProductShorts: {
+    configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
+    requestedModel: env.REVENUE_LAB_MULTI_PRODUCT_MODEL || DEFAULT_THREE_PICKS_MODEL,
+    archetype: 'three_picks_v1', promptVersion: THREE_PICKS_PROMPT_VERSION,
+    schemaVersion: THREE_PICKS_SCHEMA_VERSION,
+  }, finalComposition: {
+    configured: Boolean(env.REVENUE_LAB_PRODUCT_ASSET_BUCKET && env.REVENUE_LAB_COMPOSITION_BUCKET
+      && env.REVENUE_LAB_FFMPEG_PATH && env.REVENUE_LAB_FFPROBE_PATH),
+    missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET', 'REVENUE_LAB_COMPOSITION_BUCKET',
+      'REVENUE_LAB_FFMPEG_PATH', 'REVENUE_LAB_FFPROBE_PATH'].filter(key => !env[key]),
+    provider: 'local_ffmpeg', providerVersion: COMPOSITION_VERSION,
+    output: { width: 1080, height: 1920, fps: 30, audio: false },
   }, products: {
     configured: Boolean(env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY),
     missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'].filter(key => !env[key]),
@@ -101,6 +120,22 @@ function manualCampaignInput(input) {
   }
 }
 
+function threePicksCampaignInput(input) {
+  const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+  if (!UUID.test(idempotencyKey) || !Array.isArray(input.items) || input.items.length !== 3) throw new TypeError('Invalid Three Picks input')
+  const normalized = input.items.map(item => {
+    if (!item || !UUID.test(item.curatedProductId || '') || !UUID.test(item.productAssetRevisionId || '')) throw new TypeError('Invalid Three Picks product')
+    return { curatedProductId: item.curatedProductId, productAssetRevisionId: item.productAssetRevisionId,
+      verifiedFactRef: boundedText(item.verifiedFactRef, 'verifiedFactRef', 160) }
+  })
+  if (new Set(normalized.map(item => item.curatedProductId)).size !== 3
+    || new Set(normalized.map(item => item.productAssetRevisionId)).size !== 3) throw new TypeError('Duplicate Three Picks product')
+  return { idempotencyKey, campaignName: boundedText(input.campaignName, 'campaignName', 120),
+    objective: boundedText(input.objective, 'objective', 1000, { optional: true }),
+    appealHypothesis: boundedText(input.appealHypothesis, 'appealHypothesis', 1000, { optional: true }),
+    items: normalized }
+}
+
 function createRevenueApi({
   authorize = () => true,
   permit = permitted,
@@ -111,6 +146,7 @@ function createRevenueApi({
 } = {}) {
   let storage = store || null
   let assetRevisions = assetRevisionService || null
+  let compositionBlobs = null
   const config = configurationStatus(env)
   const getStore = () => {
     if (!storage) storage = createSupabaseStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY })
@@ -126,6 +162,14 @@ function createRevenueApi({
       assetRevisions = createProductAssetRevisionService({ store: getStore(), blobStore })
     }
     return assetRevisions
+  }
+  const getCompositionBlobStore = () => {
+    if (!compositionBlobs) {
+      if (!env.REVENUE_LAB_COMPOSITION_BUCKET) throw new Error('Composition storage is not configured')
+      compositionBlobs = createSupabaseCompositionBlobStore({ url: env.SUPABASE_URL,
+        serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY, bucket: env.REVENUE_LAB_COMPOSITION_BUCKET })
+    }
+    return compositionBlobs
   }
   const reply = (res, status, value) => {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
@@ -238,14 +282,48 @@ function createRevenueApi({
         const result = await getStore().createManualCampaign(manualCampaignMatch[1], manualCampaignInput(await body(req)))
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
+      if (req.method === 'POST' && pathname === '/three-picks/campaigns') {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        const result = await getStore().createThreePicksCampaign(threePicksCampaignInput(await body(req)))
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
       const creativeProductionMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/production-plans$/i)
       const videoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/video-generations$/i)
       const imageVideoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/image-video-generations$/i)
       const assetRevisionMatch = pathname.match(/^\/product-assets\/([0-9a-f-]{36})\/revisions$/i)
+      const threePicksPlanMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/three-picks-plans$/i)
+      const compositionMatch = pathname.match(/^\/three-picks-plans\/([0-9a-f-]{36})\/compositions$/i)
+      const compositionPreviewMatch = pathname.match(/^\/composition-outputs\/([0-9a-f-]{36})\/preview$/i)
+      if (req.method === 'GET' && compositionPreviewMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(compositionPreviewMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'output idが正しくありません。')
+        const output = await getStore().getFinalCompositionOutput(compositionPreviewMatch[1])
+        if (!output) return fail(res, 404, 'NOT_FOUND', '完成動画が見つかりません。')
+        return reply(res, 200, { data: { previewUrl: await getCompositionBlobStore().createTemporaryReadUrl(output.immutableObjectKey, 900) } })
+      }
+      if (req.method === 'POST' && compositionMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(compositionMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'plan idが正しくありません。')
+        if (!config.finalComposition.configured) return fail(res, 503, 'COMPOSITION_NOT_CONFIGURED', 'Final Composerの環境変数を設定してください。', { missing: config.finalComposition.missing })
+        const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
+        const result = await getStore().enqueueFinalComposition(compositionMatch[1], { idempotencyKey })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
+      if (req.method === 'POST' && threePicksPlanMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(threePicksPlanMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'iteration idが正しくありません。')
+        if (!config.multiProductShorts.configured) return fail(res, 503, 'THREE_PICKS_NOT_CONFIGURED', 'OpenAI APIを設定してください。')
+        const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
+        const result = await getStore().enqueueThreePicksPlan(threePicksPlanMatch[1], {
+          idempotencyKey, model: config.multiProductShorts.requestedModel })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
       if (req.method === 'POST' && assetRevisionMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
         if (!UUID.test(assetRevisionMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'Product Asset IDが正しくありません。')
-        if (!config.imageToVideo.configured) return fail(res, 503, 'ASSET_STORAGE_NOT_CONFIGURED', 'I2V用のprivate storageを設定してください。', { missing: config.imageToVideo.missing })
+        if (!config.productAssetRevisions.configured) return fail(res, 503, 'ASSET_STORAGE_NOT_CONFIGURED', 'Product Asset用のprivate storageを設定してください。', { missing: config.productAssetRevisions.missing })
         const input = await body(req)
         if (typeof input.i2vAllowed !== 'boolean' || (input.createNineSixteen != null && typeof input.createNineSixteen !== 'boolean')) {
           return fail(res, 400, 'VALIDATION_ERROR', 'Asset Revision設定が正しくありません。')
@@ -342,6 +420,10 @@ function createRevenueApi({
         const status = error?.code === 'UNSUPPORTED_MEDIA_TYPE' ? 415 : error?.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400
         return fail(res, status, 'VALIDATION_ERROR', '入力内容を確認してください。')
       }
+      if (/^(?:THREE_PICKS_|COMPOSITION_)/.test(error?.code || '')) {
+        const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
+        return fail(res, status, error.code, 'Three PicksまたはFinal Compositionの処理状態を確認してください。')
+      }
       if (/^CREATIVE_PRODUCTION_/.test(error?.code || '')) {
         const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
         return fail(res, status, error.code, 'Creative Productionの対象lineageまたは入力状態を確認してください。')
@@ -362,4 +444,4 @@ function createRevenueApi({
   return { handler, close() {} }
 }
 
-module.exports = { UUID, configurationStatus, createRevenueApi, errorBody, manualCampaignInput, publicationInput }
+module.exports = { UUID, configurationStatus, createRevenueApi, errorBody, manualCampaignInput, publicationInput, threePicksCampaignInput }

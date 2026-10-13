@@ -73,6 +73,26 @@ export function createManualCampaign(analysisId, input) {
   })
 }
 
+export function createThreePicksCampaign(input) {
+  return request('/three-picks/campaigns', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function enqueueThreePicksPlan(iterationId, idempotencyKey) {
+  return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/three-picks-plans`, {
+    method: 'POST', body: JSON.stringify({ idempotencyKey }),
+  })
+}
+
+export function enqueueFinalComposition(planId, idempotencyKey) {
+  return request(`/three-picks-plans/${encodeURIComponent(planId)}/compositions`, {
+    method: 'POST', body: JSON.stringify({ idempotencyKey }),
+  })
+}
+
+export function loadFinalCompositionPreview(outputId) {
+  return request(`/composition-outputs/${encodeURIComponent(outputId)}/preview`)
+}
+
 export function enqueueCreativeProductionPlan(iterationId, idempotencyKey) {
   return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/production-plans`, {
     method: 'POST', body: JSON.stringify({ idempotencyKey }),

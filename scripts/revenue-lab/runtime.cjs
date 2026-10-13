@@ -10,6 +10,9 @@ const { createPolloVideoGenerationProvider } = require('./providers/pollo-video-
 const { createPolloWanVideoGenerationProvider } = require('./providers/pollo-wan-video-generation-provider.cjs')
 const { createSupabaseProductAssetBlobStore } = require('./product-asset-blob-store.cjs')
 const { createRakutenProductProvider } = require('./providers/rakuten-product-provider.cjs')
+const { createMultiProductShortsClient } = require('./multi-product-shorts-client.cjs')
+const { createLocalFfmpegCompositionProvider } = require('./providers/local-ffmpeg-composition-provider.cjs')
+const { createSupabaseCompositionBlobStore } = require('./composition-blob-store.cjs')
 
 const REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY']
 
@@ -38,16 +41,22 @@ function createRevenueRuntime({
   const runtimeYouTube = youtube || createYouTubeClient({ apiKey: env.YOUTUBE_API_KEY })
   const analyst = env.OPENAI_API_KEY ? createOpenAIAnalysisClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_OPENAI_MODEL || undefined }) : null
   const creativeProducer = env.OPENAI_API_KEY ? createCreativeProductionClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_CREATIVE_PRODUCTION_MODEL || undefined }) : null
+  const multiProductShortsPlanner = env.OPENAI_API_KEY ? createMultiProductShortsClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_MULTI_PRODUCT_MODEL || undefined }) : null
   const videoGenerationProvider = env.POLLO_API_KEY ? createPolloVideoGenerationProvider({ apiKey: env.POLLO_API_KEY, model: env.REVENUE_LAB_POLLO_MODEL || undefined }) : null
   const imageToVideoProvider = env.POLLO_API_KEY ? createPolloWanVideoGenerationProvider({ apiKey: env.POLLO_API_KEY }) : null
   const productAssetBlobStore = env.REVENUE_LAB_PRODUCT_ASSET_BUCKET
     ? createSupabaseProductAssetBlobStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY, bucket: env.REVENUE_LAB_PRODUCT_ASSET_BUCKET }) : null
+  const finalCompositionProvider = env.REVENUE_LAB_FFMPEG_PATH && env.REVENUE_LAB_FFPROBE_PATH
+    ? createLocalFfmpegCompositionProvider({ ffmpegPath: env.REVENUE_LAB_FFMPEG_PATH, ffprobePath: env.REVENUE_LAB_FFPROBE_PATH }) : null
+  const compositionBlobStore = env.REVENUE_LAB_COMPOSITION_BUCKET
+    ? createSupabaseCompositionBlobStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY, bucket: env.REVENUE_LAB_COMPOSITION_BUCKET }) : null
   const rakuten = productProvider || (env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY
     ? createRakutenProductProvider({ applicationId: env.RAKUTEN_APPLICATION_ID, accessKey: env.RAKUTEN_ACCESS_KEY, affiliateId: env.RAKUTEN_AFFILIATE_ID })
     : null)
   const handlers = createJobHandlers({
-    store: runtimeStore, youtube: runtimeYouTube, analyst, creativeProducer, videoGenerationProvider,
-    imageToVideoProvider, productAssetBlobStore, productProvider: rakuten,
+    store: runtimeStore, youtube: runtimeYouTube, analyst, creativeProducer, multiProductShortsPlanner,
+    finalCompositionProvider, compositionBlobStore, videoGenerationProvider, imageToVideoProvider,
+    productAssetBlobStore, productProvider: rakuten,
     videoPollAttempts: Number(env.REVENUE_LAB_POLLO_POLL_ATTEMPTS) || 30,
     videoPollIntervalMs: Number(env.REVENUE_LAB_POLLO_POLL_INTERVAL_MS) || 5000,
   })
