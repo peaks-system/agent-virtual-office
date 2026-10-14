@@ -480,34 +480,64 @@ function CreativeProductionPanel({ iteration, config, videoGenerationConfig, ima
   </section>
 }
 
-function selectableThreePicksProducts(campaigns) {
-  const seen = new Set(); const products = []
+const THREE_PICKS_ASSET_PERMISSIONS = new Set(['owned', 'licensed', 'authorized_reference'])
+
+export function buildThreePicksCandidatePool(campaigns = []) {
+  const seen = new Set(); const candidates = []
   for (const campaign of campaigns) for (const iteration of campaign.iterations || []) {
     const product = iteration.product
     if (!product?.id || seen.has(product.id)) continue
-    const revisions = (product.assets || []).flatMap(asset => (asset.revisions || []).map(revision => ({ ...revision, assetId: asset.id })))
-      .filter(revision => revision.availabilityStatus === 'available')
-    const factEntry = Object.entries(product.verifiedFacts || {}).find(([, value]) => value != null && value !== '')
-    if (!revisions.length || !factEntry) continue
-    seen.add(product.id); products.push({ product, revision: revisions[0], verifiedFactRef: factEntry[0] })
+    seen.add(product.id)
+    const factEntry = Object.entries(product.verifiedFacts || {}).find(([, value]) => value != null && String(value).trim() !== '') || null
+    const permittedAssets = (product.assets || []).filter(asset => asset.creativeEligible
+      || THREE_PICKS_ASSET_PERMISSIONS.has(asset.usagePermission))
+    const revisions = permittedAssets.flatMap(asset => (asset.revisions || []).map(revision => ({
+      ...revision, assetId: asset.id, assetPermission: asset.usagePermission,
+    }))).filter(revision => revision.availabilityStatus === 'available'
+      && THREE_PICKS_ASSET_PERMISSIONS.has(revision.permissionSnapshot || revision.assetPermission))
+    const commerceDestination = product.affiliateUrl || product.productUrl || null
+    const ineligibleReasons = []
+    if (!factEntry) ineligibleReasons.push('確認済み事実がありません')
+    if (!commerceDestination) ineligibleReasons.push('commerce destinationがありません')
+    if (!permittedAssets.length) ineligibleReasons.push('利用許可済みProduct Assetがありません')
+    if (permittedAssets.length && !revisions.length) ineligibleReasons.push('Asset Revisionがありません')
+    candidates.push({
+      product, asset: permittedAssets[0] || null, imageAsset: (product.assets || []).find(asset => asset.assetUrl) || null,
+      revision: revisions[0] || null, verifiedFactRef: factEntry?.[0] || null,
+      verifiedFactsAvailable: Boolean(factEntry), commerceDestinationAvailable: Boolean(commerceDestination),
+      productAssetAvailable: permittedAssets.length > 0, assetRevisionAvailable: revisions.length > 0,
+      eligible: ineligibleReasons.length === 0, ineligibleReasons,
+    })
   }
-  return products
+  return candidates
+}
+
+export function toggleThreePicksSelection(selected, productId, checked) {
+  if (!checked) return selected.filter(id => id !== productId)
+  if (selected.includes(productId) || selected.length >= 3) return selected
+  return [...selected, productId]
+}
+
+export function canCreateThreePicks(selected, candidates) {
+  return selected.length === 3 && new Set(selected).size === 3
+    && selected.every(id => candidates.find(candidate => candidate.product.id === id)?.eligible)
 }
 
 function ThreePicksIntake({ campaigns, busy, assetRevisionConfig, onCreate, onCreateAssetRevision }) {
-  const products = selectableThreePicksProducts(campaigns)
-  const pendingAssets = campaigns.flatMap(campaign => (campaign.iterations || []).flatMap(iteration => {
-    const product = iteration.product
-    if (!product?.id || !Object.keys(product.verifiedFacts || {}).length) return []
-    const asset = (product.assets || []).find(item => item.creativeEligible && !(item.revisions || []).some(revision => revision.availabilityStatus === 'available'))
-    return asset ? [{ product, asset }] : []
-  })).filter((entry, index, all) => all.findIndex(item => item.product.id === entry.product.id) === index)
-  const [selected, setSelected] = useState(['', '', ''])
+  const candidates = buildThreePicksCandidatePool(campaigns)
+  const eligibleCount = candidates.filter(candidate => candidate.eligible).length
+  const [selected, setSelected] = useState([])
   const [name, setName] = useState('おすすめ3選 Shorts')
   const [submitting, setSubmitting] = useState(false)
   const [saved, setSaved] = useState(false)
   const keyRef = useRef(newCampaignIdempotencyKey())
-  const canSubmit = new Set(selected.filter(Boolean)).size === 3
+  const canSubmit = canCreateThreePicks(selected, candidates)
+  const openDirectProductIntake = () => {
+    const intake = document.getElementById('direct-product-intake')
+    const details = intake?.querySelector('details')
+    if (details) details.open = true
+    intake?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
   const submit = async event => {
     event.preventDefault(); if (!canSubmit || submitting || busy) return
     setSubmitting(true)
@@ -516,7 +546,7 @@ function ThreePicksIntake({ campaigns, busy, assetRevisionConfig, onCreate, onCr
         objective: '人間が選んだ3商品を順位付けせず約20秒で紹介する',
         appealHypothesis: '実商品画像と確認済み事実を簡潔に提示する',
         items: selected.map(id => {
-          const entry = products.find(product => product.product.id === id)
+          const entry = candidates.find(candidate => candidate.product.id === id)
           return { curatedProductId: id, productAssetRevisionId: entry.revision.id, verifiedFactRef: entry.verifiedFactRef }
         }) })
       setSaved(true)
@@ -524,12 +554,26 @@ function ThreePicksIntake({ campaigns, busy, assetRevisionConfig, onCreate, onCr
   }
   return <section className="revenue-three-picks-intake" aria-labelledby="three-picks-intake-heading">
     <div className="revenue-section-heading"><div><p className="revenue-kicker">MULTI-PRODUCT SHORTS v1</p><h2 id="three-picks-intake-heading">Three Picksを作成</h2><p>3商品を人間が選び、順位を付けずに実商品画像で紹介します。</p></div><span>Human selection</span></div>
-    {products.length < 3 ? <><p className="revenue-warning">利用可能なimmutable Asset Revisionと確認済み事実を持つ商品が3件必要です（現在 {products.length}件）。</p>{pendingAssets.map(entry => <button key={entry.asset.id} type="button" disabled={busy || submitting || !assetRevisionConfig?.configured} onClick={async () => { setSubmitting(true); try { await onCreateAssetRevision(entry.asset.id, false, false) } finally { setSubmitting(false) } }}>{entry.product.productName}の静止画Revisionを作成</button>)}</>
-      : <form onSubmit={submit}><label>Campaign名<input required maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
-        <div className="revenue-three-picks-selects">{selected.map((value, index) => <label key={index}>PICK {index + 1}<select required value={value} onChange={event => setSelected(current => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}><option value="">商品を選択</option>{products.map(entry => <option key={entry.product.id} value={entry.product.id} disabled={selected.some((id, itemIndex) => itemIndex !== index && id === entry.product.id)}>{entry.product.productName} · Revision #{entry.revision.revisionNumber}</option>)}</select></label>)}</div>
-        {saved && <p className="revenue-save-success" role="status"><strong>Three Picks Campaignを保存しました。</strong> 台帳から制作案を生成できます。</p>}
-        <button className="corp-primary" disabled={busy || submitting || saved || !canSubmit}>{saved ? '保存済み' : submitting ? '保存中…' : '3商品でCampaignを作成'}</button>
-      </form>}
+    <div className="revenue-three-picks-toolbar"><strong>商品候補pool</strong><span>{eligibleCount}件 eligible / {candidates.length}件</span><span aria-live="polite">選択数 {selected.length} / 3</span></div>
+    {eligibleCount < 3 && <div className="revenue-three-picks-shortage"><p className="revenue-warning">eligibleな商品が3件必要です。候補を追加するか、不足している準備を完了してください。</p><button type="button" onClick={openDirectProductIntake}>商品を追加</button></div>}
+    {!candidates.length && <p className="revenue-three-picks-empty">商品候補はまだありません。既存のDirect Product Intakeから登録してください。</p>}
+    <div className="revenue-three-picks-pool">{candidates.map(candidate => {
+      const selectedIndex = selected.indexOf(candidate.product.id)
+      const selectionDisabled = selectedIndex < 0 && (!candidate.eligible || selected.length >= 3)
+      return <article key={candidate.product.id} className={`revenue-three-picks-candidate ${candidate.eligible ? 'is-eligible' : 'is-ineligible'}`}>
+        <label className="revenue-three-picks-check"><input type="checkbox" aria-label={`${candidate.product.productName}を選択`} checked={selectedIndex >= 0} disabled={busy || submitting || saved || selectionDisabled} onChange={event => setSelected(current => toggleThreePicksSelection(current, candidate.product.id, event.target.checked))} /><span>{selectedIndex >= 0 ? `PICK ${selectedIndex + 1}` : '選択'}</span></label>
+        {candidate.imageAsset?.assetUrl ? <img src={candidate.imageAsset.assetUrl} alt={`${candidate.product.productName}の商品画像`} /> : <div className="revenue-three-picks-no-image">画像なし</div>}
+        <div className="revenue-three-picks-candidate-copy"><h3>{candidate.product.productName}</h3><p>{candidate.product.merchant || 'merchant未登録'}</p>
+          <dl><div><dt>Verified facts</dt><dd>{candidate.verifiedFactsAvailable ? 'あり' : 'なし'}</dd></div><div><dt>Product Asset Revision</dt><dd>{candidate.assetRevisionAvailable ? `あり · #${candidate.revision.revisionNumber}` : 'なし'}</dd></div><div><dt>Commerce destination</dt><dd>{candidate.commerceDestinationAvailable ? 'あり' : 'なし'}</dd></div></dl>
+          <p className={`revenue-three-picks-eligibility ${candidate.eligible ? 'is-eligible' : 'is-ineligible'}`}><strong>{candidate.eligible ? 'eligible' : 'not eligible'}</strong>{candidate.eligible ? ' · Three Picksに使用できます' : ` · ${candidate.ineligibleReasons.join(' / ')}`}</p>
+          {!candidate.assetRevisionAvailable && candidate.asset && <button type="button" disabled={busy || submitting || !assetRevisionConfig?.configured} onClick={async () => { setSubmitting(true); try { await onCreateAssetRevision(candidate.asset.id, false, false) } finally { setSubmitting(false) } }}>Asset Revisionを準備</button>}
+        </div>
+      </article>
+    })}</div>
+    <form className="revenue-three-picks-create" onSubmit={submit}><label>Campaign名<input required maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
+      {saved && <p className="revenue-save-success" role="status"><strong>Three Picks Campaignを保存しました。</strong> 台帳から制作案を生成できます。</p>}
+      <button className="corp-primary" disabled={busy || submitting || saved || !canSubmit}>{saved ? '保存済み' : submitting ? '保存中…' : 'Three Picksを作成'}</button>
+    </form>
   </section>
 }
 

@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { RevenueLabView } from '../src/components/RevenueLabDashboard'
+import { buildThreePicksCandidatePool, canCreateThreePicks, RevenueLabView, toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
 
 const fn = vi.fn()
 const handlers = { onReload: fn, onRun: fn, onTrack: fn, onAnalyze: fn, onReview: fn, onTranslate: fn,
@@ -17,7 +17,8 @@ function singleCampaign(index) {
     id: `iteration-${index}`, iterationNumber: 1, status: 'draft', appealHypothesis: '訴求', hookText: 'Hook',
     contentOutline: { text: '構成' }, publication: null, productionPlans: [], archetypePlans: [],
     product: { id: `product-${index}`, productName: `商品${index}`, merchant: 'Shop', productUrl: 'https://example.com',
-      verifiedFacts: { summary: `確認済み事実${index}` }, assets: [{ id: `asset-${index}`, revisions: [{ id: `revision-${index}`, revisionNumber: 1, availabilityStatus: 'available' }] }] },
+      verifiedFacts: { summary: `確認済み事実${index}` }, assets: [{ id: `asset-${index}`, assetUrl: `https://example.com/product-${index}.jpg`,
+        usagePermission: 'owned', creativeEligible: true, revisions: [{ id: `revision-${index}`, revisionNumber: 1, availabilityStatus: 'available' }] }] },
   }] }
 }
 
@@ -45,5 +46,66 @@ describe('Multi-product Shorts Dashboard', () => {
     expect(markup).toContain('Three Picks Plan')
     expect(markup).toContain('1080×1920')
     expect(markup).not.toContain('第1位')
+  })
+
+  it('always shows eligible and ineligible candidates when fewer than three are ready', () => {
+    const ready = singleCampaign(1)
+    const needsRevision = singleCampaign(2)
+    needsRevision.iterations[0].product.assets[0].revisions = []
+    const ineligible = singleCampaign(3)
+    ineligible.iterations[0].product.productUrl = ''
+    ineligible.iterations[0].product.affiliateUrl = ''
+    ineligible.iterations[0].product.verifiedFacts = {}
+    ineligible.iterations[0].product.assets[0].usagePermission = 'unknown'
+    ineligible.iterations[0].product.assets[0].creativeEligible = false
+    ineligible.iterations[0].product.assets[0].revisions = []
+    const state = { config: { configured: true, missing: [], analysis: {}, commerceTranslation: {}, products: {},
+      youtubeAnalytics: {}, creativeProduction: {}, videoGeneration: {}, imageToVideo: {},
+      productAssetRevisions: { configured: true }, multiProductShorts: { configured: true }, finalComposition: {} },
+      queries: [], opportunities: [], trackingOpportunities: [], analyses: [], commerceTranslations: [], productSearches: [],
+      campaigns: [ready, needsRevision, ineligible], latestJob: null }
+    const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
+    expect(markup).toContain('商品候補pool')
+    expect(markup).toContain('選択数 0 / 3')
+    expect(markup).toContain('1件 eligible / 3件')
+    expect(markup).toContain('商品1を選択')
+    expect(markup).toContain('商品2')
+    expect(markup).toContain('Asset Revisionを準備')
+    expect(markup).toContain('商品3')
+    expect(markup).toContain('確認済み事実がありません')
+    expect(markup).toContain('commerce destinationがありません')
+    expect(markup).toContain('利用許可済みProduct Assetがありません')
+    expect(markup).toContain('商品を追加')
+  })
+
+  it('caps distinct checkbox selection at three and preserves selection order', () => {
+    let selected = []
+    selected = toggleThreePicksSelection(selected, 'product-b', true)
+    selected = toggleThreePicksSelection(selected, 'product-a', true)
+    selected = toggleThreePicksSelection(selected, 'product-c', true)
+    selected = toggleThreePicksSelection(selected, 'product-d', true)
+    selected = toggleThreePicksSelection(selected, 'product-a', true)
+    expect(selected).toEqual(['product-b', 'product-a', 'product-c'])
+    expect(toggleThreePicksSelection(selected, 'product-a', false)).toEqual(['product-b', 'product-c'])
+  })
+
+  it('enables creation only for exactly three eligible products', () => {
+    const candidates = [
+      { product: { id: 'a' }, eligible: true }, { product: { id: 'b' }, eligible: true },
+      { product: { id: 'c' }, eligible: true }, { product: { id: 'd' }, eligible: false },
+    ]
+    expect(canCreateThreePicks(['a', 'b'], candidates)).toBe(false)
+    expect(canCreateThreePicks(['a', 'b', 'd'], candidates)).toBe(false)
+    expect(canCreateThreePicks(['a', 'b', 'c'], candidates)).toBe(true)
+  })
+
+  it('derives explicit candidate eligibility without hiding incomplete products', () => {
+    const campaigns = [singleCampaign(1), singleCampaign(2)]
+    campaigns[1].iterations[0].product.assets[0].revisions = []
+    const pool = buildThreePicksCandidatePool(campaigns)
+    expect(pool).toHaveLength(2)
+    expect(pool[0]).toMatchObject({ eligible: true, verifiedFactsAvailable: true, commerceDestinationAvailable: true })
+    expect(pool[1]).toMatchObject({ eligible: false, assetRevisionAvailable: false })
+    expect(pool[1].ineligibleReasons).toContain('Asset Revisionがありません')
   })
 })
