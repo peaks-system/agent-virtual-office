@@ -59,11 +59,11 @@ foreach ($scene in $manifest.timeline) {
     } finally { $image.Dispose() }
     $dark = [System.Drawing.SolidBrush]::new((ColorFromHex '#102A43'))
     DrawCenteredText $graphics ("PICK " + $card.pick_number) (Font 44 ([System.Drawing.FontStyle]::Bold)) $dark 110 1080 100
-    DrawCenteredText $graphics ([string]$card.product_name) (Font 55 ([System.Drawing.FontStyle]::Bold)) $dark 1190 1080 150
+    $displayName = if ($card.display_name) { [string]$card.display_name } else { [string]$card.product_name }
+    $factBadge = if ($card.fact_badge) { [string]$card.fact_badge } elseif ($card.on_screen_text) { [string]$card.on_screen_text } else { [string]$card.verified_fact.value }
+    DrawCenteredText $graphics $displayName (Font 55 ([System.Drawing.FontStyle]::Bold)) $dark 1190 1080 150
     DrawCenteredText $graphics ([string]$card.short_appeal) (Font 39) $dark 1330 1080 110
-    DrawCenteredText $graphics ([string]$card.on_screen_text) (Font 32 ([System.Drawing.FontStyle]::Bold)) $dark 1440 1080 100
-    $factValue = [string]$card.verified_fact.value
-    DrawCenteredText $graphics $factValue (Font 31) $dark 1540 1080 100
+    DrawCenteredText $graphics $factBadge (Font 32 ([System.Drawing.FontStyle]::Bold)) $dark 1460 1080 110
     if ($null -ne $card.price) {
       $priceText = ([string]$card.price.currency) + ' ' + ([string]$card.price.amount)
       DrawCenteredText $graphics $priceText (Font 30) $dark 1640 1080 80

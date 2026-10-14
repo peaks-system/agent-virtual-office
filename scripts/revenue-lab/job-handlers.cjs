@@ -3,6 +3,7 @@
 const { scoreYouTubePopulation, scoreYouTubeTrackingPopulation } = require('./scoring.cjs')
 const { rankProductCandidates } = require('./product-ranking.cjs')
 const { createImageToVideoRequest } = require('./image-to-video-request.cjs')
+const { isDirectProductRegistrationPlaceholder } = require('./direct-product-contract.cjs')
 const { createHash } = require('node:crypto')
 
 class RevenueJobError extends Error {
@@ -225,6 +226,12 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
     if (!creativeProducer) throw new RevenueJobError('OPENAI_NOT_CONFIGURED', 'Creative Production is not configured')
     const request = await store.getCreativeProductionRequest(requestId)
     if (!request) throw new RevenueJobError('CREATIVE_PRODUCTION_REQUEST_NOT_FOUND', 'Creative Production request was not found')
+    if (isDirectProductRegistrationPlaceholder(request.inputSnapshot?.iteration)) {
+      const error = new RevenueJobError('CREATIVE_PRODUCTION_REGISTRATION_ONLY', 'Direct Product registration placeholders cannot be planned')
+      try { await store.persistCreativeProductionFailure(requestId, error) }
+      catch { console.error('[revenue-lab] Creative Production placeholder rejection could not be persisted', { requestId }) }
+      throw error
+    }
     await store.markCreativeProductionRunning(requestId)
     let storeAttempted = false
     let storeSaved = false

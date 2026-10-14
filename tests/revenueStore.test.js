@@ -190,8 +190,9 @@ describe('Revenue Lab Supabase store snapshots', () => {
 
   it('omits the publication payload for a pre-publication Campaign and can register it later', async () => {
     const calls = []
-    const fetchImpl = vi.fn(async (url, options) => {
-      calls.push({ url, body: JSON.parse(options.body) })
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      calls.push({ url, body: options.body ? JSON.parse(options.body) : null })
+      if (url.includes('/campaign_iterations?')) return response([{ appeal_hypothesis: 'appeal', hook_text: 'hook', content_outline: { format: 'plain_text', text: 'outline' }, script_text: null }])
       return response(url.includes('register_campaign_publication')
         ? { publicationId: 'publication-1', iterationStatus: 'ready_to_publish' }
         : { campaignId: 'campaign-1', publicationId: null, iterationStatus: 'draft' })
@@ -201,8 +202,75 @@ describe('Revenue Lab Supabase store snapshots', () => {
     expect(await store.createManualCampaign('analysis-1', input)).toMatchObject({ publicationId: null, iterationStatus: 'draft' })
     expect(calls[0].body.p_payload.publication).toBeNull()
     expect(await store.registerCampaignPublication('iteration-1', { youtubeVideoId: 'realVideo1', publicationTitle: null, publishedAt: null })).toMatchObject({ publicationId: 'publication-1', iterationStatus: 'ready_to_publish' })
-    expect(calls[1]).toMatchObject({ body: { p_campaign_iteration_id: 'iteration-1', p_youtube_video_id: 'realVideo1', p_title: null, p_published_at: null } })
-    expect(calls[1].url).toContain('/rpc/register_campaign_publication')
+    const publicationCall = calls.find(call => call.url.includes('/rpc/register_campaign_publication'))
+    expect(publicationCall).toMatchObject({ body: { p_campaign_iteration_id: 'iteration-1', p_youtube_video_id: 'realVideo1', p_title: null, p_published_at: null } })
+  })
+
+  it('creates Direct Product facts, assets, Campaign, and draft Iteration without analysis lineage', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options) => {
+      calls.push({ url, body: options?.body ? JSON.parse(options.body) : null })
+      if (url.includes('/projects?')) return response([{ id: 'project-1', name: 'Revenue Lab' }])
+      if (url.includes('/rpc/create_direct_product_campaign')) return response({ campaignId: 'campaign-direct', iterationStatus: 'draft', lineageKind: 'direct_product', created: true })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const result = await store.createDirectProductCampaign({
+      idempotencyKey: '22222222-2222-4222-8222-222222222222', campaignName: '確認済み商品 · 商品登録', objective: null,
+      merchant: '自社', productName: '確認済み商品', productUrl: 'https://example.com/product', affiliateUrl: null,
+      priceAmount: 5000, currency: 'JPY', productCategory: '生活用品', verifiedFacts: '寸法と材質を確認済み',
+      cautions: '火気厳禁', productNotes: null, isOwnProduct: true,
+      assets: [{ assetKind: 'hero', assetUrl: 'https://example.com/hero.jpg', assetSource: 'self_owned', usagePermission: 'owned', label: '正面' }],
+      appealHypothesis: '[INTERNAL:DIRECT_PRODUCT_REGISTRATION_ONLY]',
+      hookText: '[INTERNAL:NO_CREATIVE_HOOK]', contentOutline: '[INTERNAL:NO_CREATIVE_OUTLINE]', scriptText: null,
+    })
+    expect(result).toMatchObject({ lineageKind: 'direct_product', iterationStatus: 'draft' })
+    expect(calls[1].url).toContain('/rpc/create_direct_product_campaign')
+    expect(calls[1].body).toMatchObject({
+      p_project_id: 'project-1',
+      p_payload: {
+        campaign: { name: '確認済み商品 · 商品登録', objective: null },
+        product: { product_name: '確認済み商品', verified_facts: { summary: '寸法と材質を確認済み' }, is_own_product: true, assets: [{ ordinal: 1, asset_kind: 'hero', asset_source: 'self_owned', usage_permission: 'owned' }] },
+        creative: { appeal_hypothesis: '[INTERNAL:DIRECT_PRODUCT_REGISTRATION_ONLY]',
+          hook_text: '[INTERNAL:NO_CREATIVE_HOOK]',
+          content_outline: { format: 'internal_placeholder', text: '[INTERNAL:NO_CREATIVE_OUTLINE]', reusable: false },
+          script_text: null },
+      },
+    })
+    expect(calls[1].body.p_payload).not.toHaveProperty('analysis')
+    expect(calls[1].body.p_request_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(calls[1].body.p_treatment_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('rejects registration-only placeholders at every server-side Creative and Publication boundary', async () => {
+    const placeholder = {
+      id: 'iteration-registration', campaign_id: 'campaign-direct', curated_product_id: 'product-direct', product_set_id: null,
+      appeal_hypothesis: '[INTERNAL:DIRECT_PRODUCT_REGISTRATION_ONLY]', hook_text: '[INTERNAL:NO_CREATIVE_HOOK]',
+      content_outline: { format: 'internal_placeholder', text: '[INTERNAL:NO_CREATIVE_OUTLINE]', reusable: false }, script_text: null,
+    }
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      calls.push({ url, body: options.body ? JSON.parse(options.body) : null })
+      if (url.includes('/campaign_iterations?')) return response([placeholder])
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const expected = { code: 'CAMPAIGN_REGISTRATION_ONLY', status: 409 }
+    await expect(store.enqueueCreativeProduction(placeholder.id, { idempotencyKey: '22222222-2222-4222-8222-222222222222' })).rejects.toMatchObject(expected)
+    await expect(store.registerCampaignPublication(placeholder.id, { youtubeVideoId: 'realVideo1' })).rejects.toMatchObject(expected)
+    expect(calls.some(call => call.url.includes('/rpc/'))).toBe(false)
+  })
+
+  it('refuses to persist a public Creative snapshot from a legacy queued placeholder request', async () => {
+    const fetchImpl = vi.fn()
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const request = { id: 'request-placeholder', inputSnapshot: { iteration: {
+      appeal_hypothesis: '[INTERNAL:DIRECT_PRODUCT_REGISTRATION_ONLY]', hook: '[INTERNAL:NO_CREATIVE_HOOK]',
+      outline: { format: 'internal_placeholder', text: '[INTERNAL:NO_CREATIVE_OUTLINE]', reusable: false }, script: null,
+    } }, schemaVersion: 'creative-production-plan-v2' }
+    await expect(store.persistCreativeProductionSuccess(request, { productionPlan: { scenes: [] } }))
+      .rejects.toMatchObject({ code: 'CAMPAIGN_REGISTRATION_ONLY', status: 409 })
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('freezes Campaign, verified facts, and asset metadata before queueing a production revision', async () => {

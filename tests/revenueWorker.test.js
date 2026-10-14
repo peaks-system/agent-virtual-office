@@ -122,6 +122,26 @@ describe('Revenue Lab job handler and local worker', () => {
     expect(store.persistCreativeProductionSuccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'request-1' }), result)
   })
 
+  it('rejects a legacy queued registration placeholder before calling the Creative producer', async () => {
+    const inputSnapshot = { iteration: {
+      appeal_hypothesis: '[INTERNAL:DIRECT_PRODUCT_REGISTRATION_ONLY]', hook: '[INTERNAL:NO_CREATIVE_HOOK]',
+      outline: { format: 'internal_placeholder', text: '[INTERNAL:NO_CREATIVE_OUTLINE]', reusable: false }, script: null,
+    } }
+    const store = {
+      getCreativeProductionRequest: vi.fn(async () => ({ id: 'request-placeholder', inputSnapshot, revisionNumber: 1 })),
+      markCreativeProductionRunning: vi.fn(), persistCreativeProductionSuccess: vi.fn(),
+      persistCreativeProductionFailure: vi.fn(async () => {}),
+    }
+    const creativeProducer = { plan: vi.fn() }
+    const handler = createJobHandlers({ store, youtube: {}, creativeProducer }).get('creative.production.plan')
+    await expect(handler({ payload: { creative_production_request_id: 'request-placeholder' } }))
+      .rejects.toMatchObject({ code: 'CREATIVE_PRODUCTION_REGISTRATION_ONLY' })
+    expect(creativeProducer.plan).not.toHaveBeenCalled()
+    expect(store.markCreativeProductionRunning).not.toHaveBeenCalled()
+    expect(store.persistCreativeProductionSuccess).not.toHaveBeenCalled()
+    expect(store.persistCreativeProductionFailure).toHaveBeenCalledWith('request-placeholder', expect.objectContaining({ code: 'CREATIVE_PRODUCTION_REGISTRATION_ONLY' }))
+  })
+
   it('preserves safe Creative Production validator diagnostics before store persistence', async () => {
     const inputSnapshot = { contract: { schema_version: 'creative-production-plan-v2' } }
     const store = {
@@ -320,6 +340,7 @@ describe('Revenue Lab job handler and local worker', () => {
     expect(boundedInteger('5000', 30000, 5000, 300000)).toBe(5000)
     expect(boundedInteger('3601', 300, 60, 3600)).toBe(300)
   })
+
   it('recovers timed-out provider polling once and defers retryable jobs without finishing them', async () => {
     const deferred = Object.assign(new Error('still waiting'), { code: 'VIDEO_GENERATION_POLL_TIMEOUT', deferJob: true, retryAfterSeconds: 30 })
     const store = {

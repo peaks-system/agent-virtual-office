@@ -1,7 +1,8 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { buildThreePicksCandidatePool, canCreateThreePicks, RevenueLabView, toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
+import { buildThreePicksCandidatePool, canCreateThreePicks, RevenueLabView,
+  threePicksCardPresentation, toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
 
 const fn = vi.fn()
 const handlers = { onReload: fn, onRun: fn, onTrack: fn, onAnalyze: fn, onReview: fn, onTranslate: fn,
@@ -42,10 +43,19 @@ describe('Multi-product Shorts Dashboard', () => {
       campaigns: [...[1, 2, 3].map(singleCampaign), multi], latestJob: null }
     const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
     expect(markup).toContain('Three Picksを作成')
+    expect(markup).toContain('商品 → Three Picks制作 → MP4 → 公開・分析')
     expect(markup).toContain('PICK 1')
     expect(markup).toContain('Three Picks Plan')
     expect(markup).toContain('1080×1920')
     expect(markup).not.toContain('第1位')
+  })
+
+  it('keeps v1 and v2 Product Card revisions compatible in the normal display', () => {
+    expect(threePicksCardPresentation({ productName: '従来商品', shortAppeal: '従来訴求',
+      verifiedFact: { value: '従来事実' } })).toEqual({ displayName: '従来商品', shortAppeal: '従来訴求', factBadge: '従来事実', tts: '従来訴求' })
+    expect(threePicksCardPresentation({ productName: '正本商品', shortAppeal: '短い訴求',
+      cardSnapshot: { display_name: '表示名', fact_badge: '事実バッジ', tts: 'ナレーション原稿' },
+      verifiedFact: { value: '全文事実' } })).toEqual({ displayName: '表示名', shortAppeal: '短い訴求', factBadge: '事実バッジ', tts: 'ナレーション原稿' })
   })
 
   it('always shows eligible and ineligible candidates when fewer than three are ready', () => {

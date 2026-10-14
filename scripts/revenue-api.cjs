@@ -14,6 +14,7 @@ const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_MODEL, PROMPT_VERSION: THREE_PICKS_PR
   SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION } = require('./revenue-lab/multi-product-shorts-schema.cjs')
 const { COMPOSITION_VERSION } = require('./revenue-lab/multi-product-shorts-composition.cjs')
 const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
+const { DIRECT_PRODUCT_PLACEHOLDERS, directProductCampaignName } = require('./revenue-lab/direct-product-contract.cjs')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -117,6 +118,54 @@ function manualCampaignInput(input) {
     contentOutline: boundedText(input.contentOutline, 'contentOutline', 5000),
     scriptText: boundedText(input.scriptText, 'scriptText', 20000, { optional: true }),
     ...publication,
+  }
+}
+
+function directProductInput(input) {
+  const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+  if (!UUID.test(idempotencyKey)) throw new TypeError('Invalid idempotencyKey')
+  const currency = boundedText(input.currency || 'JPY', 'currency', 3).toUpperCase()
+  if (!/^[A-Z]{3}$/.test(currency)) throw new TypeError('Invalid currency')
+  const priceAmount = input.priceAmount == null || input.priceAmount === '' ? null : Number(input.priceAmount)
+  if (priceAmount != null && (!Number.isFinite(priceAmount) || priceAmount < 0)) throw new TypeError('Invalid priceAmount')
+  if (typeof input.isOwnProduct !== 'boolean') throw new TypeError('Invalid isOwnProduct')
+  const assets = input.assets == null ? [] : input.assets
+  if (!Array.isArray(assets) || assets.length > 10) throw new TypeError('Invalid assets')
+  const assetKinds = new Set(['hero', 'detail', 'package', 'lifestyle', 'logo', 'other'])
+  const assetSources = new Set(['self_owned', 'brand_supplied', 'licensed_library', 'retailer_reference', 'other'])
+  const permissions = new Set(['owned', 'licensed', 'authorized_reference', 'unknown'])
+  const normalizedAssets = assets.map(asset => {
+    if (!asset || typeof asset !== 'object' || Array.isArray(asset)) throw new TypeError('Invalid asset')
+    const assetKind = boundedText(asset.assetKind, 'assetKind', 40)
+    const assetSource = boundedText(asset.assetSource, 'assetSource', 40)
+    const usagePermission = boundedText(asset.usagePermission, 'usagePermission', 40)
+    if (!assetKinds.has(assetKind) || !assetSources.has(assetSource) || !permissions.has(usagePermission)) throw new TypeError('Invalid asset policy')
+    return {
+      assetKind, assetSource, usagePermission,
+      assetUrl: httpsUrl(asset.assetUrl, 'assetUrl'),
+      label: boundedText(asset.label, 'assetLabel', 160, { optional: true }),
+    }
+  })
+  if (new Set(normalizedAssets.map(asset => asset.assetUrl)).size !== normalizedAssets.length) throw new TypeError('Duplicate assetUrl')
+  return {
+    idempotencyKey,
+    campaignName: directProductCampaignName(input.productName),
+    objective: null,
+    merchant: boundedText(input.merchant, 'merchant', 80),
+    productName: boundedText(input.productName, 'productName', 240),
+    productUrl: httpsUrl(input.productUrl, 'productUrl'),
+    affiliateUrl: httpsUrl(input.affiliateUrl, 'affiliateUrl', { optional: true }),
+    priceAmount, currency,
+    productCategory: boundedText(input.productCategory, 'productCategory', 120, { optional: true }),
+    verifiedFacts: boundedText(input.verifiedFacts, 'verifiedFacts', 4000),
+    cautions: boundedText(input.cautions, 'cautions', 2000, { optional: true }),
+    productNotes: boundedText(input.productNotes, 'productNotes', 1000, { optional: true }),
+    isOwnProduct: input.isOwnProduct,
+    assets: normalizedAssets,
+    appealHypothesis: DIRECT_PRODUCT_PLACEHOLDERS.appealHypothesis,
+    hookText: DIRECT_PRODUCT_PLACEHOLDERS.hookText,
+    contentOutline: DIRECT_PRODUCT_PLACEHOLDERS.contentOutline,
+    scriptText: null,
   }
 }
 
@@ -282,6 +331,13 @@ function createRevenueApi({
         const result = await getStore().createManualCampaign(manualCampaignMatch[1], manualCampaignInput(await body(req)))
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
+      if (req.method === 'POST' && pathname === '/direct-products/campaigns') {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        const missing = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'].filter(key => !env[key])
+        if (missing.length) return fail(res, 503, 'REVENUE_NOT_CONFIGURED', 'Revenue LabのDB環境変数を設定してください。', { missing })
+        const result = await getStore().createDirectProductCampaign(directProductInput(await body(req)))
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
       if (req.method === 'POST' && pathname === '/three-picks/campaigns') {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
         const result = await getStore().createThreePicksCampaign(threePicksCampaignInput(await body(req)))
@@ -436,6 +492,10 @@ function createRevenueApi({
         const status = Number(error.status) || (error.code === 'PRODUCT_ASSET_NOT_FOUND' ? 404 : 400)
         return fail(res, status, error.code, 'Product Asset Revisionを作成または利用できませんでした。素材・権限・Storage設定を確認してください。')
       }
+      if (/^CAMPAIGN_/.test(error?.code || '')) {
+        const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
+        return fail(res, status, error.code, 'Campaignの状態または入力内容を確認してください。')
+      }
       console.error('[revenue-lab] API request failed', { method: req.method, pathname, code: error?.code || 'REVENUE_API_ERROR' })
       return fail(res, 502, 'REVENUE_SERVICE_ERROR', 'Revenue Labの処理を完了できませんでした。接続設定を確認してください。')
     }
@@ -444,4 +504,4 @@ function createRevenueApi({
   return { handler, close() {} }
 }
 
-module.exports = { UUID, configurationStatus, createRevenueApi, errorBody, manualCampaignInput, publicationInput, threePicksCampaignInput }
+module.exports = { UUID, configurationStatus, createRevenueApi, DIRECT_PRODUCT_PLACEHOLDERS, directProductInput, errorBody, manualCampaignInput, publicationInput, threePicksCampaignInput }

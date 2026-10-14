@@ -1,21 +1,31 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { buildProductCards, buildRenderManifest, deterministicBackground } from '../scripts/revenue-lab/multi-product-shorts-composition.cjs'
-import { validateThreePicksOutput } from '../scripts/revenue-lab/multi-product-shorts-schema.cjs'
+import { PROMPT_VERSION, SCHEMA_VERSION, validateThreePicksOutput } from '../scripts/revenue-lab/multi-product-shorts-schema.cjs'
 import { createLocalFfmpegCompositionProvider, inspectPayload } from '../scripts/revenue-lab/providers/local-ffmpeg-composition-provider.cjs'
 import { createSupabaseStore } from '../scripts/revenue-lab/supabase-store.cjs'
 
 const uuid = index => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`
 const input = {
   products: [1, 2, 3].map(index => ({ product_set_item_id: uuid(index),
+    display_name: `商品${index}`, fact_badge: `確認済み事実${index}`,
     allowed_verified_fact_refs: [`fact-${index}`] })),
 }
 const validPlan = {
   archetype: 'three_picks_v1', hook: '暮らしに役立つ3つを短く紹介',
   product_presentations: [1, 2, 3].map(index => ({ product_set_item_id: uuid(index),
-    presentation_order: index, short_appeal: `使い方が分かりやすい商品${index}`,
-    on_screen_text: `PICK ${index}`, verified_fact_ref: `fact-${index}` })),
+    presentation_order: index, display_name: `商品${index}`,
+    short_appeal: `使い方が分かりやすい商品${index}`, fact_badge: `確認済み事実${index}`,
+    tts: `商品${index}は確認済み事実${index}がポイントです`, verified_fact_ref: `fact-${index}` })),
   summary: '用途に合うものを確認してください', cta: '商品情報は説明欄へ',
+}
+
+const legacyPlan = {
+  archetype: 'three_picks_v1', hook: '従来の3商品を紹介',
+  product_presentations: [1, 2, 3].map(index => ({ product_set_item_id: uuid(index),
+    presentation_order: index, short_appeal: `従来訴求${index}`,
+    on_screen_text: `従来表示${index}`, verified_fact_ref: `fact-${index}` })),
+  summary: '従来まとめ', cta: '従来CTA',
 }
 
 function cardItems() {
@@ -27,6 +37,12 @@ function cardItems() {
 }
 
 describe('Multi-product Shorts v1 deterministic contracts', () => {
+  it('uses the v2 compact Creative representation', () => {
+    expect(PROMPT_VERSION).toBe('three-picks-planner-v2')
+    expect(SCHEMA_VERSION).toBe('multi-product-shorts-plan-v2')
+    expect(validateThreePicksOutput(structuredClone(validPlan), input)).toEqual(validPlan)
+  })
+
   it('accepts exactly three distinct products without ranking language', () => {
     expect(validateThreePicksOutput(structuredClone(validPlan), input)).toEqual(validPlan)
     expect(() => validateThreePicksOutput({ ...validPlan, product_presentations: validPlan.product_presentations.slice(0, 2) }, input)).toThrowError(expect.objectContaining({ code: 'THREE_PICKS_INVALID_OUTPUT' }))
@@ -45,9 +61,18 @@ describe('Multi-product Shorts v1 deterministic contracts', () => {
     const cards = buildProductCards(validPlan, cardItems())
     expect(cards).toHaveLength(3)
     expect(cards[0]).toMatchObject({ pick_number: 1, rank_position: null,
-      product_asset_revision_id: uuid(21), card_template_version: 'product-card-v1' })
+      product_asset_revision_id: uuid(21), card_template_version: 'product-card-v2',
+      product_name: '商品1', display_name: '商品1', fact_badge: '確認済み事実1',
+      tts: '商品1は確認済み事実1がポイントです' })
     expect(cards[0]).not.toHaveProperty('reviews')
     expect(cards[0]).not.toHaveProperty('rating')
+  })
+
+  it('normalizes existing v1 plan revisions without rewriting their evidence', () => {
+    const cards = buildProductCards(legacyPlan, cardItems())
+    expect(cards[0]).toMatchObject({ product_name: '商品1', display_name: '商品1',
+      short_appeal: '従来訴求1', fact_badge: '従来表示1', tts: '従来訴求1',
+      verified_fact_ref: 'fact-1' })
   })
 
   it('keeps background and composition fingerprints deterministic', () => {

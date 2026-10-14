@@ -11,8 +11,9 @@ const { ADAPTER_VERSION: WAN_ADAPTER_VERSION, MODEL: WAN_MODEL,
   PROVIDER_ID: WAN_PROVIDER_ID, PROVIDER_VERSION: WAN_PROVIDER_VERSION } = require('./providers/pollo-wan-video-generation-provider.cjs')
 const { buildProductIdentityPrompt } = require('./product-i2v-prompt-builder.cjs')
 const { DEFAULT_MODEL: THREE_PICKS_DEFAULT_MODEL, PROMPT_VERSION: THREE_PICKS_PROMPT_VERSION,
-  SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION } = require('./multi-product-shorts-schema.cjs')
+  SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION, compactDisplayName, compactFactBadge } = require('./multi-product-shorts-schema.cjs')
 const { COMPOSITION_VERSION, buildProductCards, buildRenderManifest } = require('./multi-product-shorts-composition.cjs')
+const { directProductCreativeSnapshot, isDirectProductRegistrationPlaceholder } = require('./direct-product-contract.cjs')
 
 const PROFILE = 'revenue_lab'
 
@@ -79,6 +80,12 @@ function opportunityFromRow(row) {
     opportunityScore: Number(row.opportunity_score),
     percentilePopulationSize: row.percentile_population_size,
     createdAt: row.created_at,
+  }
+}
+
+function assertCreativeReusable(iteration) {
+  if (isDirectProductRegistrationPlaceholder(iteration)) {
+    throw new RevenueStoreError('CAMPAIGN_REGISTRATION_ONLY', 'Direct Product registration placeholders cannot become Creative or Publication evidence', 409)
   }
 }
 
@@ -446,6 +453,7 @@ function createSupabaseStore({
         rankPosition: row.rank_position, productName: row.product_name_snapshot,
         shortAppeal: row.short_appeal, verifiedFactRef: row.verified_fact_ref,
         verifiedFact: row.verified_fact_snapshot, price: row.price_snapshot,
+        cardSnapshot: row.card_snapshot || null,
         cardTemplateVersion: row.card_template_version })
       cardsByPlan.set(row.creative_archetype_plan_id, records)
     }
@@ -546,7 +554,8 @@ function createSupabaseStore({
       const product = productById.get(row.curated_product_id); const records = iterationsByCampaign.get(row.campaign_id) || []
       records.push({ id: row.id, iterationNumber: row.iteration_number, status: row.status, sourceAnalysisId: row.source_analysis_id, productSetId: row.product_set_id,
         appealHypothesis: row.appeal_hypothesis, hookText: row.hook_text, contentOutline: row.content_outline,
-        scriptText: row.script_text, treatmentFingerprint: row.treatment_fingerprint, lockedAt: row.locked_at,
+        scriptText: row.script_text, registrationOnly: row.content_outline?.format === 'internal_placeholder'
+          && row.content_outline?.reusable === false, treatmentFingerprint: row.treatment_fingerprint, lockedAt: row.locked_at,
         product: product ? { id: product.id, sourceKind: product.source_kind, discoveryChannel: product.discovery_channel,
           searchKeyword: product.search_keyword, merchant: product.merchant, productName: product.product_name,
           productUrl: product.product_url, affiliateUrl: product.affiliate_url, priceAmount: product.price_amount == null ? null : Number(product.price_amount),
@@ -896,6 +905,41 @@ function createSupabaseStore({
     })
   }
 
+  async function getDefaultProject() {
+    const rows = await request('projects?select=id,name&order=created_at.asc&limit=1')
+    return rows?.[0] || null
+  }
+
+  async function createDirectProductCampaign(input) {
+    const project = await getDefaultProject()
+    if (!project?.id) throw new RevenueStoreError('DIRECT_PRODUCT_PROJECT_NOT_FOUND', 'Revenue Lab project was not found', 404)
+    const product = {
+      merchant: input.merchant, product_name: input.productName, product_url: input.productUrl,
+      affiliate_url: input.affiliateUrl || null, price_amount: input.priceAmount,
+      currency: input.currency, product_category: input.productCategory || null,
+      verified_facts: { summary: input.verifiedFacts }, cautions: input.cautions || null,
+      notes: input.productNotes || null, is_own_product: input.isOwnProduct,
+      assets: input.assets.map((asset, index) => ({
+        ordinal: index + 1, asset_kind: asset.assetKind, asset_url: asset.assetUrl,
+        asset_source: asset.assetSource, usage_permission: asset.usagePermission,
+        label: asset.label || null,
+      })),
+    }
+    const creative = directProductCreativeSnapshot()
+    const payload = {
+      campaign: { name: input.campaignName, objective: input.objective || null },
+      product,
+      creative,
+    }
+    return rpc('create_direct_product_campaign', {
+      p_project_id: project.id, p_payload: payload,
+      p_treatment_fingerprint: inputFingerprint({
+        lineage_kind: 'direct_product', product_facts: product, creative_hypotheses: creative,
+      }),
+      p_request_fingerprint: inputFingerprint(payload), p_idempotency_key: input.idempotencyKey,
+    })
+  }
+
   async function createThreePicksCampaign(input) {
     const project = await getDefaultProject()
     if (!project) throw new RevenueStoreError('PROJECT_NOT_FOUND', 'Revenue Lab project was not found', 404)
@@ -941,6 +985,8 @@ function createSupabaseStore({
       iteration: { id: iteration.id, appeal_hypothesis: iteration.appeal_hypothesis },
       products: itemRows.map(row => ({
         product_set_item_id: row.id, product_name: row.product_name_snapshot,
+        display_name: compactDisplayName(row.product_name_snapshot),
+        fact_badge: compactFactBadge(row.verified_fact_snapshot?.value),
         allowed_verified_fact_refs: [row.verified_fact_ref], verified_fact: row.verified_fact_snapshot,
         price: row.price_snapshot, original_presentation_order: row.presentation_order,
       })),
@@ -1088,6 +1134,7 @@ function createSupabaseStore({
     const iterations = await request(`campaign_iterations?id=eq.${encodeURIComponent(iterationId)}&select=*&limit=1`)
     const iteration = iterations?.[0]
     if (!iteration) throw new RevenueStoreError('CAMPAIGN_ITERATION_NOT_FOUND', 'Campaign iteration was not found', 404)
+    assertCreativeReusable(iteration)
     if (!iteration.curated_product_id || iteration.product_set_id) {
       throw new RevenueStoreError('CREATIVE_PRODUCTION_SINGLE_PRODUCT_REQUIRED', 'Legacy Creative Production requires a single-product iteration', 409)
     }
@@ -1159,6 +1206,7 @@ function createSupabaseStore({
   }
 
   async function persistCreativeProductionSuccess(requestRow, result) {
+    assertCreativeReusable(requestRow.inputSnapshot?.iteration)
     const now = new Date().toISOString()
     const plan = result.productionPlan
     const isV2 = requestRow.schemaVersion === CREATIVE_SCHEMA_VERSION
@@ -1409,6 +1457,9 @@ function createSupabaseStore({
   }
 
   async function registerCampaignPublication(iterationId, input) {
+    const rows = await request(`campaign_iterations?id=eq.${encodeURIComponent(iterationId)}&select=appeal_hypothesis,hook_text,content_outline,script_text&limit=1`)
+    if (!rows?.[0]) throw new RevenueStoreError('CAMPAIGN_ITERATION_NOT_FOUND', 'Campaign iteration was not found', 404)
+    assertCreativeReusable(rows[0])
     return rpc('register_campaign_publication', {
       p_campaign_iteration_id: iterationId,
       p_youtube_video_id: input.youtubeVideoId,
@@ -1753,7 +1804,7 @@ function createSupabaseStore({
     claimNext, dashboard, deferJob, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
     getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
     enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
-    persistProductSearchFailure, createProductDecision, createManualCampaign,
+    persistProductSearchFailure, createProductDecision, createManualCampaign, createDirectProductCampaign,
     createThreePicksCampaign, enqueueThreePicksPlan, getThreePicksRequest, markThreePicksRunning,
     persistThreePicksSuccess, persistThreePicksFailure, enqueueFinalComposition,
     getFinalCompositionRequest, markFinalCompositionRendering, persistFinalCompositionSuccess,

@@ -1,6 +1,6 @@
 ---
 status: frozen
-version: 1.1
+version: 1.2
 date: 2026-10-14
 ---
 
@@ -24,15 +24,19 @@ Human selection uses checkboxes. At most three distinct products may be selected
 
 An insufficient pool links to the existing Direct Product Intake; it does not create another product-registration path. A permitted Product Asset without an immutable revision exposes an Asset Revision preparation action that reuses the existing Product Asset Revision mechanism. Newly registered or prepared products enter the same candidate pool after the normal Dashboard refresh.
 
+The normal candidate card is task-focused and shows only product image, `display_name`, eligibility, `short_appeal`, `fact_badge`, and the selection control. Full verified facts, Product Asset Revision number, SHA-256, prompt/schema versions, fingerprints, and lineage identifiers remain available under expandable history and audit details.
+
 ## Three Picks plan
 
-`three-picks-planner-v1` uses Structured Outputs. The model may produce only a hook, presentation order, one-line short appeal and on-screen copy per selected item, summary, and CTA. Product names, price, specifications, reviews, ratings, and factual claims are supplied only from frozen human-verified input.
+`three-picks-planner-v2` uses Structured Outputs. Its compact Creative representation centers on `display_name`, `short_appeal`, `fact_badge`, and narration-script data in `tts`, plus a concise hook, summary, and CTA. `tts` is text data only; UX Simplification v1 does not synthesize audio. Product names, price, specifications, reviews, ratings, and factual claims are supplied only from frozen human-verified input.
 
-The deterministic validator rejects duplicate/missing items, ranking language, unknown fact references, product identity changes, and more than three items. Product Cards are assembled server-side from verified snapshots; model output never becomes a product fact.
+The deterministic validator rejects duplicate/missing items, ranking language, unknown fact references, product identity changes, and more than three items. `display_name` is a bounded display label and cannot replace the frozen product-name snapshot. `fact_badge` and `tts` must cite the selected verified fact. Product Cards are assembled server-side from verified snapshots; model output never becomes a product fact.
+
+Existing `multi-product-shorts-plan-v1` revisions remain readable and renderable. The Dashboard derives legacy display values from `product_name_snapshot`, `short_appeal`, and the verified fact snapshot without rewriting historical rows.
 
 ## Product Card v1
 
-Each card uses a real immutable `product_asset_revisions` row. The card contains only `PICK n`, the frozen product name, one short appeal, one verified fact, and an optional verified price. AI-generated product images are prohibited. Commerce destination lineage is frozen with the card.
+Each card uses a real immutable `product_asset_revisions` row. The normal card contains only the product image, `display_name`, `short_appeal`, and `fact_badge`; the frozen product name, full verified fact, optional verified price, commerce destination, and Asset Revision lineage remain in its immutable audit snapshot. AI-generated product images are prohibited.
 
 ## Background and composition
 
@@ -48,4 +52,4 @@ Plan and render fingerprints cover every frozen input. Active duplicate requests
 
 ## Non-goals
 
-No AI product selection, `ranking_listicle`, separate product-registration path, stock B-roll, generated B-roll, TTS, BGM, Creative Critic, YouTube upload, affiliate event ingestion, I2V, Pollo, Wan, bucket creation, migration application, FFmpeg installation, or Live render.
+No AI product selection, `ranking_listicle`, separate product-registration path, URL product auto-fetch, Asset Prep, stock B-roll, generated/background video, synthesized TTS audio, SE/BGM, 35–40-second Creative Archetype, Creative Critic, YouTube upload, affiliate event ingestion, I2V, Pollo, Wan, bucket creation, migration application, FFmpeg installation, or Live render.

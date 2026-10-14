@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { RevenueLabView, campaignSavePresentation, manualProductSearchLinks, newCampaignIdempotencyKey, nextCollectionLabel, opportunityReasons, queryNeedsScores, safeRakutenUrl, scoreLabel, scoreStrength, velocityPresentation, videoReviewUrl } from '../src/components/RevenueLabDashboard'
 
-const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onAnalyze: vi.fn(), onReview: vi.fn(), onProductSearch: vi.fn(), onProductDecision: vi.fn(), onCreateCampaign: vi.fn(), onRegisterPublication: vi.fn(), onSave: vi.fn() }
+const handlers = { onReload: vi.fn(), onRun: vi.fn(), onTrack: vi.fn(), onAnalyze: vi.fn(), onReview: vi.fn(), onProductSearch: vi.fn(), onProductDecision: vi.fn(), onCreateCampaign: vi.fn(), onCreateDirectProduct: vi.fn(), onRegisterPublication: vi.fn(), onSave: vi.fn() }
 
 describe('Revenue Lab dashboard', () => {
   it('formats saved scores and detects incomplete human inputs', () => {
@@ -227,4 +227,37 @@ describe('Revenue Lab dashboard', () => {
     expect(markup).toContain('公開後にYouTube情報を追加')
     expect(markup).toContain('Publicationを登録')
   })
+  it('renders an independent Direct Product intake and explicit fact, asset, and Campaign lineage', () => {
+    const campaigns = [{
+      id: 'campaign-direct', lineageKind: 'direct_product', name: '自社商品Campaign', status: 'active', origins: [],
+      iterations: [{ id: 'iteration-direct', iterationNumber: 1, status: 'draft', sourceAnalysisId: null,
+        registrationOnly: true, appealHypothesis: '[INTERNAL:DIRECT_PRODUCT_REGISTRATION_ONLY]',
+        hookText: '[INTERNAL:NO_CREATIVE_HOOK]', contentOutline: { format: 'internal_placeholder', text: '[INTERNAL:NO_CREATIVE_OUTLINE]', reusable: false }, treatmentFingerprint: 'd'.repeat(64),
+        product: { productName: '確認済み商品', merchant: '自社', productCategory: '生活用品', productUrl: 'https://example.com/product', isOwnProduct: true,
+          verifiedFacts: { summary: '寸法と材質を確認済み' }, cautions: '火気厳禁',
+          assets: [{ id: 'asset-1', ordinal: 1, label: '正面素材', assetUrl: 'https://example.com/hero.jpg', assetKind: 'hero', assetSource: 'self_owned', usagePermission: 'owned', creativeEligible: true }] },
+        publication: null }],
+    }]
+    const state = { config: { configured: true, missing: [], analysis: { configured: false }, products: { configured: false } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns, latestJob: null }
+    const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
+    expect(markup).toContain('商品を登録')
+    expect(markup).toContain('商品情報と利用可能な素材を登録')
+    expect(markup).toContain('確認済み事実の詳細')
+    expect(markup).toContain('Product Asset')
+    const intake = markup.slice(markup.indexOf('id="direct-product-intake"'), markup.indexOf('</section>', markup.indexOf('id="direct-product-intake"')))
+    expect(intake).not.toContain('Campaign名')
+    expect(intake).not.toContain('訴求仮説')
+    expect(intake).not.toContain('台本本文')
+    expect(markup).toContain('Direct Product · Opportunity/AI Analysisなし')
+    expect(markup).toContain('確認済み商品 · 自社商品')
+    expect(markup).toContain('寸法と材質を確認済み')
+    expect(markup).toContain('正面素材')
+    expect(markup).toContain('対象外（Direct Product）')
+    expect(markup).toContain('CreativeはThree Picks制作案で生成します')
+    expect(markup).not.toContain('[INTERNAL:')
+    expect(markup).not.toContain('Creative Production Plan')
+    expect(markup).not.toContain('Publicationを登録')
+  })
+
+
 })

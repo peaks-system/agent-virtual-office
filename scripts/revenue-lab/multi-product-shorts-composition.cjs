@@ -5,7 +5,7 @@ const { canonicalize } = require('./canonical-json.cjs')
 const { RANKING_PATTERN } = require('./multi-product-shorts-schema.cjs')
 
 const BACKGROUND_VERSION = 'simple-animated-background-v1'
-const CARD_TEMPLATE_VERSION = 'product-card-v1'
+const CARD_TEMPLATE_VERSION = 'product-card-v2'
 const COMPOSITION_VERSION = 'local-shorts-composer-v1'
 
 function hash(value) { return createHash('sha256').update(canonicalize(value)).digest('hex') }
@@ -31,14 +31,18 @@ function buildProductCards(plan, items) {
   return [...plan.product_presentations].sort((a, b) => a.presentation_order - b.presentation_order).map((presentation, index) => {
     const item = byId.get(presentation.product_set_item_id)
     if (!item) throw Object.assign(new Error('Product Set item was not found'), { code: 'THREE_PICKS_PRODUCT_MISMATCH' })
-    if (presentation.verified_fact_ref !== item.verifiedFactRef || RANKING_PATTERN.test(`${presentation.short_appeal} ${presentation.on_screen_text}`)) {
+    const displayName = presentation.display_name || item.productName
+    const factBadge = presentation.fact_badge || presentation.on_screen_text || String(item.verifiedFact?.value ?? '')
+    const tts = presentation.tts || presentation.short_appeal
+    if (presentation.verified_fact_ref !== item.verifiedFactRef || RANKING_PATTERN.test(`${displayName} ${presentation.short_appeal} ${factBadge} ${tts}`)) {
       throw Object.assign(new Error('Product Card input is not verified'), { code: 'THREE_PICKS_CARD_INVALID' })
     }
     return {
       product_set_item_id: item.id, product_destination_id: item.destination.id,
       product_asset_revision_id: item.assetRevision.id, product_asset_sha256: item.assetRevision.contentSha256,
       pick_number: index + 1, rank_position: null, product_name: item.productName,
-      short_appeal: presentation.short_appeal, on_screen_text: presentation.on_screen_text,
+      display_name: displayName, short_appeal: presentation.short_appeal,
+      fact_badge: factBadge, tts, on_screen_text: factBadge,
       verified_fact_ref: item.verifiedFactRef, verified_fact: item.verifiedFact,
       price: item.price || null, commerce_destination: item.destination.snapshot,
       card_template_version: CARD_TEMPLATE_VERSION,

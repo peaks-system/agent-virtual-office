@@ -3,7 +3,7 @@ import http from 'node:http'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { configurationStatus, createRevenueApi } = require('../scripts/revenue-api.cjs')
+const { configurationStatus, createRevenueApi, directProductInput, DIRECT_PRODUCT_PLACEHOLDERS } = require('../scripts/revenue-api.cjs')
 const uuid = '11111111-1111-4111-8111-111111111111'
 const idempotencyKey = '22222222-2222-4222-8222-222222222222'
 const servers = []
@@ -140,6 +140,47 @@ describe('Revenue Lab API', () => {
     expect(response.status).toBe(201)
     expect((await response.json()).data).toMatchObject({ publicationId: null, iterationStatus: 'draft' })
     expect(store.createManualCampaign).toHaveBeenCalledWith(uuid, expect.objectContaining({ youtubeVideoId: null, publicationTitle: null, publishedAt: null }))
+  })
+
+  it('creates a Direct Product Campaign without Opportunity or AI lineage', async () => {
+    const store = { createDirectProductCampaign: vi.fn(async () => ({ campaignId: uuid, publicationId: null, iterationStatus: 'draft', lineageKind: 'direct_product', created: true })) }
+    const origin = await fixture({ store })
+    const input = {
+      idempotencyKey, merchant: '自社',
+      productName: '確認済み商品', productUrl: 'https://example.com/product', affiliateUrl: '',
+      priceAmount: 5000, currency: 'jpy', productCategory: '生活用品', verifiedFacts: '材質と寸法を確認済み',
+      cautions: '火気厳禁', productNotes: '', isOwnProduct: true,
+      assets: [{ assetUrl: 'https://example.com/hero.jpg', assetKind: 'hero', assetSource: 'self_owned', usagePermission: 'owned', label: '正面' }],
+    }
+    const response = await fetch(`${origin}/api/revenue/direct-products/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(input) })
+    expect(response.status).toBe(201)
+    expect(store.createDirectProductCampaign).toHaveBeenCalledWith(expect.objectContaining({
+      productName: '確認済み商品', productCategory: '生活用品', isOwnProduct: true, currency: 'JPY',
+      campaignName: '確認済み商品 · 商品登録', objective: null,
+      appealHypothesis: DIRECT_PRODUCT_PLACEHOLDERS.appealHypothesis,
+      hookText: DIRECT_PRODUCT_PLACEHOLDERS.hookText,
+      contentOutline: DIRECT_PRODUCT_PLACEHOLDERS.contentOutline,
+      scriptText: null,
+      affiliateUrl: null, assets: [expect.objectContaining({ assetKind: 'hero', usagePermission: 'owned' })],
+    }))
+    expect(store.createDirectProductCampaign.mock.calls[0][0]).not.toHaveProperty('analysisId')
+
+    const invalid = await fetch(`${origin}/api/revenue/direct-products/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ ...input, assets: [{ ...input.assets[0], usagePermission: 'assumed' }] }) })
+    expect(invalid.status).toBe(400)
+  })
+
+  it('generates bounded deterministic lineage placeholders instead of accepting Direct Product creative input', () => {
+    const base = { idempotencyKey, merchant: '自社', productName: '長'.repeat(240),
+      productUrl: 'https://example.com/product', currency: 'JPY', verifiedFacts: '確認済み',
+      isOwnProduct: false, assets: [] }
+    const first = directProductInput({ ...base, campaignName: '利用者入力', hookText: '流用禁止' })
+    const second = directProductInput(base)
+    expect(first.campaignName).toBe(second.campaignName)
+    expect(Array.from(first.campaignName)).toHaveLength(120)
+    expect(first).toMatchObject({ objective: null, appealHypothesis: DIRECT_PRODUCT_PLACEHOLDERS.appealHypothesis,
+      hookText: DIRECT_PRODUCT_PLACEHOLDERS.hookText, contentOutline: DIRECT_PRODUCT_PLACEHOLDERS.contentOutline,
+      scriptText: null, productCategory: null })
+    expect(first.hookText).not.toContain('流用禁止')
   })
 
   it('registers a real YouTube publication later and validates only supplied IDs', async () => {

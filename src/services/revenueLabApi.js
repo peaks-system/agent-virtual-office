@@ -73,6 +73,12 @@ export function createManualCampaign(analysisId, input) {
   })
 }
 
+export function createDirectProductCampaign(input) {
+  return request('/direct-products/campaigns', {
+    method: 'POST', body: JSON.stringify(input),
+  })
+}
+
 export function createThreePicksCampaign(input) {
   return request('/three-picks/campaigns', { method: 'POST', body: JSON.stringify(input) })
 }
