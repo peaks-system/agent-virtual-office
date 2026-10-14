@@ -83,14 +83,30 @@ export function createThreePicksCampaign(input) {
   return request('/three-picks/campaigns', { method: 'POST', body: JSON.stringify(input) })
 }
 
+export function createThreePicksV2Campaign(input) {
+  return request('/three-picks-v2/campaigns', { method: 'POST', body: JSON.stringify(input) })
+}
+
 export function enqueueThreePicksPlan(iterationId, idempotencyKey) {
   return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/three-picks-plans`, {
     method: 'POST', body: JSON.stringify({ idempotencyKey }),
   })
 }
 
+export function enqueueThreePicksV2Plan(iterationId, idempotencyKey) {
+  return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/three-picks-v2-plans`, {
+    method: 'POST', body: JSON.stringify({ idempotencyKey }),
+  })
+}
+
 export function enqueueFinalComposition(planId, idempotencyKey) {
   return request(`/three-picks-plans/${encodeURIComponent(planId)}/compositions`, {
+    method: 'POST', body: JSON.stringify({ idempotencyKey }),
+  })
+}
+
+export function enqueueFinalCompositionV2(planId, idempotencyKey) {
+  return request(`/three-picks-v2-plans/${encodeURIComponent(planId)}/compositions`, {
     method: 'POST', body: JSON.stringify({ idempotencyKey }),
   })
 }

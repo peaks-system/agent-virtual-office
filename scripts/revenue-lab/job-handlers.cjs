@@ -11,8 +11,9 @@ class RevenueJobError extends Error {
 }
 
 function createJobHandlers({ store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
-  finalCompositionProvider, compositionBlobStore, videoGenerationProvider,
-  imageToVideoProvider, productAssetBlobStore, productProvider, clock = () => new Date(),
+  multiProductShortsV2Planner,
+  finalCompositionProvider, finalCompositionV2Provider, compositionBlobStore, videoGenerationProvider,
+  imageToVideoProvider, productAssetBlobStore, creativeAudioBlobStore, productProvider, clock = () => new Date(),
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), videoPollAttempts = 30, videoPollIntervalMs = 5000 } = {}) {
   if (!store || !youtube) throw new TypeError('store and youtube are required')
 
@@ -357,13 +358,17 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
   async function createThreePicksPlan(job) {
     const requestId = job?.payload?.creative_archetype_request_id
     if (!requestId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'creative_archetype_request_id is required')
-    if (!multiProductShortsPlanner) throw new RevenueJobError('OPENAI_NOT_CONFIGURED', 'Three Picks planning is not configured')
     const request = await store.getThreePicksRequest(requestId)
     if (!request) throw new RevenueJobError('THREE_PICKS_REQUEST_NOT_FOUND', 'Three Picks request was not found')
+    const isV2 = request.archetype === 'three_picks_v2'
+    const planner = isV2 ? multiProductShortsV2Planner : multiProductShortsPlanner
+    if (!planner) throw new RevenueJobError('OPENAI_NOT_CONFIGURED', 'Three Picks planning is not configured')
     await store.markThreePicksRunning(requestId)
     try {
-      const result = await multiProductShortsPlanner.plan(request.inputSnapshot)
-      const saved = await store.persistThreePicksSuccess(request, result)
+      const result = await planner.plan(request.inputSnapshot)
+      const saved = isV2
+        ? await store.persistThreePicksV2Success(request, result)
+        : await store.persistThreePicksSuccess(request, result)
       return { creativeArchetypeRequestId: requestId, planId: saved.planId, revisionNumber: request.revisionNumber }
     } catch (error) {
       try { await store.persistThreePicksFailure(requestId, error) }
@@ -375,12 +380,14 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
   async function composeFinalShort(job) {
     const requestId = job?.payload?.final_composition_request_id
     if (!requestId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'final_composition_request_id is required')
-    if (!finalCompositionProvider || !compositionBlobStore || !productAssetBlobStore) {
-      throw new RevenueJobError('COMPOSITION_NOT_CONFIGURED', 'Local composition is not configured')
-    }
     const composition = await store.getFinalCompositionRequest(requestId)
     if (!composition) throw new RevenueJobError('COMPOSITION_REQUEST_NOT_FOUND', 'Final composition request was not found')
-    if (composition.provider !== finalCompositionProvider.id || composition.providerVersion !== finalCompositionProvider.version) {
+    const isV2 = composition.archetype === 'three_picks_v2'
+    const provider = isV2 ? finalCompositionV2Provider : finalCompositionProvider
+    if (!provider || !compositionBlobStore || !productAssetBlobStore || (isV2 && !creativeAudioBlobStore)) {
+      throw new RevenueJobError('COMPOSITION_NOT_CONFIGURED', 'Local composition is not configured')
+    }
+    if (composition.provider !== provider.id || composition.providerVersion !== provider.version) {
       throw new RevenueJobError('COMPOSITION_PROVIDER_MISMATCH', 'Final composition provider does not match the request')
     }
     await store.markFinalCompositionRendering(requestId)
@@ -392,7 +399,14 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
         if (digest !== asset.contentSha256) throw new RevenueJobError('COMPOSITION_ASSET_HASH_MISMATCH', 'Product Asset bytes failed integrity verification')
         assets.set(asset.id, bytes)
       }
-      const rendered = await finalCompositionProvider.render({ manifest: composition.renderManifest, assets })
+      const audioAssets = new Map()
+      if (isV2) for (const artifact of composition.audioAssets) {
+        const bytes = await creativeAudioBlobStore.readImmutable(artifact.immutableObjectKey)
+        const digest = createHash('sha256').update(bytes).digest('hex')
+        if (digest !== artifact.contentSha256) throw new RevenueJobError('COMPOSITION_AUDIO_HASH_MISMATCH', 'Creative Audio bytes failed integrity verification')
+        audioAssets.set(artifact.id, bytes)
+      }
+      const rendered = await provider.render({ manifest: composition.renderManifest, assets, audioAssets })
       const contentSha256 = createHash('sha256').update(rendered.bytes).digest('hex')
       const immutableObjectKey = `shorts-outputs/${composition.campaignId}/${contentSha256}.mp4`
       await compositionBlobStore.putImmutable(immutableObjectKey, rendered.bytes)
@@ -404,7 +418,7 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
       })
       return { finalCompositionRequestId: requestId, status: 'succeeded' }
     } catch (rawError) {
-      const error = finalCompositionProvider.normalizeError(rawError)
+      const error = provider.normalizeError(rawError)
       try { await store.persistFinalCompositionFailure(requestId, error) }
       catch { console.error('[revenue-lab] Composition failure state could not be persisted', { requestId }) }
       throw new RevenueJobError(error.code || 'COMPOSITION_FAILED', 'Final composition failed')

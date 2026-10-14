@@ -8,7 +8,7 @@ const fn = vi.fn()
 const handlers = { onReload: fn, onRun: fn, onTrack: fn, onAnalyze: fn, onReview: fn, onTranslate: fn,
   onEnrich: fn, onTranslationFeedback: fn, onProductSearch: fn, onProductDecision: fn,
   onCreateCampaign: fn, onCreateDirectProduct: fn, onCreateThreePicks: fn, onGenerateThreePicks: fn,
-  onCompose: fn, onPreview: fn, onGenerateProduction: fn, onGenerateVideo: fn,
+  onGenerateThreePicksV2: fn, onCompose: fn, onComposeV2: fn, onPreview: fn, onGenerateProduction: fn, onGenerateVideo: fn,
   onCreateAssetRevision: fn, onGenerateImageVideo: fn, onRegisterPublication: fn,
   onUpdateIteration: fn, onCreateIteration: fn, onDeleteCampaign: fn, onVoidCampaign: fn,
   onConnectAnalytics: fn, onCollectAnalytics: fn, onSave: fn }
@@ -56,6 +56,32 @@ describe('Multi-product Shorts Dashboard', () => {
     expect(threePicksCardPresentation({ productName: '正本商品', shortAppeal: '短い訴求',
       cardSnapshot: { display_name: '表示名', fact_badge: '事実バッジ', tts: 'ナレーション原稿' },
       verifiedFact: { value: '全文事実' } })).toEqual({ displayName: '表示名', shortAppeal: '短い訴求', factBadge: '事実バッジ', tts: 'ナレーション原稿' })
+  })
+
+  it('shows v2 layer-template and segment audio readiness without a Product Card intermediary', () => {
+    const productSet = { id: 'set-v2', archetype: 'three_picks_v2', selectionMode: 'human', items: [1, 2, 3].map(index => ({
+      id: `item-v2-${index}`, presentationOrder: index, productName: `商品${index}`, assetRevision: { revisionNumber: 1 },
+      assetRevisions: [{ assetOrder: 1 }, { assetOrder: 2 }],
+    })) }
+    const presentations = [1, 2, 3].map(index => ({ product_set_item_id: `item-v2-${index}`,
+      presentation_order: index, display_name: `商品${index}`, short_appeal: `短い訴求${index}`,
+      fact_badge: `事実${index}`, tts: `ナレーション${index}` }))
+    const campaign = { id: 'campaign-v2', name: 'Creative Archetype v2', status: 'active', lineageKind: 'product_set', origins: [], iterations: [{
+      id: 'iteration-v2', iterationNumber: 1, status: 'draft', product: null, productSet, publication: null,
+      productionPlans: [], archetypePlans: [{ requestId: 'request-v2', archetype: 'three_picks_v2', revisionNumber: 1,
+        status: 'succeeded', planId: 'plan-v2', output: { hook: { display_text: '3つを紹介' }, product_presentations: presentations,
+          cta: { display_text: '詳細を見る' } }, productCards: [], audioArtifacts: [{ id: 'audio-1', status: 'planned' }], compositions: [] }] }] }
+    const state = { config: { configured: true, missing: [], analysis: {}, products: {},
+      creativeProduction: {}, videoGeneration: {}, imageToVideo: {}, productAssetRevisions: {}, multiProductShorts: {}, finalComposition: {},
+      multiProductShortsV2: { configured: true }, finalCompositionV2: { configured: false } }, queries: [], opportunities: [],
+      trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [campaign], latestJob: null }
+    const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
+    expect(markup).toContain('Creative Archetype v2 Plan')
+    expect(markup).toContain('hero-carousel-v2')
+    expect(markup).toContain('hero-product-layout-v1')
+    expect(markup).toContain('0 / 1 ready')
+    expect(markup).toContain('音声生成providerは未選定')
+    expect(markup).not.toContain('product-card-v3')
   })
 
   it('always shows eligible and ineligible candidates when fewer than three are ready', () => {

@@ -3,7 +3,7 @@ import http from 'node:http'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { configurationStatus, createRevenueApi, directProductInput, DIRECT_PRODUCT_PLACEHOLDERS } = require('../scripts/revenue-api.cjs')
+const { configurationStatus, createRevenueApi, directProductInput, DIRECT_PRODUCT_PLACEHOLDERS, threePicksV2CampaignInput } = require('../scripts/revenue-api.cjs')
 const uuid = '11111111-1111-4111-8111-111111111111'
 const idempotencyKey = '22222222-2222-4222-8222-222222222222'
 const servers = []
@@ -22,6 +22,39 @@ async function fixture({ authorize = () => true, env, store } = {}) {
 }
 
 describe('Revenue Lab API', () => {
+  it('validates v2 Product Set asset cardinality and reports foundation-only audio composition', () => {
+    const input = threePicksV2CampaignInput({ idempotencyKey, campaignName: 'v2', items: [1, 2, 3].map(index => ({
+      curatedProductId: `${index}1111111-1111-4111-8111-111111111111`,
+      productAssetRevisionIds: [`${index}2222222-2222-4222-8222-222222222222`], verifiedFactRef: 'summary',
+    })) })
+    expect(input.items).toHaveLength(3)
+    expect(configurationStatus({ OPENAI_API_KEY: 'configured' }).multiProductShortsV2).toMatchObject({
+      configured: true, archetype: 'three_picks_v2', templateId: 'hero-carousel-v2', templateSelection: 'server_fixed',
+    })
+    expect(configurationStatus({}).finalCompositionV2).toMatchObject({ configured: false,
+      missing: ['TTS_PROVIDER_NOT_SELECTED', 'V2_RENDER_ADAPTER_NOT_CONFIGURED'] })
+    expect(() => threePicksV2CampaignInput({ idempotencyKey, campaignName: 'v2', items: input.items.map(item => ({
+      ...item, productAssetRevisionIds: [uuid, uuid],
+    })) })).toThrow(TypeError)
+  })
+
+  it('routes v2 campaign and plan mutations only to dedicated store methods', async () => {
+    const store = { createThreePicksV2Campaign: vi.fn(async () => ({ created: true })),
+      enqueueThreePicksV2Plan: vi.fn(async () => ({ created: true })) }
+    const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test',
+      YOUTUBE_API_KEY: 'test', OPENAI_API_KEY: 'test' }
+    const origin = await fixture({ store, env })
+    const items = [1, 2, 3].map(index => ({ curatedProductId: `${index}1111111-1111-4111-8111-111111111111`,
+      productAssetRevisionIds: [`${index}2222222-2222-4222-8222-222222222222`], verifiedFactRef: 'summary' }))
+    const created = await fetch(`${origin}/api/revenue/three-picks-v2/campaigns`, { method: 'POST', headers: jsonHeaders,
+      body: JSON.stringify({ idempotencyKey, campaignName: 'v2', items }) })
+    expect(created.status).toBe(201)
+    const planned = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/three-picks-v2-plans`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey }) })
+    expect(planned.status).toBe(201)
+    expect(store.createThreePicksV2Campaign).toHaveBeenCalledOnce()
+    expect(store.enqueueThreePicksV2Plan).toHaveBeenCalledWith(uuid, expect.objectContaining({ idempotencyKey }))
+  })
   it('reports missing environment names without values or constructing storage', async () => {
     const status = configurationStatus({ SUPABASE_URL: 'https://safe.test' })
     expect(status).toMatchObject({ configured: false, missing: ['SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY'], analysis: { configured: false, missing: ['OPENAI_API_KEY'] } })

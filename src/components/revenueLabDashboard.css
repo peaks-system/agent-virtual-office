@@ -431,6 +431,15 @@
   padding: 7px;
 }
 
+.revenue-audio-readiness {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  margin: 10px 0;
+}
+
+.revenue-audio-readiness p { grid-column: 1 / -1; margin: 0; }
+
 .revenue-three-picks-candidate-copy dt {
   color: #708077;
   font-size: 0.68rem;
@@ -462,7 +471,17 @@
   align-items: end;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 1fr;
+  justify-items: end;
+}
+
+.revenue-three-picks-template,
+.revenue-audio-readiness {
+  border: 1px solid rgba(83, 113, 94, 0.28);
+  border-radius: 10px;
+  background: rgba(235, 244, 237, 0.72);
+  padding: 10px 12px;
+  color: #334b3b;
 }
 
 .revenue-three-picks-create label {

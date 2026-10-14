@@ -13,6 +13,9 @@ const { createProductAssetRevisionService, ProductAssetRevisionError } = require
 const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_MODEL, PROMPT_VERSION: THREE_PICKS_PROMPT_VERSION,
   SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION } = require('./revenue-lab/multi-product-shorts-schema.cjs')
 const { COMPOSITION_VERSION } = require('./revenue-lab/multi-product-shorts-composition.cjs')
+const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_V2_MODEL, PROMPT_VERSION: THREE_PICKS_V2_PROMPT_VERSION,
+  SCHEMA_VERSION: THREE_PICKS_V2_SCHEMA_VERSION, TEMPLATE_ID: THREE_PICKS_V2_TEMPLATE_ID } = require('./revenue-lab/multi-product-shorts-v2-schema.cjs')
+const { COMPOSITION_VERSION: COMPOSITION_V2_VERSION } = require('./revenue-lab/multi-product-shorts-v2-composition.cjs')
 const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
 const { DIRECT_PRODUCT_PLACEHOLDERS, directProductCampaignName } = require('./revenue-lab/direct-product-contract.cjs')
 
@@ -47,6 +50,12 @@ function configurationStatus(env = process.env) {
     requestedModel: env.REVENUE_LAB_MULTI_PRODUCT_MODEL || DEFAULT_THREE_PICKS_MODEL,
     archetype: 'three_picks_v1', promptVersion: THREE_PICKS_PROMPT_VERSION,
     schemaVersion: THREE_PICKS_SCHEMA_VERSION,
+  }, multiProductShortsV2: {
+    configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
+    requestedModel: env.REVENUE_LAB_MULTI_PRODUCT_V2_MODEL || DEFAULT_THREE_PICKS_V2_MODEL,
+    archetype: 'three_picks_v2', promptVersion: THREE_PICKS_V2_PROMPT_VERSION,
+    schemaVersion: THREE_PICKS_V2_SCHEMA_VERSION, templateId: THREE_PICKS_V2_TEMPLATE_ID,
+    templateSelection: 'server_fixed',
   }, finalComposition: {
     configured: Boolean(env.REVENUE_LAB_PRODUCT_ASSET_BUCKET && env.REVENUE_LAB_COMPOSITION_BUCKET
       && env.REVENUE_LAB_FFMPEG_PATH && env.REVENUE_LAB_FFPROBE_PATH),
@@ -54,6 +63,11 @@ function configurationStatus(env = process.env) {
       'REVENUE_LAB_FFMPEG_PATH', 'REVENUE_LAB_FFPROBE_PATH'].filter(key => !env[key]),
     provider: 'local_ffmpeg', providerVersion: COMPOSITION_VERSION,
     output: { width: 1080, height: 1920, fps: 30, audio: false },
+  }, finalCompositionV2: {
+    configured: false,
+    missing: ['TTS_PROVIDER_NOT_SELECTED', 'V2_RENDER_ADAPTER_NOT_CONFIGURED'],
+    provider: 'local_ffmpeg', providerVersion: COMPOSITION_V2_VERSION,
+    templateId: THREE_PICKS_V2_TEMPLATE_ID, output: { width: 1080, height: 1920, fps: 30, audio: true, durationRangeSeconds: [35, 45] },
   }, products: {
     configured: Boolean(env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY),
     missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'].filter(key => !env[key]),
@@ -183,6 +197,22 @@ function threePicksCampaignInput(input) {
     objective: boundedText(input.objective, 'objective', 1000, { optional: true }),
     appealHypothesis: boundedText(input.appealHypothesis, 'appealHypothesis', 1000, { optional: true }),
     items: normalized }
+}
+
+function threePicksV2CampaignInput(input) {
+  const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+  if (!UUID.test(idempotencyKey) || !Array.isArray(input.items) || input.items.length !== 3) throw new TypeError('Invalid Creative Archetype v2 input')
+  const normalized = input.items.map(item => {
+    if (!item || !UUID.test(item.curatedProductId || '') || !Array.isArray(item.productAssetRevisionIds)
+      || item.productAssetRevisionIds.length < 1 || item.productAssetRevisionIds.length > 4
+      || item.productAssetRevisionIds.some(id => !UUID.test(id))
+      || new Set(item.productAssetRevisionIds).size !== item.productAssetRevisionIds.length) throw new TypeError('Invalid Creative Archetype v2 product')
+    return { curatedProductId: item.curatedProductId, productAssetRevisionIds: item.productAssetRevisionIds,
+      verifiedFactRef: boundedText(item.verifiedFactRef, 'verifiedFactRef', 160) }
+  })
+  if (new Set(normalized.map(item => item.curatedProductId)).size !== 3) throw new TypeError('Duplicate Creative Archetype v2 product')
+  return { idempotencyKey, campaignName: boundedText(input.campaignName, 'campaignName', 120),
+    objective: boundedText(input.objective, 'objective', 1000, { optional: true }), items: normalized }
 }
 
 function createRevenueApi({
@@ -343,12 +373,19 @@ function createRevenueApi({
         const result = await getStore().createThreePicksCampaign(threePicksCampaignInput(await body(req)))
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
+      if (req.method === 'POST' && pathname === '/three-picks-v2/campaigns') {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        const result = await getStore().createThreePicksV2Campaign(threePicksV2CampaignInput(await body(req)))
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
       const creativeProductionMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/production-plans$/i)
       const videoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/video-generations$/i)
       const imageVideoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/image-video-generations$/i)
       const assetRevisionMatch = pathname.match(/^\/product-assets\/([0-9a-f-]{36})\/revisions$/i)
       const threePicksPlanMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/three-picks-plans$/i)
       const compositionMatch = pathname.match(/^\/three-picks-plans\/([0-9a-f-]{36})\/compositions$/i)
+      const threePicksV2PlanMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/three-picks-v2-plans$/i)
+      const compositionV2Match = pathname.match(/^\/three-picks-v2-plans\/([0-9a-f-]{36})\/compositions$/i)
       const compositionPreviewMatch = pathname.match(/^\/composition-outputs\/([0-9a-f-]{36})\/preview$/i)
       if (req.method === 'GET' && compositionPreviewMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
@@ -366,6 +403,15 @@ function createRevenueApi({
         const result = await getStore().enqueueFinalComposition(compositionMatch[1], { idempotencyKey })
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
+      if (req.method === 'POST' && compositionV2Match) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(compositionV2Match[1])) return fail(res, 400, 'VALIDATION_ERROR', 'plan idが正しくありません。')
+        if (!config.finalCompositionV2.configured) return fail(res, 503, 'COMPOSITION_V2_FOUNDATION_ONLY', 'TTS providerとv2 rendererは未選定です。', { missing: config.finalCompositionV2.missing })
+        const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
+        const result = await getStore().enqueueFinalCompositionV2(compositionV2Match[1], { idempotencyKey })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
       if (req.method === 'POST' && threePicksPlanMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
         if (!UUID.test(threePicksPlanMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'iteration idが正しくありません。')
@@ -374,6 +420,16 @@ function createRevenueApi({
         if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
         const result = await getStore().enqueueThreePicksPlan(threePicksPlanMatch[1], {
           idempotencyKey, model: config.multiProductShorts.requestedModel })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
+      if (req.method === 'POST' && threePicksV2PlanMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(threePicksV2PlanMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'iteration idが正しくありません。')
+        if (!config.multiProductShortsV2.configured) return fail(res, 503, 'THREE_PICKS_V2_NOT_CONFIGURED', 'OpenAI APIを設定してください。')
+        const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
+        const result = await getStore().enqueueThreePicksV2Plan(threePicksV2PlanMatch[1], {
+          idempotencyKey, model: config.multiProductShortsV2.requestedModel })
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
       if (req.method === 'POST' && assetRevisionMatch) {
@@ -504,4 +560,4 @@ function createRevenueApi({
   return { handler, close() {} }
 }
 
-module.exports = { UUID, configurationStatus, createRevenueApi, DIRECT_PRODUCT_PLACEHOLDERS, directProductInput, errorBody, manualCampaignInput, publicationInput, threePicksCampaignInput }
+module.exports = { UUID, configurationStatus, createRevenueApi, DIRECT_PRODUCT_PLACEHOLDERS, directProductInput, errorBody, manualCampaignInput, publicationInput, threePicksCampaignInput, threePicksV2CampaignInput }
