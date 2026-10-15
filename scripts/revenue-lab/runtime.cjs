@@ -16,6 +16,9 @@ const { createLocalFfmpegCompositionProvider } = require('./providers/local-ffmp
 const { createLocalFfmpegCompositionV2Provider } = require('./providers/local-ffmpeg-composition-v2-provider.cjs')
 const { createSupabaseCompositionBlobStore } = require('./composition-blob-store.cjs')
 const { createSupabaseCreativeAudioBlobStore } = require('./creative-audio-blob-store.cjs')
+const { createElevenLabsTtsProvider } = require('./providers/elevenlabs-tts-provider.cjs')
+const { createAudioDurationProbe } = require('./audio-duration-probe.cjs')
+const { assertTextToSpeechProvider } = require('./text-to-speech-provider.cjs')
 
 const REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY']
 
@@ -25,6 +28,7 @@ function createRevenueRuntime({
   youtube,
   productProvider,
   workerFactory = createLocalWorker,
+  textToSpeechProvider,
 } = {}) {
   const missing = REQUIRED_ENV.filter(key => !env[key])
   if (missing.length) {
@@ -56,8 +60,20 @@ function createRevenueRuntime({
     ? createLocalFfmpegCompositionV2Provider() : null
   const compositionBlobStore = env.REVENUE_LAB_COMPOSITION_BUCKET
     ? createSupabaseCompositionBlobStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY, bucket: env.REVENUE_LAB_COMPOSITION_BUCKET }) : null
-  const creativeAudioBlobStore = env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET
+  const audioBucketValid = env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET === 'revenue-lab-creative-audio'
+    && env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET !== env.REVENUE_LAB_PRODUCT_ASSET_BUCKET
+    && env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET !== env.REVENUE_LAB_COMPOSITION_BUCKET
+  const creativeAudioBlobStore = audioBucketValid
     ? createSupabaseCreativeAudioBlobStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY, bucket: env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET }) : null
+  const configuredTextToSpeechProvider = textToSpeechProvider || (env.ELEVENLABS_API_KEY
+    && env.REVENUE_LAB_ELEVENLABS_MODEL_ID && env.REVENUE_LAB_ELEVENLABS_VOICE_ID && audioBucketValid
+    ? createElevenLabsTtsProvider({ apiKey: env.ELEVENLABS_API_KEY,
+      model: env.REVENUE_LAB_ELEVENLABS_MODEL_ID, voice: env.REVENUE_LAB_ELEVENLABS_VOICE_ID,
+      timeoutMs: Number(env.REVENUE_LAB_ELEVENLABS_TIMEOUT_MS) || 45_000 }) : null)
+  const runtimeTextToSpeechProvider = configuredTextToSpeechProvider
+    ? assertTextToSpeechProvider(configuredTextToSpeechProvider) : null
+  const audioDurationProbe = runtimeTextToSpeechProvider && env.REVENUE_LAB_FFPROBE_PATH
+    ? createAudioDurationProbe({ ffprobePath: env.REVENUE_LAB_FFPROBE_PATH }) : null
   const rakuten = productProvider || (env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY
     ? createRakutenProductProvider({ applicationId: env.RAKUTEN_APPLICATION_ID, accessKey: env.RAKUTEN_ACCESS_KEY, affiliateId: env.RAKUTEN_AFFILIATE_ID })
     : null)
@@ -65,6 +81,7 @@ function createRevenueRuntime({
     store: runtimeStore, youtube: runtimeYouTube, analyst, creativeProducer,
     multiProductShortsPlanner, multiProductShortsV2Planner, finalCompositionProvider,
     finalCompositionV2Provider, compositionBlobStore, creativeAudioBlobStore,
+    textToSpeechProvider: runtimeTextToSpeechProvider, audioDurationProbe,
     videoGenerationProvider, imageToVideoProvider, productAssetBlobStore, productProvider: rakuten,
     videoPollAttempts: Number(env.REVENUE_LAB_POLLO_POLL_ATTEMPTS) || 30,
     videoPollIntervalMs: Number(env.REVENUE_LAB_POLLO_POLL_INTERVAL_MS) || 5000,

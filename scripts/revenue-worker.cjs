@@ -17,6 +17,9 @@ const { createLocalFfmpegCompositionProvider } = require('./revenue-lab/provider
 const { createLocalFfmpegCompositionV2Provider } = require('./revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs')
 const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
 const { createSupabaseCreativeAudioBlobStore } = require('./revenue-lab/creative-audio-blob-store.cjs')
+const { createElevenLabsTtsProvider } = require('./revenue-lab/providers/elevenlabs-tts-provider.cjs')
+const { createAudioDurationProbe } = require('./revenue-lab/audio-duration-probe.cjs')
+const { assertTextToSpeechProvider } = require('./revenue-lab/text-to-speech-provider.cjs')
 
 async function main() {
   const store = createSupabaseStore()
@@ -35,13 +38,24 @@ async function main() {
     ? createLocalFfmpegCompositionV2Provider() : null
   const compositionBlobStore = process.env.REVENUE_LAB_COMPOSITION_BUCKET
     ? createSupabaseCompositionBlobStore({ url: process.env.SUPABASE_URL, serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY, bucket: process.env.REVENUE_LAB_COMPOSITION_BUCKET }) : null
-  const creativeAudioBlobStore = process.env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET
+  const audioBucketValid = process.env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET === 'revenue-lab-creative-audio'
+    && process.env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET !== process.env.REVENUE_LAB_PRODUCT_ASSET_BUCKET
+    && process.env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET !== process.env.REVENUE_LAB_COMPOSITION_BUCKET
+  const creativeAudioBlobStore = audioBucketValid
     ? createSupabaseCreativeAudioBlobStore({ url: process.env.SUPABASE_URL, serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY, bucket: process.env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET }) : null
+  const configuredTextToSpeechProvider = process.env.ELEVENLABS_API_KEY && process.env.REVENUE_LAB_ELEVENLABS_MODEL_ID
+    && process.env.REVENUE_LAB_ELEVENLABS_VOICE_ID && audioBucketValid
+    ? createElevenLabsTtsProvider() : null
+  const textToSpeechProvider = configuredTextToSpeechProvider
+    ? assertTextToSpeechProvider(configuredTextToSpeechProvider) : null
+  const audioDurationProbe = textToSpeechProvider && process.env.REVENUE_LAB_FFPROBE_PATH
+    ? createAudioDurationProbe({ ffprobePath: process.env.REVENUE_LAB_FFPROBE_PATH }) : null
   const productProvider = process.env.RAKUTEN_APPLICATION_ID && process.env.RAKUTEN_ACCESS_KEY ? createRakutenProductProvider() : null
   const handlers = createJobHandlers({
     store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
     multiProductShortsV2Planner, finalCompositionProvider, finalCompositionV2Provider,
     compositionBlobStore, creativeAudioBlobStore, videoGenerationProvider, imageToVideoProvider,
+    textToSpeechProvider, audioDurationProbe,
     productAssetBlobStore, productProvider,
     videoPollAttempts: Number(process.env.REVENUE_LAB_POLLO_POLL_ATTEMPTS) || 30,
     videoPollIntervalMs: Number(process.env.REVENUE_LAB_POLLO_POLL_INTERVAL_MS) || 5000,

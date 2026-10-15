@@ -32,10 +32,36 @@ describe('Revenue Lab API', () => {
       configured: true, archetype: 'three_picks_v2', templateId: 'hero-carousel-v2', templateSelection: 'server_fixed',
     })
     expect(configurationStatus({}).finalCompositionV2).toMatchObject({ configured: false,
-      missing: ['TTS_PROVIDER_NOT_SELECTED', 'V2_RENDER_ADAPTER_NOT_CONFIGURED'] })
+      missing: ['ELEVENLABS_TTS_NOT_CONFIGURED', 'V2_RENDER_ADAPTER_NOT_CONFIGURED'] })
     expect(() => threePicksV2CampaignInput({ idempotencyKey, campaignName: 'v2', items: input.items.map(item => ({
       ...item, productAssetRevisionIds: [uuid, uuid],
     })) })).toThrow(TypeError)
+  })
+
+  it('exposes only safe ElevenLabs configuration and enqueues generation without the API key', async () => {
+    const store = { enqueueCreativeAudioGeneration: vi.fn(async () => ({ created: true, artifactCount: 5 })) }
+    const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test',
+      YOUTUBE_API_KEY: 'test', ELEVENLABS_API_KEY: 'private-elevenlabs-key',
+      REVENUE_LAB_ELEVENLABS_MODEL_ID: 'eleven_multilingual_v2', REVENUE_LAB_ELEVENLABS_VOICE_ID: 'voice-1',
+      REVENUE_LAB_FFPROBE_PATH: 'ffprobe', REVENUE_LAB_CREATIVE_AUDIO_BUCKET: 'revenue-lab-creative-audio',
+      REVENUE_LAB_PRODUCT_ASSET_BUCKET: 'product-assets', REVENUE_LAB_COMPOSITION_BUCKET: 'compositions' }
+    const status = configurationStatus(env).textToSpeech
+    expect(status).toMatchObject({ configured: true, provider: 'elevenlabs',
+      providerAdapterVersion: 'elevenlabs-tts-adapter-v1', requestedModel: 'eleven_multilingual_v2',
+      voiceConfigured: true, outputFormat: 'mp3_44100_128', storageBucket: 'revenue-lab-creative-audio' })
+    expect(JSON.stringify(status)).not.toContain('private-elevenlabs-key')
+    expect(JSON.stringify(status)).not.toContain('voice-1')
+
+    const origin = await fixture({ store, env })
+    const response = await fetch(`${origin}/api/revenue/three-picks-v2-plans/${uuid}/audio-generations`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey }),
+    })
+    expect(response.status).toBe(201)
+    expect(store.enqueueCreativeAudioGeneration).toHaveBeenCalledWith(uuid, expect.objectContaining({
+      provider: 'elevenlabs', model: 'eleven_multilingual_v2', voice: 'voice-1',
+      outputFormat: 'mp3_44100_128', storageBucket: 'revenue-lab-creative-audio',
+    }))
+    expect(JSON.stringify(store.enqueueCreativeAudioGeneration.mock.calls)).not.toContain('private-elevenlabs-key')
   })
 
   it('routes v2 campaign and plan mutations only to dedicated store methods', async () => {

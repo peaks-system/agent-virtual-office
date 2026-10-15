@@ -18,11 +18,19 @@ const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_V2_MODEL, PROMPT_VERSION: THREE_PICKS
 const { COMPOSITION_VERSION: COMPOSITION_V2_VERSION } = require('./revenue-lab/multi-product-shorts-v2-composition.cjs')
 const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
 const { DIRECT_PRODUCT_PLACEHOLDERS, directProductCampaignName } = require('./revenue-lab/direct-product-contract.cjs')
+const { ADAPTER_VERSION: ELEVENLABS_ADAPTER_VERSION, OUTPUT_FORMAT: ELEVENLABS_OUTPUT_FORMAT,
+  PROVIDER_ID: ELEVENLABS_PROVIDER_ID, VOICE_SETTINGS: ELEVENLABS_VOICE_SETTINGS } = require('./revenue-lab/providers/elevenlabs-tts-provider.cjs')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function configurationStatus(env = process.env) {
   const missing = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY'].filter(key => !env[key])
+  const audioBucketSeparated = env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET === 'revenue-lab-creative-audio'
+    && env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET !== env.REVENUE_LAB_PRODUCT_ASSET_BUCKET
+    && env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET !== env.REVENUE_LAB_COMPOSITION_BUCKET
+  const ttsMissing = ['ELEVENLABS_API_KEY', 'REVENUE_LAB_ELEVENLABS_MODEL_ID',
+    'REVENUE_LAB_ELEVENLABS_VOICE_ID', 'REVENUE_LAB_FFPROBE_PATH'].filter(key => !env[key])
+  if (!audioBucketSeparated) ttsMissing.push('REVENUE_LAB_CREATIVE_AUDIO_BUCKET')
   return { configured: missing.length === 0, missing, analysis: {
     configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
     requestedModel: env.REVENUE_LAB_OPENAI_MODEL || DEFAULT_MODEL,
@@ -56,6 +64,12 @@ function configurationStatus(env = process.env) {
     archetype: 'three_picks_v2', promptVersion: THREE_PICKS_V2_PROMPT_VERSION,
     schemaVersion: THREE_PICKS_V2_SCHEMA_VERSION, templateId: THREE_PICKS_V2_TEMPLATE_ID,
     templateSelection: 'server_fixed',
+  }, textToSpeech: {
+    configured: ttsMissing.length === 0, missing: [...new Set(ttsMissing)],
+    provider: ELEVENLABS_PROVIDER_ID, providerAdapterVersion: ELEVENLABS_ADAPTER_VERSION,
+    requestedModel: env.REVENUE_LAB_ELEVENLABS_MODEL_ID || null,
+    voiceConfigured: Boolean(env.REVENUE_LAB_ELEVENLABS_VOICE_ID),
+    outputFormat: ELEVENLABS_OUTPUT_FORMAT, storageBucket: 'revenue-lab-creative-audio',
   }, finalComposition: {
     configured: Boolean(env.REVENUE_LAB_PRODUCT_ASSET_BUCKET && env.REVENUE_LAB_COMPOSITION_BUCKET
       && env.REVENUE_LAB_FFMPEG_PATH && env.REVENUE_LAB_FFPROBE_PATH),
@@ -65,7 +79,7 @@ function configurationStatus(env = process.env) {
     output: { width: 1080, height: 1920, fps: 30, audio: false },
   }, finalCompositionV2: {
     configured: false,
-    missing: ['TTS_PROVIDER_NOT_SELECTED', 'V2_RENDER_ADAPTER_NOT_CONFIGURED'],
+    missing: [...(ttsMissing.length ? ['ELEVENLABS_TTS_NOT_CONFIGURED'] : []), 'V2_RENDER_ADAPTER_NOT_CONFIGURED'],
     provider: 'local_ffmpeg', providerVersion: COMPOSITION_V2_VERSION,
     templateId: THREE_PICKS_V2_TEMPLATE_ID, output: { width: 1080, height: 1920, fps: 30, audio: true, durationRangeSeconds: [35, 45] },
   }, products: {
@@ -386,6 +400,7 @@ function createRevenueApi({
       const compositionMatch = pathname.match(/^\/three-picks-plans\/([0-9a-f-]{36})\/compositions$/i)
       const threePicksV2PlanMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/three-picks-v2-plans$/i)
       const compositionV2Match = pathname.match(/^\/three-picks-v2-plans\/([0-9a-f-]{36})\/compositions$/i)
+      const audioGenerationMatch = pathname.match(/^\/three-picks-v2-plans\/([0-9a-f-]{36})\/audio-generations$/i)
       const compositionPreviewMatch = pathname.match(/^\/composition-outputs\/([0-9a-f-]{36})\/preview$/i)
       if (req.method === 'GET' && compositionPreviewMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
@@ -401,6 +416,21 @@ function createRevenueApi({
         const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
         if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
         const result = await getStore().enqueueFinalComposition(compositionMatch[1], { idempotencyKey })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
+      if (req.method === 'POST' && audioGenerationMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(audioGenerationMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'plan idが正しくありません。')
+        if (!config.textToSpeech.configured) return fail(res, 503, 'TTS_NOT_CONFIGURED', 'ElevenLabs TTSのprivate launcher設定を確認してください。', { missing: config.textToSpeech.missing })
+        const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
+        const result = await getStore().enqueueCreativeAudioGeneration(audioGenerationMatch[1], {
+          provider: config.textToSpeech.provider, providerAdapterVersion: config.textToSpeech.providerAdapterVersion,
+          model: config.textToSpeech.requestedModel, voice: env.REVENUE_LAB_ELEVENLABS_VOICE_ID,
+          outputFormat: config.textToSpeech.outputFormat, voiceSettings: ELEVENLABS_VOICE_SETTINGS,
+          fingerprintSchemaVersion: 'creative-audio-generation-v1', storageBucket: config.textToSpeech.storageBucket,
+          idempotencyKey,
+        })
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
       if (req.method === 'POST' && compositionV2Match) {

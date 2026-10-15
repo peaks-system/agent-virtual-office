@@ -58,6 +58,28 @@ function queryFromRow(row) {
   }
 }
 
+function creativeAudioArtifactFromRow(row) {
+  if (!row) return null
+  return {
+    id: row.id, creativeArchetypePlanId: row.creative_archetype_plan_id,
+    sceneId: row.scene_id, segmentId: row.segment_id, segmentOrder: row.segment_order,
+    inputText: row.input_text, inputSha256: row.input_sha256, status: row.status,
+    provider: row.provider, providerAdapterVersion: row.provider_adapter_version,
+    model: row.model, voice: row.voice, stableSeed: row.stable_seed,
+    generationFingerprint: row.generation_fingerprint,
+    fingerprintSchemaVersion: row.fingerprint_schema_version,
+    outputFormat: row.output_format, contentType: row.content_type,
+    audioSha256: row.audio_sha256, byteSize: row.byte_size == null ? null : Number(row.byte_size),
+    durationSeconds: row.duration_seconds == null ? null : Number(row.duration_seconds),
+    storageProvider: row.storage_provider, storageBucket: row.storage_bucket,
+    immutableObjectKey: row.immutable_object_key,
+    providerRequestId: row.provider_request_id, providerTraceId: row.provider_trace_id,
+    providerCharacterCost: row.provider_character_cost == null ? null : Number(row.provider_character_cost),
+    safeErrorCode: row.safe_error_code, generationStartedAt: row.generation_started_at,
+    providerRespondedAt: row.provider_responded_at, completedAt: row.completed_at,
+  }
+}
+
 function opportunityFromRow(row) {
   return {
     id: row.id,
@@ -486,11 +508,7 @@ function createSupabaseStore({
     const audioByPlan = new Map()
     for (const row of creativeAudioArtifacts) {
       const records = audioByPlan.get(row.creative_archetype_plan_id) || []
-      records.push({ id: row.id, sceneId: row.scene_id, segmentId: row.segment_id,
-        segmentOrder: row.segment_order, inputText: row.input_text, status: row.status,
-        provider: row.provider, model: row.model, voice: row.voice,
-        durationSeconds: row.duration_seconds == null ? null : Number(row.duration_seconds),
-        safeErrorCode: row.safe_error_code })
+      records.push(creativeAudioArtifactFromRow(row))
       audioByPlan.set(row.creative_archetype_plan_id, records)
     }
     const archetypesByIteration = new Map()
@@ -1196,6 +1214,57 @@ function createSupabaseStore({
       method: 'PATCH', body: { status, safe_error_code: String(error?.code || 'THREE_PICKS_PLAN_FAILED').slice(0, 80),
         updated_at: new Date().toISOString() }, prefer: 'return=minimal',
     })
+  }
+
+  async function enqueueCreativeAudioGeneration(planId, { provider, providerAdapterVersion, model, voice,
+    outputFormat, voiceSettings, fingerprintSchemaVersion, storageBucket, idempotencyKey } = {}) {
+    return rpc('enqueue_creative_audio_generation_v1', {
+      p_creative_archetype_plan_id: planId, p_provider: provider,
+      p_provider_adapter_version: providerAdapterVersion, p_model: model, p_voice: voice,
+      p_output_format: outputFormat, p_voice_settings: voiceSettings,
+      p_fingerprint_schema_version: fingerprintSchemaVersion, p_storage_bucket: storageBucket,
+      p_idempotency_key: idempotencyKey,
+    })
+  }
+
+  async function claimCreativeAudioGeneration(artifactId, generationFingerprint) {
+    const result = await rpc('claim_creative_audio_generation_v1', {
+      p_artifact_id: artifactId, p_generation_fingerprint: generationFingerprint,
+    })
+    return { claimed: result?.claimed === true, artifact: creativeAudioArtifactFromRow(result?.artifact) }
+  }
+
+  async function completeCreativeAudioGeneration(artifactId, generationFingerprint, result) {
+    const row = await rpc('complete_creative_audio_generation_v1', {
+      p_artifact_id: artifactId, p_generation_fingerprint: generationFingerprint,
+      p_audio_sha256: result.audioSha256, p_duration_seconds: result.durationSeconds,
+      p_byte_size: result.byteSize, p_provider_request_id: result.providerRequestId,
+      p_provider_trace_id: result.providerTraceId || null,
+      p_provider_character_cost: result.characterCost ?? null,
+    })
+    return creativeAudioArtifactFromRow(row)
+  }
+
+  async function recordCreativeAudioProviderReceipt(artifactId, generationFingerprint, result) {
+    const row = await rpc('record_creative_audio_provider_receipt_v1', {
+      p_artifact_id: artifactId, p_generation_fingerprint: generationFingerprint,
+      p_audio_sha256: result.audioSha256, p_duration_seconds: result.durationSeconds,
+      p_byte_size: result.byteSize, p_provider_request_id: result.providerRequestId,
+      p_provider_trace_id: result.providerTraceId || null,
+      p_provider_character_cost: result.characterCost ?? null,
+    })
+    return creativeAudioArtifactFromRow(row)
+  }
+
+  async function failCreativeAudioGeneration(artifactId, generationFingerprint, result) {
+    const row = await rpc('fail_creative_audio_generation_v1', {
+      p_artifact_id: artifactId, p_generation_fingerprint: generationFingerprint,
+      p_status: result.status, p_safe_error_code: result.safeErrorCode,
+      p_provider_request_id: result.providerRequestId || null,
+      p_provider_trace_id: result.providerTraceId || null,
+      p_provider_character_cost: result.characterCost ?? null,
+    })
+    return creativeAudioArtifactFromRow(row)
   }
 
   async function enqueueFinalComposition(planId, { idempotencyKey } = {}) {
@@ -1978,8 +2047,11 @@ function createSupabaseStore({
     getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
     enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
     persistProductSearchFailure, createProductDecision, createManualCampaign, createDirectProductCampaign,
-    createThreePicksCampaign, createThreePicksV2Campaign, enqueueThreePicksPlan, enqueueThreePicksV2Plan, getThreePicksRequest, markThreePicksRunning,
-    persistThreePicksSuccess, persistThreePicksV2Success, persistThreePicksFailure, enqueueFinalComposition, enqueueFinalCompositionV2,
+    createThreePicksCampaign, createThreePicksV2Campaign, enqueueThreePicksPlan, enqueueThreePicksV2Plan,
+    getThreePicksRequest, markThreePicksRunning, persistThreePicksSuccess, persistThreePicksV2Success,
+    persistThreePicksFailure, enqueueCreativeAudioGeneration, claimCreativeAudioGeneration,
+    recordCreativeAudioProviderReceipt, completeCreativeAudioGeneration, failCreativeAudioGeneration,
+    enqueueFinalComposition, enqueueFinalCompositionV2,
     getFinalCompositionRequest, markFinalCompositionRendering, persistFinalCompositionSuccess,
     persistFinalCompositionFailure, getFinalCompositionOutput, registerCampaignPublication,
     enqueueCreativeProduction, getCreativeProductionRequest, markCreativeProductionRunning, persistCreativeProductionSuccess,

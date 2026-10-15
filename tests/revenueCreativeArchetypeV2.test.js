@@ -5,7 +5,7 @@ import {
 } from '../scripts/revenue-lab/multi-product-shorts-v2-schema.cjs'
 import { compileThreePicksV2Manifest } from '../scripts/revenue-lab/multi-product-shorts-v2-composition.cjs'
 import { buildV2CompositionPlan, createLocalFfmpegCompositionV2Provider } from '../scripts/revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs'
-import { safeAudioKey } from '../scripts/revenue-lab/creative-audio-blob-store.cjs'
+import { createSupabaseCreativeAudioBlobStore, safeAudioKey } from '../scripts/revenue-lab/creative-audio-blob-store.cjs'
 
 const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 
@@ -109,5 +109,17 @@ describe('Creative Archetype v2 schema and compiler', () => {
     const key = `creative-audio/${uuid(1)}/hook-1/${'a'.repeat(64)}.mp3`
     expect(safeAudioKey(key)).toBe(key)
     expect(() => safeAudioKey('../audio.mp3')).toThrowError(/invalid immutable creative audio object key/i)
+  })
+
+  it('supports deterministic blob recovery without treating a missing object as an error', async () => {
+    const key = `creative-audio/${uuid(1)}/hook-1/${'a'.repeat(64)}.mp3`
+    const missing = createSupabaseCreativeAudioBlobStore({ url: 'https://example.supabase.co',
+      serviceRoleKey: 'test-only', bucket: 'revenue-lab-creative-audio',
+      fetchImpl: async () => new Response(null, { status: 404 }) })
+    await expect(missing.readIfExists(key)).resolves.toBeNull()
+    const present = createSupabaseCreativeAudioBlobStore({ url: 'https://example.supabase.co',
+      serviceRoleKey: 'test-only', bucket: 'revenue-lab-creative-audio',
+      fetchImpl: async () => new Response(Buffer.from('existing audio'), { status: 200 }) })
+    await expect(present.readIfExists(key)).resolves.toEqual(Buffer.from('existing audio'))
   })
 })

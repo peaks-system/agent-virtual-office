@@ -111,6 +111,12 @@ export function enqueueFinalCompositionV2(planId, idempotencyKey) {
   })
 }
 
+export function enqueueCreativeAudioGeneration(planId, idempotencyKey) {
+  return request(`/three-picks-v2-plans/${encodeURIComponent(planId)}/audio-generations`, {
+    method: 'POST', body: JSON.stringify({ idempotencyKey }),
+  })
+}
+
 export function loadFinalCompositionPreview(outputId) {
   return request(`/composition-outputs/${encodeURIComponent(outputId)}/preview`)
 }

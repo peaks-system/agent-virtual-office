@@ -45,7 +45,13 @@ function createSupabaseCreativeAudioBlobStore({ url, serviceRoleKey, bucket, fet
     if (!response.ok) throw new CreativeAudioBlobStoreError('CREATIVE_AUDIO_STORAGE_READ_FAILED', 'Creative Audio storage read failed', response.status)
     return Buffer.from(await response.arrayBuffer())
   }
-  return { provider: 'supabase-storage', bucket: bucketName, putImmutable, readImmutable }
+  async function readIfExists(key) {
+    const response = await fetchImpl(`${root}/storage/v1/object/${pathFor(key)}`, { headers: headers({}) })
+    if (response.status === 404) return null
+    if (!response.ok) throw new CreativeAudioBlobStoreError('CREATIVE_AUDIO_STORAGE_READ_FAILED', 'Creative Audio storage read failed', response.status)
+    return Buffer.from(await response.arrayBuffer())
+  }
+  return { provider: 'supabase-storage', bucket: bucketName, putImmutable, readImmutable, readIfExists }
 }
 
 module.exports = { CreativeAudioBlobStoreError, createSupabaseCreativeAudioBlobStore, safeAudioBucket, safeAudioKey }

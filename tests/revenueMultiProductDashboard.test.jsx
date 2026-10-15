@@ -8,7 +8,7 @@ const fn = vi.fn()
 const handlers = { onReload: fn, onRun: fn, onTrack: fn, onAnalyze: fn, onReview: fn, onTranslate: fn,
   onEnrich: fn, onTranslationFeedback: fn, onProductSearch: fn, onProductDecision: fn,
   onCreateCampaign: fn, onCreateDirectProduct: fn, onCreateThreePicks: fn, onGenerateThreePicks: fn,
-  onGenerateThreePicksV2: fn, onCompose: fn, onComposeV2: fn, onPreview: fn, onGenerateProduction: fn, onGenerateVideo: fn,
+  onGenerateThreePicksV2: fn, onGenerateAudio: fn, onCompose: fn, onComposeV2: fn, onPreview: fn, onGenerateProduction: fn, onGenerateVideo: fn,
   onCreateAssetRevision: fn, onGenerateImageVideo: fn, onRegisterPublication: fn,
   onUpdateIteration: fn, onCreateIteration: fn, onDeleteCampaign: fn, onVoidCampaign: fn,
   onConnectAnalytics: fn, onCollectAnalytics: fn, onSave: fn }
@@ -73,14 +73,15 @@ describe('Multi-product Shorts Dashboard', () => {
           cta: { display_text: '詳細を見る' } }, productCards: [], audioArtifacts: [{ id: 'audio-1', status: 'planned' }], compositions: [] }] }] }
     const state = { config: { configured: true, missing: [], analysis: {}, products: {},
       creativeProduction: {}, videoGeneration: {}, imageToVideo: {}, productAssetRevisions: {}, multiProductShorts: {}, finalComposition: {},
-      multiProductShortsV2: { configured: true }, finalCompositionV2: { configured: false } }, queries: [], opportunities: [],
+      multiProductShortsV2: { configured: true }, textToSpeech: { configured: true }, finalCompositionV2: { configured: false } }, queries: [], opportunities: [],
       trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [campaign], latestJob: null }
     const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
     expect(markup).toContain('Creative Archetype v2 Plan')
     expect(markup).toContain('hero-carousel-v2')
     expect(markup).toContain('hero-product-layout-v1')
     expect(markup).toContain('0 / 1 ready')
-    expect(markup).toContain('音声生成providerは未選定')
+    expect(markup).toContain('ナレーション音声を生成')
+    expect(markup).toContain('FFprobe実測duration')
     expect(markup).not.toContain('product-card-v3')
   })
 

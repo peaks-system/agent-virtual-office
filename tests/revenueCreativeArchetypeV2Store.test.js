@@ -73,6 +73,43 @@ describe('Creative Archetype v2 store', () => {
     expect(artifactCall.body.map(item => item.segment_id)).toContain('hook-1')
   })
 
+  it('uses only dedicated RPCs to enqueue, claim, record, complete, and fail audio generation', async () => {
+    const calls = []
+    const row = { id: uuid(100), creative_archetype_plan_id: uuid(70), scene_id: 'hook', segment_id: 'hook-1',
+      segment_order: 1, input_text: '紹介します。', input_sha256: 'a'.repeat(64), status: 'generating',
+      provider: 'elevenlabs', provider_adapter_version: 'elevenlabs-tts-adapter-v1', model: 'model', voice: 'voice',
+      stable_seed: 1, generation_fingerprint: 'f'.repeat(64), output_format: 'mp3_44100_128',
+      storage_bucket: 'revenue-lab-creative-audio' }
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null; calls.push({ url, body })
+      if (url.includes('/rpc/enqueue_creative_audio_generation_v1')) return response({ created: true, artifactCount: 1 })
+      if (url.includes('/rpc/claim_creative_audio_generation_v1')) return response({ claimed: true, artifact: row })
+      if (url.includes('/rpc/record_creative_audio_provider_receipt_v1')) return response({ ...row, provider_request_id: 'req-1' })
+      if (url.includes('/rpc/complete_creative_audio_generation_v1')) return response({ ...row, status: 'ready' })
+      if (url.includes('/rpc/fail_creative_audio_generation_v1')) return response({ ...row, status: 'submission_uncertain' })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await store.enqueueCreativeAudioGeneration(uuid(70), { provider: 'elevenlabs', providerAdapterVersion: 'elevenlabs-tts-adapter-v1',
+      model: 'model', voice: 'voice', outputFormat: 'mp3_44100_128', voiceSettings: { stability: 0.5 },
+      fingerprintSchemaVersion: 'creative-audio-generation-v1', storageBucket: 'revenue-lab-creative-audio', idempotencyKey: uuid(99) })
+    const claim = await store.claimCreativeAudioGeneration(uuid(100), 'f'.repeat(64))
+    expect(claim).toMatchObject({ claimed: true, artifact: { providerAdapterVersion: 'elevenlabs-tts-adapter-v1' } })
+    const receipt = { audioSha256: 'b'.repeat(64), durationSeconds: 1.2, byteSize: 100,
+      providerRequestId: 'req-1', providerTraceId: 'trace-1', characterCost: 10 }
+    await store.recordCreativeAudioProviderReceipt(uuid(100), 'f'.repeat(64), receipt)
+    await store.completeCreativeAudioGeneration(uuid(100), 'f'.repeat(64), receipt)
+    await store.failCreativeAudioGeneration(uuid(100), 'f'.repeat(64), {
+      status: 'submission_uncertain', safeErrorCode: 'TEST_UNCERTAIN' })
+    expect(calls.map(call => call.url)).toEqual(expect.arrayContaining([
+      expect.stringContaining('/rpc/enqueue_creative_audio_generation_v1'),
+      expect.stringContaining('/rpc/claim_creative_audio_generation_v1'),
+      expect.stringContaining('/rpc/record_creative_audio_provider_receipt_v1'),
+      expect.stringContaining('/rpc/complete_creative_audio_generation_v1'),
+      expect.stringContaining('/rpc/fail_creative_audio_generation_v1'),
+    ]))
+  })
+
   it('compiles ready measured audio into a layer manifest before the dedicated v2 composition RPC', async () => {
     const calls = []
     const presentations = [1, 2, 3].map(index => ({ product_set_item_id: uuid(10 + index), presentation_order: index,
