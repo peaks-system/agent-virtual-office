@@ -110,6 +110,34 @@ describe('Creative Archetype v2 store', () => {
     ]))
   })
 
+  it('enqueues exactly one Creative Audio Artifact through the dedicated RPC', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null; calls.push({ url, body })
+      if (url.includes('/rpc/enqueue_creative_audio_artifact_generation_v1')) {
+        return response({ artifactId: uuid(100), planId: uuid(70), created: true, createdCount: 1 })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const result = await store.enqueueCreativeAudioArtifactGeneration(uuid(100), {
+      provider: 'elevenlabs', providerAdapterVersion: 'elevenlabs-tts-adapter-v1',
+      model: 'model', voice: 'voice', outputFormat: 'mp3_44100_128', voiceSettings: { stability: 0.5 },
+      fingerprintSchemaVersion: 'creative-audio-generation-v1', storageBucket: 'revenue-lab-creative-audio',
+      idempotencyKey: uuid(99),
+    })
+    expect(result).toMatchObject({ artifactId: uuid(100), createdCount: 1 })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      url: expect.stringContaining('/rpc/enqueue_creative_audio_artifact_generation_v1'),
+      body: { p_artifact_id: uuid(100), p_provider: 'elevenlabs',
+        p_provider_adapter_version: 'elevenlabs-tts-adapter-v1', p_model: 'model', p_voice: 'voice',
+        p_output_format: 'mp3_44100_128', p_voice_settings: { stability: 0.5 },
+        p_fingerprint_schema_version: 'creative-audio-generation-v1',
+        p_storage_bucket: 'revenue-lab-creative-audio', p_idempotency_key: uuid(99) },
+    })
+  })
+
   it('compiles ready measured audio into a layer manifest before the dedicated v2 composition RPC', async () => {
     const calls = []
     const presentations = [1, 2, 3].map(index => ({ product_set_item_id: uuid(10 + index), presentation_order: index,

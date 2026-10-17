@@ -484,6 +484,31 @@
   color: #334b3b;
 }
 
+.revenue-audio-readiness > details { grid-column: 1 / -1; }
+
+.revenue-audio-segments {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.revenue-audio-segments article {
+  background: rgba(255, 255, 255, .72);
+  border: 1px solid rgba(83, 113, 94, .18);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+}
+
+.revenue-audio-segments article > div {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.revenue-audio-segments button { justify-self: start; }
+
 .revenue-three-picks-create label {
   display: grid;
   gap: 5px;

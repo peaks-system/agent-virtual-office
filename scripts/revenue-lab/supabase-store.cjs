@@ -1227,6 +1227,26 @@ function createSupabaseStore({
     })
   }
 
+  async function enqueueCreativeAudioArtifactGeneration(artifactId, { provider, providerAdapterVersion, model, voice,
+    outputFormat, voiceSettings, fingerprintSchemaVersion, storageBucket, idempotencyKey } = {}) {
+    try {
+      return await rpc('enqueue_creative_audio_artifact_generation_v1', {
+        p_artifact_id: artifactId, p_provider: provider,
+        p_provider_adapter_version: providerAdapterVersion, p_model: model, p_voice: voice,
+        p_output_format: outputFormat, p_voice_settings: voiceSettings,
+        p_fingerprint_schema_version: fingerprintSchemaVersion, p_storage_bucket: storageBucket,
+        p_idempotency_key: idempotencyKey,
+      })
+    } catch (error) {
+      const message = error?.providerMessage || ''
+      if (/was not found/i.test(message)) throw new RevenueStoreError('CREATIVE_AUDIO_ARTIFACT_NOT_FOUND', 'Creative Audio Artifact was not found', 404)
+      if (/not planned|must belong|configuration cannot change/i.test(message)) {
+        throw new RevenueStoreError('CREATIVE_AUDIO_ARTIFACT_CONFLICT', 'Creative Audio Artifact cannot be enqueued', 409)
+      }
+      throw error
+    }
+  }
+
   async function claimCreativeAudioGeneration(artifactId, generationFingerprint) {
     const result = await rpc('claim_creative_audio_generation_v1', {
       p_artifact_id: artifactId, p_generation_fingerprint: generationFingerprint,
@@ -2049,7 +2069,7 @@ function createSupabaseStore({
     persistProductSearchFailure, createProductDecision, createManualCampaign, createDirectProductCampaign,
     createThreePicksCampaign, createThreePicksV2Campaign, enqueueThreePicksPlan, enqueueThreePicksV2Plan,
     getThreePicksRequest, markThreePicksRunning, persistThreePicksSuccess, persistThreePicksV2Success,
-    persistThreePicksFailure, enqueueCreativeAudioGeneration, claimCreativeAudioGeneration,
+    persistThreePicksFailure, enqueueCreativeAudioGeneration, enqueueCreativeAudioArtifactGeneration, claimCreativeAudioGeneration,
     recordCreativeAudioProviderReceipt, completeCreativeAudioGeneration, failCreativeAudioGeneration,
     enqueueFinalComposition, enqueueFinalCompositionV2,
     getFinalCompositionRequest, markFinalCompositionRendering, persistFinalCompositionSuccess,

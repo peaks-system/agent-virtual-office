@@ -117,6 +117,12 @@ export function enqueueCreativeAudioGeneration(planId, idempotencyKey) {
   })
 }
 
+export function enqueueCreativeAudioArtifactGeneration(artifactId, idempotencyKey) {
+  return request(`/creative-audio-artifacts/${encodeURIComponent(artifactId)}/generation`, {
+    method: 'POST', body: JSON.stringify({ idempotencyKey }),
+  })
+}
+
 export function loadFinalCompositionPreview(outputId) {
   return request(`/composition-outputs/${encodeURIComponent(outputId)}/preview`)
 }

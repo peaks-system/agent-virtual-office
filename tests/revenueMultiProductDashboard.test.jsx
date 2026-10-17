@@ -2,13 +2,13 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { buildThreePicksCandidatePool, canCreateThreePicks, RevenueLabView,
-  threePicksCardPresentation, toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
+  initialAudioLiveValidationArtifactId, threePicksCardPresentation, toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
 
 const fn = vi.fn()
 const handlers = { onReload: fn, onRun: fn, onTrack: fn, onAnalyze: fn, onReview: fn, onTranslate: fn,
   onEnrich: fn, onTranslationFeedback: fn, onProductSearch: fn, onProductDecision: fn,
   onCreateCampaign: fn, onCreateDirectProduct: fn, onCreateThreePicks: fn, onGenerateThreePicks: fn,
-  onGenerateThreePicksV2: fn, onGenerateAudio: fn, onCompose: fn, onComposeV2: fn, onPreview: fn, onGenerateProduction: fn, onGenerateVideo: fn,
+  onGenerateThreePicksV2: fn, onGenerateAudio: fn, onGenerateAudioArtifact: fn, onCompose: fn, onComposeV2: fn, onPreview: fn, onGenerateProduction: fn, onGenerateVideo: fn,
   onCreateAssetRevision: fn, onGenerateImageVideo: fn, onRegisterPublication: fn,
   onUpdateIteration: fn, onCreateIteration: fn, onDeleteCampaign: fn, onVoidCampaign: fn,
   onConnectAnalytics: fn, onCollectAnalytics: fn, onSave: fn }
@@ -70,7 +70,11 @@ describe('Multi-product Shorts Dashboard', () => {
       id: 'iteration-v2', iterationNumber: 1, status: 'draft', product: null, productSet, publication: null,
       productionPlans: [], archetypePlans: [{ requestId: 'request-v2', archetype: 'three_picks_v2', revisionNumber: 1,
         status: 'succeeded', planId: 'plan-v2', output: { hook: { display_text: '3つを紹介' }, product_presentations: presentations,
-          cta: { display_text: '詳細を見る' } }, productCards: [], audioArtifacts: [{ id: 'audio-1', status: 'planned' }], compositions: [] }] }] }
+          cta: { display_text: '詳細を見る' } }, productCards: [], audioArtifacts: Array.from({ length: 15 }, (_, index) => ({
+            id: `audio-${index + 1}`, sceneId: index < 3 ? 'hook' : `product-${Math.ceil((index - 2) / 4)}`,
+            segmentId: index < 3 ? `hook-${index + 1}` : `product-${index - 2}`, segmentOrder: index + 1,
+            inputText: `ナレーションsegment ${index + 1}`, status: 'planned',
+          })), compositions: [] }] }] }
     const state = { config: { configured: true, missing: [], analysis: {}, products: {},
       creativeProduction: {}, videoGeneration: {}, imageToVideo: {}, productAssetRevisions: {}, multiProductShorts: {}, finalComposition: {},
       multiProductShortsV2: { configured: true }, textToSpeech: { configured: true }, finalCompositionV2: { configured: false } }, queries: [], opportunities: [],
@@ -79,10 +83,22 @@ describe('Multi-product Shorts Dashboard', () => {
     expect(markup).toContain('Creative Archetype v2 Plan')
     expect(markup).toContain('hero-carousel-v2')
     expect(markup).toContain('hero-product-layout-v1')
-    expect(markup).toContain('0 / 1 ready')
-    expect(markup).toContain('ナレーション音声を生成')
+    expect(markup).toContain('0 / 15 ready')
+    expect(markup).toContain('このsegmentだけ音声生成')
+    expect(markup).toContain('初回Live ValidationではHookの最初のsegmentだけを生成できます')
+    expect(markup).toContain('全planned segmentを生成（15件 / 最大15件）')
     expect(markup).toContain('FFprobe実測duration')
     expect(markup).not.toContain('product-card-v3')
+  })
+
+  it('limits a fresh plan to its first Hook artifact, then releases the UI-only Live Validation gate', () => {
+    const artifacts = [
+      { id: 'product-1', sceneId: 'product-1', segmentOrder: 1, status: 'planned' },
+      { id: 'hook-2', sceneId: 'hook', segmentOrder: 2, status: 'planned' },
+      { id: 'hook-1', sceneId: 'hook', segmentOrder: 1, status: 'planned' },
+    ]
+    expect(initialAudioLiveValidationArtifactId(artifacts)).toBe('hook-1')
+    expect(initialAudioLiveValidationArtifactId([{ ...artifacts[0], status: 'ready' }, ...artifacts.slice(1)])).toBeNull()
   })
 
   it('always shows eligible and ineligible candidates when fewer than three are ready', () => {

@@ -401,6 +401,7 @@ function createRevenueApi({
       const threePicksV2PlanMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/three-picks-v2-plans$/i)
       const compositionV2Match = pathname.match(/^\/three-picks-v2-plans\/([0-9a-f-]{36})\/compositions$/i)
       const audioGenerationMatch = pathname.match(/^\/three-picks-v2-plans\/([0-9a-f-]{36})\/audio-generations$/i)
+      const audioArtifactGenerationMatch = pathname.match(/^\/creative-audio-artifacts\/([0-9a-f-]{36})\/generation$/i)
       const compositionPreviewMatch = pathname.match(/^\/composition-outputs\/([0-9a-f-]{36})\/preview$/i)
       if (req.method === 'GET' && compositionPreviewMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
@@ -425,6 +426,21 @@ function createRevenueApi({
         const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
         if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
         const result = await getStore().enqueueCreativeAudioGeneration(audioGenerationMatch[1], {
+          provider: config.textToSpeech.provider, providerAdapterVersion: config.textToSpeech.providerAdapterVersion,
+          model: config.textToSpeech.requestedModel, voice: env.REVENUE_LAB_ELEVENLABS_VOICE_ID,
+          outputFormat: config.textToSpeech.outputFormat, voiceSettings: ELEVENLABS_VOICE_SETTINGS,
+          fingerprintSchemaVersion: 'creative-audio-generation-v1', storageBucket: config.textToSpeech.storageBucket,
+          idempotencyKey,
+        })
+        return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
+      if (req.method === 'POST' && audioArtifactGenerationMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(audioArtifactGenerationMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'artifact idが正しくありません。')
+        if (!config.textToSpeech.configured) return fail(res, 503, 'TTS_NOT_CONFIGURED', 'ElevenLabs TTSのprivate launcher設定を確認してください。', { missing: config.textToSpeech.missing })
+        const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
+        if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
+        const result = await getStore().enqueueCreativeAudioArtifactGeneration(audioArtifactGenerationMatch[1], {
           provider: config.textToSpeech.provider, providerAdapterVersion: config.textToSpeech.providerAdapterVersion,
           model: config.textToSpeech.requestedModel, voice: env.REVENUE_LAB_ELEVENLABS_VOICE_ID,
           outputFormat: config.textToSpeech.outputFormat, voiceSettings: ELEVENLABS_VOICE_SETTINGS,
@@ -569,6 +585,10 @@ function createRevenueApi({
       if (/^CREATIVE_PRODUCTION_/.test(error?.code || '')) {
         const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
         return fail(res, status, error.code, 'Creative Productionの対象lineageまたは入力状態を確認してください。')
+      }
+      if (/^CREATIVE_AUDIO_/.test(error?.code || '')) {
+        const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
+        return fail(res, status, error.code, 'Creative Audio Artifactの状態を確認してください。')
       }
       if (/^(?:VIDEO_GENERATION_|POLLO_)/.test(error?.code || '')) {
         const status = error.status === 404 ? 404 : error.status === 409 ? 409 : error.code === 'POLLO_RATE_LIMITED' ? 429 : 400
