@@ -71,7 +71,7 @@ describe('Multi-product Shorts Dashboard', () => {
       productionPlans: [], archetypePlans: [{ requestId: 'request-v2', archetype: 'three_picks_v2', revisionNumber: 1,
         status: 'succeeded', planId: 'plan-v2', output: { hook: { display_text: '3つを紹介' }, product_presentations: presentations,
           cta: { display_text: '詳細を見る' } }, productCards: [], audioArtifacts: Array.from({ length: 15 }, (_, index) => ({
-            id: `audio-${index + 1}`, sceneId: index < 3 ? 'hook' : `product-${Math.ceil((index - 2) / 4)}`,
+            id: `audio-${index + 1}`, creativeArchetypePlanId: 'plan-v2', sceneId: index < 3 ? 'hook' : `product-${Math.ceil((index - 2) / 4)}`,
             segmentId: index < 3 ? `hook-${index + 1}` : `product-${index - 2}`, segmentOrder: index + 1,
             inputText: `ナレーションsegment ${index + 1}`, status: 'planned',
           })), compositions: [] }] }] }
@@ -91,6 +91,46 @@ describe('Multi-product Shorts Dashboard', () => {
     expect(markup).not.toContain('product-card-v3')
   })
 
+  it('renders only the latest v2 revision as interactive when older Hook artifacts failed', () => {
+    const productSet = { id: 'set-v2-revisions', archetype: 'three_picks_v2', selectionMode: 'human', items: [1, 2, 3].map(index => ({
+      id: `item-v2-revisions-${index}`, presentationOrder: index, productName: `商品${index}`,
+      assetRevision: { revisionNumber: 1 }, assetRevisions: [{ assetOrder: 1 }],
+    })) }
+    const audioArtifacts = (revisionNumber, hookStatus) => Array.from({ length: 11 }, (_, index) => ({
+      id: `audio-rev-${revisionNumber}-${index + 1}`, creativeArchetypePlanId: `plan-rev-${revisionNumber}`,
+      sceneId: index < 2 ? 'hook' : 'product-1', segmentId: index === 0 ? 'hook-1' : `segment-${index + 1}`,
+      segmentOrder: index + 1, inputText: `Revision ${revisionNumber} segment ${index + 1}`,
+      status: index === 0 ? hookStatus : 'planned',
+    }))
+    const revision = (revisionNumber, hookStatus) => ({
+      requestId: `request-rev-${revisionNumber}`, archetype: 'three_picks_v2', revisionNumber,
+      status: 'succeeded', planId: `plan-rev-${revisionNumber}`,
+      output: { hook: { display_text: `Revision ${revisionNumber} Hook` }, product_presentations: [], cta: { display_text: '詳細を見る' } },
+      productCards: [], audioArtifacts: audioArtifacts(revisionNumber, hookStatus), compositions: [],
+    })
+    const latestRevision = revision(4, 'planned')
+    latestRevision.audioArtifacts.push({ id: 'stale-cross-plan-hook', creativeArchetypePlanId: 'plan-rev-3',
+      sceneId: 'hook', segmentId: 'hook-1', segmentOrder: 1, inputText: 'stale failed Hook', status: 'failed' })
+    const campaign = { id: 'campaign-v2-revisions', name: 'Revision history', status: 'active', lineageKind: 'product_set', origins: [], iterations: [{
+      id: 'iteration-v2-revisions', iterationNumber: 1, status: 'draft', product: null, productSet, publication: null,
+      productionPlans: [], archetypePlans: [revision(2, 'failed'), latestRevision, revision(1, 'failed'), revision(3, 'failed')],
+    }] }
+    const state = { config: { configured: true, missing: [], analysis: {}, products: {},
+      creativeProduction: {}, videoGeneration: {}, imageToVideo: {}, productAssetRevisions: {}, multiProductShorts: {}, finalComposition: {},
+      multiProductShortsV2: { configured: true }, textToSpeech: { configured: true }, finalCompositionV2: { configured: false } },
+      queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [campaign], latestJob: null }
+
+    const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
+    expect(markup).toContain('制作案 Revision 4')
+    expect(markup).toContain('最新')
+    expect(markup).toContain('artifact 11件')
+    expect(markup).toContain('ready 0 / planned 11 / failed 0')
+    expect(markup).toContain('0 / 11 ready')
+    expect(markup).toMatch(/hook · hook-1<\/strong><span>planned<\/span>/)
+    expect(markup).toContain('過去の制作案・監査情報（3件）')
+    expect(markup.match(/このsegmentだけ音声生成/g)).toHaveLength(11)
+    expect(markup.match(/全planned segmentを生成/g)).toHaveLength(1)
+  })
   it('limits a fresh plan to its first Hook artifact, then releases the UI-only Live Validation gate', () => {
     const artifacts = [
       { id: 'product-1', sceneId: 'product-1', segmentOrder: 1, status: 'planned' },

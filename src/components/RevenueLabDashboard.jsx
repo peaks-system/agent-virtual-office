@@ -671,12 +671,39 @@ export function initialAudioLiveValidationArtifactId(artifacts = []) {
   return ([...planned].filter(item => item.sceneId === 'hook').sort(byOrder)[0] || [...planned].sort(byOrder)[0])?.id || null
 }
 
+export function threePicksRevisionSelection(revisions = []) {
+  const timestamp = revision => {
+    const value = Date.parse(revision?.generatedAt || revision?.createdAt || '')
+    return Number.isFinite(value) ? value : 0
+  }
+  const ordered = [...revisions].sort((left, right) => {
+    const revisionDelta = Number(right?.revisionNumber || 0) - Number(left?.revisionNumber || 0)
+    return revisionDelta || timestamp(right) - timestamp(left) || String(right?.requestId || '').localeCompare(String(left?.requestId || ''))
+  })
+  return { latest: ordered[0] || null, past: ordered.slice(1) }
+}
+
+export function audioArtifactsForPlan(revision) {
+  if (!revision?.planId) return []
+  return (revision.audioArtifacts || []).filter(artifact => artifact.creativeArchetypePlanId === revision.planId)
+}
+
+export function creativeAudioStatusCounts(artifacts = []) {
+  return {
+    ready: artifacts.filter(item => item.status === 'ready').length,
+    planned: artifacts.filter(item => item.status === 'planned').length,
+    failed: artifacts.filter(item => item.status === 'failed').length,
+  }
+}
+
 function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, composerConfig, busy, onGeneratePlan, onGenerateAudio, onGenerateAudioArtifact, onCompose, onPreview }) {
   const [submitting, setSubmitting] = useState(false)
   const [previewUrl, setPreviewUrl] = useState('')
   const keyRef = useRef(newCampaignIdempotencyKey())
   const revisions = iteration.archetypePlans || []
   const isV2 = iteration.productSet?.archetype === 'three_picks_v2'
+  const revisionSelection = threePicksRevisionSelection(revisions)
+  const visibleRevisions = isV2 ? [revisionSelection.latest].filter(Boolean) : revisions
   const generate = async () => { setSubmitting(true); try { await onGeneratePlan(iteration.id, keyRef.current); keyRef.current = newCampaignIdempotencyKey() } finally { setSubmitting(false) } }
   const compose = async planId => { setSubmitting(true); try { await onCompose(planId, keyRef.current); keyRef.current = newCampaignIdempotencyKey() } finally { setSubmitting(false) } }
   const generateAudio = async planId => { setSubmitting(true); try { await onGenerateAudio(planId, keyRef.current); keyRef.current = newCampaignIdempotencyKey() } finally { setSubmitting(false) } }
@@ -686,18 +713,19 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
     <div className="revenue-product-heading"><strong>{isV2 ? 'Creative Archetype v2 Plan' : 'Three Picks Plan'}</strong><button className="corp-primary" disabled={busy || submitting || !plannerConfig?.configured} onClick={generate}>{submitting ? '処理中…' : revisions.length ? '新しい制作案を生成' : 'Three Picks制作案を生成'}</button></div>
     {isV2 && <p className="revenue-three-picks-template"><strong>固定テンプレート:</strong> hero-carousel-v2 · hero-product-layout-v1 · 35〜45秒</p>}
     {!plannerConfig?.configured && <p className="revenue-warning">OPENAI_API_KEYを設定すると制作案を生成できます。</p>}
-    {revisions.map((revision, index) => <details key={revision.requestId} open={index === 0}><summary>制作案 {revisions.length - index} · {jobStatusLabel(revision.status)}</summary>
+    {visibleRevisions.map((revision, index) => { const revisionArtifacts = isV2 ? audioArtifactsForPlan(revision) : revision.audioArtifacts || []; const counts = creativeAudioStatusCounts(revisionArtifacts); return <details key={`${revision.planId || 'no-plan'}:${revision.requestId}`} open={index === 0}><summary>{isV2 ? <><strong>制作案 Revision {revision.revisionNumber}</strong> · 最新 · artifact {revisionArtifacts.length}件 · ready {counts.ready} / planned {counts.planned} / failed {counts.failed}</> : <>制作案 {revisions.length - index} · {jobStatusLabel(revision.status)}</>}</summary>
       {revision.output && (isV2
         ? <><p><strong>Hook:</strong> {revision.output.hook?.display_text}</p><div className="revenue-three-picks-cards">{[...(revision.output.product_presentations || [])].sort((a, b) => a.presentation_order - b.presentation_order).map(item => <article key={item.product_set_item_id}><span>PICK {item.presentation_order}</span><strong>{item.display_name}</strong><p>{item.short_appeal}</p><small className="revenue-fact-badge">{item.fact_badge}</small><details><summary>ナレーション原稿</summary><p>{item.tts}</p></details></article>)}</div><p><strong>CTA:</strong> {revision.output.cta?.display_text}</p></>
         : <><p><strong>Hook:</strong> {revision.output.hook}</p><div className="revenue-three-picks-cards">{revision.productCards.map(card => { const view = threePicksCardPresentation(card); return <article key={card.id}><span>PICK {card.pickNumber}</span><strong>{view.displayName}</strong><p>{view.shortAppeal}</p><small className="revenue-fact-badge">{view.factBadge}</small><details><summary>ナレーション原稿</summary><p>{view.tts}</p></details></article> })}</div><p><strong>Summary:</strong> {revision.output.summary}</p><p><strong>CTA:</strong> {revision.output.cta}</p></>)}
-      {isV2 && revision.planId && (() => { const artifacts = revision.audioArtifacts || []; const plannedCount = artifacts.filter(item => item.status === 'planned').length; const initialTargetId = initialAudioLiveValidationArtifactId(artifacts); return <div className="revenue-audio-readiness"><details><summary><strong>TTS narration segments</strong> <span>{artifacts.filter(item => item.status === 'ready').length} / {artifacts.length} ready</span></summary><p>ElevenLabsでsegment単位に生成し、字幕cueにはFFprobe実測durationを使います。</p>{initialTargetId && <p className="revenue-product-facts">初回Live ValidationではHookの最初のsegmentだけを生成できます。</p>}<div className="revenue-audio-segments">{artifacts.map(item => { const canGenerateSingle = item.status === 'planned' && (!initialTargetId || item.id === initialTargetId); return <article key={item.id}><div><strong>{item.sceneId || 'scene'} · {item.segmentId}</strong><span>{jobStatusLabel(item.status)}</span></div>{item.inputText && <p>{item.inputText}</p>}{item.id === initialTargetId && <small>初回Live Validation推奨</small>}{item.status === 'planned' && <button type="button" disabled={busy || submitting || !textToSpeechConfig?.configured || !canGenerateSingle} onClick={() => generateAudioArtifact(item.id)}>このsegmentだけ音声生成</button>}</article> })}</div></details><button type="button" disabled={busy || submitting || !textToSpeechConfig?.configured || plannedCount === 0 || Boolean(initialTargetId)} onClick={() => generateAudio(revision.planId)}>全planned segmentを生成（{plannedCount}件 / 最大15件）</button>{artifacts.some(item => item.status === 'submission_uncertain') && <p className="revenue-warning">送信結果を確認できないsegmentがあります。二重課金防止のため自動再送信しません。</p>}{artifacts.some(item => item.status === 'failed') && <p className="revenue-warning">音声生成に失敗したsegmentがあります。無音fallbackは行いません。</p>}<details className="revenue-audit-details"><summary>TTS履歴・監査情報</summary>{artifacts.map(item => <p key={item.id}>{item.segmentId} · {jobStatusLabel(item.status)}{item.durationSeconds ? ` · ${item.durationSeconds}秒` : ''}{item.safeErrorCode ? ` · ${item.safeErrorCode}` : ''}</p>)}</details></div> })()}
-      {revision.planId && <button disabled={busy || submitting || !composerConfig?.configured || (isV2 && (revision.audioArtifacts || []).some(item => item.status !== 'ready')) || revision.compositions?.some(item => ['queued', 'rendering'].includes(item.status))} onClick={() => compose(revision.planId)}>Shorts MP4を合成</button>}
+      {isV2 && revision.planId && (() => { const artifacts = revisionArtifacts; const plannedCount = artifacts.filter(item => item.status === 'planned').length; const initialTargetId = initialAudioLiveValidationArtifactId(artifacts); return <div className="revenue-audio-readiness"><details><summary><strong>TTS narration segments</strong> <span>{artifacts.filter(item => item.status === 'ready').length} / {artifacts.length} ready</span></summary><p>ElevenLabsでsegment単位に生成し、字幕cueにはFFprobe実測durationを使います。</p>{initialTargetId && <p className="revenue-product-facts">初回Live ValidationではHookの最初のsegmentだけを生成できます。</p>}<div className="revenue-audio-segments">{artifacts.map(item => { const canGenerateSingle = item.status === 'planned' && (!initialTargetId || item.id === initialTargetId); return <article key={`${revision.planId}:${item.id}`}><div><strong>{item.sceneId || 'scene'} · {item.segmentId}</strong><span>{jobStatusLabel(item.status)}</span></div>{item.inputText && <p>{item.inputText}</p>}{item.id === initialTargetId && <small>初回Live Validation推奨</small>}{item.status === 'planned' && <button type="button" disabled={busy || submitting || !textToSpeechConfig?.configured || !canGenerateSingle} onClick={() => generateAudioArtifact(item.id)}>このsegmentだけ音声生成</button>}</article> })}</div></details><button type="button" disabled={busy || submitting || !textToSpeechConfig?.configured || plannedCount === 0 || Boolean(initialTargetId)} onClick={() => generateAudio(revision.planId)}>全planned segmentを生成（{plannedCount}件 / 最大15件）</button>{artifacts.some(item => item.status === 'submission_uncertain') && <p className="revenue-warning">送信結果を確認できないsegmentがあります。二重課金防止のため自動再送信しません。</p>}{artifacts.some(item => item.status === 'failed') && <p className="revenue-warning">音声生成に失敗したsegmentがあります。無音fallbackは行いません。</p>}<details className="revenue-audit-details"><summary>TTS履歴・監査情報</summary>{artifacts.map(item => <p key={`${revision.planId}:${item.id}`}>{item.segmentId} · {jobStatusLabel(item.status)}{item.durationSeconds ? ` · ${item.durationSeconds}秒` : ''}{item.safeErrorCode ? ` · ${item.safeErrorCode}` : ''}</p>)}</details></div> })()}
+      {revision.planId && <button disabled={busy || submitting || !composerConfig?.configured || (isV2 && revisionArtifacts.some(item => item.status !== 'ready')) || revision.compositions?.some(item => ['queued', 'rendering'].includes(item.status))} onClick={() => compose(revision.planId)}>Shorts MP4を合成</button>}
       {isV2 && revision.planId && !textToSpeechConfig?.configured && <p className="revenue-warning">private launcherにElevenLabs model / voice / API key、FFprobe、専用audio bucketを設定してください。</p>}
       {!composerConfig?.configured && revision.planId && <p className="revenue-warning">{isV2 ? 'v2 rendererはFoundation状態です。音声がreadyでもMP4合成はまだ開始しません。' : 'private bucketsとFFmpeg/FFprobeのパスを設定すると合成できます。'}</p>}
       {revision.compositions?.map(composition => <div key={composition.id} className="revenue-composition-status"><span>{jobStatusLabel(composition.status)}</span>{composition.safeErrorCode && <small>Safe error: {composition.safeErrorCode}</small>}{composition.output && <><small>{composition.output.pixelWidth}×{composition.output.pixelHeight} · {composition.output.durationSeconds}秒</small><button onClick={() => preview(composition.output.id)}>Previewを開く</button></>}<details className="revenue-audit-details"><summary>履歴・監査情報</summary><small>provider: {composition.provider} {composition.providerVersion}<br />fingerprint: {composition.compositionFingerprint}{composition.output && <><br />SHA: {composition.output.contentSha256}<br />fps: {composition.output.fps}</>}</small></details></div>)}
       <details className="revenue-audit-details"><summary>制作案の履歴・監査情報</summary><p>Revision: {revision.revisionNumber}<br />Prompt: {revision.promptVersion}<br />Schema: {revision.schemaVersion}<br />Request: {revision.requestId}<br />Plan: {revision.planId || '未生成'}</p></details>
       {previewUrl && <video controls preload="metadata" src={previewUrl}>完成動画を再生できません。</video>}
-    </details>)}
+    </details> })}
+    {isV2 && revisionSelection.past.length > 0 && <details className="revenue-audit-details"><summary>過去の制作案・監査情報（{revisionSelection.past.length}件）</summary>{revisionSelection.past.map(revision => { const artifacts = audioArtifactsForPlan(revision); const counts = creativeAudioStatusCounts(artifacts); return <article key={`${revision.planId || 'no-plan'}:${revision.requestId}`}><strong>Revision {revision.revisionNumber} · {jobStatusLabel(revision.status)}</strong><p>artifact {artifacts.length}件 · ready {counts.ready} / planned {counts.planned} / failed {counts.failed}<br />Request: {revision.requestId}<br />Plan: {revision.planId || '未生成'}</p></article> })}</details>}
   </section>
 }
 
