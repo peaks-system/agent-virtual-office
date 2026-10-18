@@ -43,10 +43,23 @@ describe('ElevenLabs TTS Adapter v1', () => {
       .rejects.toMatchObject({ code: 'ELEVENLABS_SUBMISSION_UNCERTAIN', submissionUncertain: true })
   })
 
-  it('treats a definitive HTTP rejection as failed without exposing response text', async () => {
-    const provider = createElevenLabsTtsProvider({ apiKey: 'test-only', model: 'model', voice: 'voice',
-      fetchImpl: vi.fn(async () => new Response('provider detail', { status: 401 })) })
-    await expect(provider.synthesizeSegment({ inputText: '認証失敗', stableSeed: 1 }))
-      .rejects.toMatchObject({ code: 'ELEVENLABS_AUTH_FAILED', submissionUncertain: false, status: 401 })
+  it.each([
+    [400, 'ELEVENLABS_REQUEST_REJECTED'], [401, 'ELEVENLABS_AUTH_FAILED'],
+    [403, 'ELEVENLABS_AUTH_FAILED'], [404, 'ELEVENLABS_REQUEST_REJECTED'],
+    [422, 'ELEVENLABS_REQUEST_REJECTED'], [429, 'ELEVENLABS_RATE_LIMITED'],
+    [503, 'ELEVENLABS_UNAVAILABLE'],
+  ])('captures only safe diagnostics for HTTP %i', async (status, expectedCode) => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ detail: {
+      type: 'authentication_error', status: 'provider_error_code',
+      message: 'Safe provider message; xi-api-key: secret-value', extra: { raw: 'not retained' },
+    } }), { status, headers: { 'content-type': 'application/json' } }))
+    const provider = createElevenLabsTtsProvider({ apiKey: 'test-only', model: 'model', voice: 'voice', fetchImpl })
+    const error = await provider.synthesizeSegment({ inputText: 'HTTPエラー', stableSeed: 1 }).catch(value => value)
+    expect(error).toMatchObject({ code: expectedCode, submissionUncertain: false, status,
+      safeDiagnostics: { httpStatus: status, errorType: 'authentication_error',
+        errorCode: 'provider_error_code' } })
+    expect(error.safeDiagnostics.message).toContain('[redacted]')
+    expect(error.safeDiagnostics.message).not.toContain('secret-value')
+    expect(Object.keys(error.safeDiagnostics).sort()).toEqual(['errorCode', 'errorType', 'httpStatus', 'message'])
   })
 })

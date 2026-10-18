@@ -7,7 +7,9 @@ const { isDirectProductRegistrationPlaceholder } = require('./direct-product-con
 const { createHash } = require('node:crypto')
 
 class RevenueJobError extends Error {
-  constructor(code, message) { super(message); this.name = 'RevenueJobError'; this.code = code }
+  constructor(code, message, { safeDiagnostics = null } = {}) {
+    super(message); this.name = 'RevenueJobError'; this.code = code; this.safeDiagnostics = safeDiagnostics
+  }
 }
 
 function createJobHandlers({ store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
@@ -453,58 +455,56 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
       return { creativeAudioArtifactId: artifactId, status: artifact.status, providerCalled: false }
     }
 
-    let providerMetadata = null
+    let existing
     try {
-      const existing = await creativeAudioBlobStore.readIfExists(artifact.immutableObjectKey)
-      if (existing) {
-        if (!artifact.providerRequestId) {
-          await store.failCreativeAudioGeneration(artifactId, generationFingerprint, {
-            status: 'submission_uncertain', safeErrorCode: 'TTS_RECOVERY_RECEIPT_MISSING',
-          })
-          throw new RevenueJobError('TTS_RECOVERY_RECEIPT_MISSING', 'Stored audio lacks a durable provider receipt')
-        }
-        const audioSha256 = createHash('sha256').update(existing).digest('hex')
-        if (artifact.audioSha256 && artifact.audioSha256 !== audioSha256) {
-          await store.failCreativeAudioGeneration(artifactId, generationFingerprint, {
-            status: 'submission_uncertain', safeErrorCode: 'TTS_RECOVERY_HASH_MISMATCH',
-            providerRequestId: artifact.providerRequestId, providerTraceId: artifact.providerTraceId,
-            characterCost: artifact.providerCharacterCost,
-          })
-          throw new RevenueJobError('TTS_RECOVERY_HASH_MISMATCH', 'Stored Creative Audio failed integrity verification')
-        }
-        const durationSeconds = await audioDurationProbe(existing)
-        await store.completeCreativeAudioGeneration(artifactId, generationFingerprint, {
-          audioSha256, durationSeconds, byteSize: existing.length,
-          providerRequestId: artifact.providerRequestId, providerTraceId: artifact.providerTraceId,
-          characterCost: artifact.providerCharacterCost, recovered: true,
-        })
-        return { creativeAudioArtifactId: artifactId, status: 'ready', recovered: true, providerCalled: false }
-      }
-      if (!claim.claimed) {
+      existing = await creativeAudioBlobStore.readIfExists(artifact.immutableObjectKey)
+    } catch (rawError) {
+      const safeDiagnostics = { httpStatus: Number.isInteger(rawError?.status) ? rawError.status : null }
+      try { await store.failCreativeAudioGeneration(artifactId, generationFingerprint, {
+        status: 'failed', safeErrorCode: 'CREATIVE_AUDIO_STORAGE_ERROR',
+      }) } catch { console.error('[revenue-lab] Creative Audio storage failure state could not be persisted', { artifactId }) }
+      throw new RevenueJobError('CREATIVE_AUDIO_STORAGE_ERROR', 'Creative Audio storage operation failed', { safeDiagnostics })
+    }
+    if (existing) {
+      if (!artifact.providerRequestId) {
         await store.failCreativeAudioGeneration(artifactId, generationFingerprint, {
-          status: 'submission_uncertain', safeErrorCode: 'TTS_PREVIOUS_SUBMISSION_UNCERTAIN',
+          status: 'submission_uncertain', safeErrorCode: 'TTS_RECOVERY_RECEIPT_MISSING',
+        })
+        throw new RevenueJobError('TTS_RECOVERY_RECEIPT_MISSING', 'Stored audio lacks a durable provider receipt')
+      }
+      const audioSha256 = createHash('sha256').update(existing).digest('hex')
+      if (artifact.audioSha256 && artifact.audioSha256 !== audioSha256) {
+        await store.failCreativeAudioGeneration(artifactId, generationFingerprint, {
+          status: 'submission_uncertain', safeErrorCode: 'TTS_RECOVERY_HASH_MISMATCH',
           providerRequestId: artifact.providerRequestId, providerTraceId: artifact.providerTraceId,
           characterCost: artifact.providerCharacterCost,
         })
-        return { creativeAudioArtifactId: artifactId, status: 'submission_uncertain', providerCalled: false }
+        throw new RevenueJobError('TTS_RECOVERY_HASH_MISMATCH', 'Stored Creative Audio failed integrity verification')
       }
+      const durationSeconds = await audioDurationProbe(existing)
+      await store.completeCreativeAudioGeneration(artifactId, generationFingerprint, {
+        audioSha256, durationSeconds, byteSize: existing.length,
+        providerRequestId: artifact.providerRequestId, providerTraceId: artifact.providerTraceId,
+        characterCost: artifact.providerCharacterCost, recovered: true,
+      })
+      return { creativeAudioArtifactId: artifactId, status: 'ready', recovered: true, providerCalled: false }
+    }
+    if (!claim.claimed) {
+      await store.failCreativeAudioGeneration(artifactId, generationFingerprint, {
+        status: 'submission_uncertain', safeErrorCode: 'TTS_PREVIOUS_SUBMISSION_UNCERTAIN',
+        providerRequestId: artifact.providerRequestId, providerTraceId: artifact.providerTraceId,
+        characterCost: artifact.providerCharacterCost,
+      })
+      return { creativeAudioArtifactId: artifactId, status: 'submission_uncertain', providerCalled: false }
+    }
 
-      const generated = await textToSpeechProvider.synthesizeSegment({
+    let providerMetadata = null
+    let generated
+    try {
+      generated = await textToSpeechProvider.synthesizeSegment({
         inputText: artifact.inputText, stableSeed: artifact.stableSeed,
       })
-      providerMetadata = { providerRequestId: generated.providerRequestId,
-        providerTraceId: generated.providerTraceId, characterCost: generated.characterCost }
-      let durationSeconds
-      try { durationSeconds = await audioDurationProbe(generated.bytes) }
-      catch { throw Object.assign(new Error('Creative Audio duration measurement failed'), { code: 'TTS_DURATION_MEASUREMENT_FAILED' }) }
-      const receipt = { audioSha256: generated.audioSha256, durationSeconds,
-        byteSize: generated.bytes.length, ...providerMetadata }
-      await store.recordCreativeAudioProviderReceipt(artifactId, generationFingerprint, receipt)
-      await creativeAudioBlobStore.putImmutable(artifact.immutableObjectKey, generated.bytes, 'audio/mpeg')
-      await store.completeCreativeAudioGeneration(artifactId, generationFingerprint, receipt)
-      return { creativeAudioArtifactId: artifactId, status: 'ready', recovered: false, providerCalled: true }
     } catch (rawError) {
-      if (rawError instanceof RevenueJobError && /^TTS_RECOVERY_/.test(rawError.code)) throw rawError
       const error = /^TTS_[A-Z0-9_]+$/.test(rawError?.code || '') ? rawError : textToSpeechProvider.normalizeError(rawError)
       const status = error.submissionUncertain ? 'submission_uncertain' : 'failed'
       try {
@@ -515,8 +515,33 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
           characterCost: providerMetadata?.characterCost ?? error.characterCost,
         })
       } catch { console.error('[revenue-lab] Creative Audio failure state could not be persisted', { artifactId }) }
-      throw new RevenueJobError(error.code || 'TTS_GENERATION_FAILED', 'Creative Audio generation failed')
+      throw new RevenueJobError(error.code || 'TTS_GENERATION_FAILED', 'Creative Audio generation failed', {
+        safeDiagnostics: error.safeDiagnostics,
+      })
     }
+    providerMetadata = { providerRequestId: generated.providerRequestId,
+      providerTraceId: generated.providerTraceId, characterCost: generated.characterCost }
+    let durationSeconds
+    try { durationSeconds = await audioDurationProbe(generated.bytes) }
+    catch {
+      try { await store.failCreativeAudioGeneration(artifactId, generationFingerprint, {
+        status: 'failed', safeErrorCode: 'TTS_DURATION_MEASUREMENT_FAILED', ...providerMetadata,
+      }) } catch { console.error('[revenue-lab] Creative Audio duration failure state could not be persisted', { artifactId }) }
+      throw new RevenueJobError('TTS_DURATION_MEASUREMENT_FAILED', 'Creative Audio duration measurement failed')
+    }
+    const receipt = { audioSha256: generated.audioSha256, durationSeconds,
+      byteSize: generated.bytes.length, ...providerMetadata }
+    await store.recordCreativeAudioProviderReceipt(artifactId, generationFingerprint, receipt)
+    try { await creativeAudioBlobStore.putImmutable(artifact.immutableObjectKey, generated.bytes, 'audio/mpeg') }
+    catch (rawError) {
+      const safeDiagnostics = { httpStatus: Number.isInteger(rawError?.status) ? rawError.status : null }
+      try { await store.failCreativeAudioGeneration(artifactId, generationFingerprint, {
+        status: 'failed', safeErrorCode: 'CREATIVE_AUDIO_STORAGE_ERROR', ...providerMetadata,
+      }) } catch { console.error('[revenue-lab] Creative Audio storage failure state could not be persisted', { artifactId }) }
+      throw new RevenueJobError('CREATIVE_AUDIO_STORAGE_ERROR', 'Creative Audio storage operation failed', { safeDiagnostics })
+    }
+    await store.completeCreativeAudioGeneration(artifactId, generationFingerprint, receipt)
+    return { creativeAudioArtifactId: artifactId, status: 'ready', recovered: false, providerCalled: true }
   }
 
   return new Map([

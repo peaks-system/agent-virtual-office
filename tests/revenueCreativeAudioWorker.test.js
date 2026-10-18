@@ -90,4 +90,20 @@ describe('Creative Audio generation worker', () => {
         providerTraceId: 'trace-1', characterCost: 12 }))
     expect(value.creativeAudioBlobStore.putImmutable).not.toHaveBeenCalled()
   })
+
+  it('keeps pre-provider storage failures out of the ElevenLabs error boundary', async () => {
+    const storageError = Object.assign(new Error('storage read failed'), {
+      code: 'CREATIVE_AUDIO_STORAGE_READ_FAILED', status: 400,
+    })
+    const value = dependencies({ blob: { readIfExists: vi.fn(async () => { throw storageError }) },
+      provider: { normalizeError: vi.fn(() => new Error('must not normalize storage')) } })
+    await expect(value.handler({ payload: { creative_audio_artifact_id: artifact.id,
+      generation_fingerprint: fingerprint } })).rejects.toMatchObject({
+      code: 'CREATIVE_AUDIO_STORAGE_ERROR', safeDiagnostics: { httpStatus: 400 },
+    })
+    expect(value.textToSpeechProvider.synthesizeSegment).not.toHaveBeenCalled()
+    expect(value.textToSpeechProvider.normalizeError).not.toHaveBeenCalled()
+    expect(value.store.failCreativeAudioGeneration).toHaveBeenCalledWith(artifact.id, fingerprint,
+      expect.objectContaining({ status: 'failed', safeErrorCode: 'CREATIVE_AUDIO_STORAGE_ERROR' }))
+  })
 })

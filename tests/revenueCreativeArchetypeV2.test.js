@@ -117,6 +117,18 @@ describe('Creative Archetype v2 schema and compiler', () => {
       serviceRoleKey: 'test-only', bucket: 'revenue-lab-creative-audio',
       fetchImpl: async () => new Response(null, { status: 404 }) })
     await expect(missing.readIfExists(key)).resolves.toBeNull()
+    const supabaseMissing = createSupabaseCreativeAudioBlobStore({ url: 'https://example.supabase.co',
+      serviceRoleKey: 'test-only', bucket: 'revenue-lab-creative-audio',
+      fetchImpl: async () => new Response(JSON.stringify({ statusCode: '404', error: 'not_found',
+        message: 'Object not found' }), { status: 400, headers: { 'content-type': 'application/json' } }) })
+    await expect(supabaseMissing.readIfExists(key)).resolves.toBeNull()
+    const rejected = createSupabaseCreativeAudioBlobStore({ url: 'https://example.supabase.co',
+      serviceRoleKey: 'test-only', bucket: 'revenue-lab-creative-audio',
+      fetchImpl: async () => new Response(JSON.stringify({ statusCode: '400', error: 'invalid_request',
+        message: 'Invalid request' }), { status: 400, headers: { 'content-type': 'application/json' } }) })
+    await expect(rejected.readIfExists(key)).rejects.toMatchObject({
+      code: 'CREATIVE_AUDIO_STORAGE_READ_FAILED', status: 400,
+    })
     const present = createSupabaseCreativeAudioBlobStore({ url: 'https://example.supabase.co',
       serviceRoleKey: 'test-only', bucket: 'revenue-lab-creative-audio',
       fetchImpl: async () => new Response(Buffer.from('existing audio'), { status: 200 }) })

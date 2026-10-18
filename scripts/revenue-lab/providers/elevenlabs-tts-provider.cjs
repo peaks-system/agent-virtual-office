@@ -20,11 +20,39 @@ function finiteHeaderInteger(response, name) {
   return Number.isInteger(value) && value >= 0 ? value : null
 }
 
-function httpError(status) {
+function safeToken(value) {
+  const token = String(value || '').trim()
+  return /^[A-Za-z0-9_.-]{1,120}$/.test(token) ? token : null
+}
+
+function safeProviderMessage(value) {
+  const message = String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/\bsk_[A-Za-z0-9_-]+\b/g, '[redacted]')
+    .replace(/\b(Bearer|xi-api-key|api[ _-]?key)(\s*[:=]?\s*)\S+/gi, '$1$2[redacted]')
+  return message ? message.slice(0, 240) : 'ElevenLabs rejected the speech request'
+}
+
+async function safeErrorDiagnostics(response) {
+  let payload = null
+  try { payload = await response.json() }
+  catch { /* A non-JSON provider error has no safe body diagnostics. */ }
+  const detail = payload?.detail && typeof payload.detail === 'object' ? payload.detail : null
+  const detailMessage = typeof payload?.detail === 'string' ? payload.detail : null
+  return Object.freeze({
+    httpStatus: response.status,
+    errorType: safeToken(detail?.type ?? payload?.type),
+    errorCode: safeToken(detail?.status ?? detail?.code ?? payload?.status ?? payload?.code),
+    message: safeProviderMessage(detail?.message ?? detailMessage ?? payload?.message),
+  })
+}
+
+async function httpError(response) {
+  const status = response.status
   const code = status === 401 || status === 403 ? 'ELEVENLABS_AUTH_FAILED'
     : status === 429 ? 'ELEVENLABS_RATE_LIMITED'
       : status >= 500 ? 'ELEVENLABS_UNAVAILABLE' : 'ELEVENLABS_REQUEST_REJECTED'
-  return new TextToSpeechProviderError(code, 'ElevenLabs rejected the speech request', { status })
+  const safeDiagnostics = await safeErrorDiagnostics(response)
+  return new TextToSpeechProviderError(code, 'ElevenLabs rejected the speech request', { status, safeDiagnostics })
 }
 
 function createElevenLabsTtsProvider({
@@ -62,7 +90,7 @@ function createElevenLabsTtsProvider({
     } catch {
       throw new TextToSpeechProviderError('ELEVENLABS_SUBMISSION_UNCERTAIN', 'ElevenLabs submission outcome is uncertain', { submissionUncertain: true })
     }
-    if (!response.ok) throw httpError(response.status)
+    if (!response.ok) throw await httpError(response)
     let bytes
     try { bytes = Buffer.from(await response.arrayBuffer()) }
     catch {
@@ -84,4 +112,5 @@ function createElevenLabsTtsProvider({
     outputFormat: OUTPUT_FORMAT, voiceSettings: VOICE_SETTINGS, synthesizeSegment, normalizeError }
 }
 
-module.exports = { ADAPTER_VERSION, BASE_URL, OUTPUT_FORMAT, PROVIDER_ID, VOICE_SETTINGS, createElevenLabsTtsProvider }
+module.exports = { ADAPTER_VERSION, BASE_URL, OUTPUT_FORMAT, PROVIDER_ID, VOICE_SETTINGS,
+  createElevenLabsTtsProvider, safeErrorDiagnostics, safeProviderMessage }

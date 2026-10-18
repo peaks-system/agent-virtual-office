@@ -1,12 +1,13 @@
 'use strict'
 
 class TextToSpeechProviderError extends Error {
-  constructor(code, message, { status = null, submissionUncertain = false } = {}) {
+  constructor(code, message, { status = null, submissionUncertain = false, safeDiagnostics = null } = {}) {
     super(message)
     this.name = 'TextToSpeechProviderError'
     this.code = code
     this.status = status
     this.submissionUncertain = submissionUncertain
+    this.safeDiagnostics = safeDiagnostics
   }
 }
 

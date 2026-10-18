@@ -55,7 +55,8 @@ function createLocalWorker({
         })
         return { claimed: true, succeeded: false, deferred: true, jobId: job.id, errorCode: safe.code }
       }
-      console.error('[revenue-lab] Job failed', { jobId: job.id, jobType: job.jobType, code: safe.code })
+      console.error('[revenue-lab] Job failed', { jobId: job.id, jobType: job.jobType, code: safe.code,
+        safeDiagnostics: error?.safeDiagnostics || undefined })
       await store.finishJob(job.id, workerId, false, safe)
       return { claimed: true, succeeded: false, jobId: job.id, errorCode: safe.code }
     }

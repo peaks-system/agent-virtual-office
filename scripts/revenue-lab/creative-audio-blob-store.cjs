@@ -20,6 +20,19 @@ function safeAudioKey(value) {
   return key
 }
 
+async function isMissingObjectResponse(response) {
+  if (response.status === 404) return true
+  if (response.status !== 400) return false
+  let payload
+  try { payload = await response.clone().json() }
+  catch { return false }
+  const statusCode = Number(payload?.statusCode)
+  const error = String(payload?.error || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+  const message = String(payload?.message || '').trim().toLowerCase()
+  return statusCode === 404 || error === 'not_found'
+    || (/\bobject\b/.test(message) && /\bnot[ _-]?found\b/.test(message))
+}
+
 function createSupabaseCreativeAudioBlobStore({ url, serviceRoleKey, bucket, fetchImpl = globalThis.fetch } = {}) {
   if (!url || !serviceRoleKey) throw new Error('Supabase storage credentials are required')
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required')
@@ -47,11 +60,12 @@ function createSupabaseCreativeAudioBlobStore({ url, serviceRoleKey, bucket, fet
   }
   async function readIfExists(key) {
     const response = await fetchImpl(`${root}/storage/v1/object/${pathFor(key)}`, { headers: headers({}) })
-    if (response.status === 404) return null
+    if (await isMissingObjectResponse(response)) return null
     if (!response.ok) throw new CreativeAudioBlobStoreError('CREATIVE_AUDIO_STORAGE_READ_FAILED', 'Creative Audio storage read failed', response.status)
     return Buffer.from(await response.arrayBuffer())
   }
   return { provider: 'supabase-storage', bucket: bucketName, putImmutable, readImmutable, readIfExists }
 }
 
-module.exports = { CreativeAudioBlobStoreError, createSupabaseCreativeAudioBlobStore, safeAudioBucket, safeAudioKey }
+module.exports = { CreativeAudioBlobStoreError, createSupabaseCreativeAudioBlobStore, isMissingObjectResponse,
+  safeAudioBucket, safeAudioKey }
