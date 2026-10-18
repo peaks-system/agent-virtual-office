@@ -14,13 +14,13 @@ Generate Japanese narration audio for each `planned` Creative Archetype v2 narra
 
 The provider is `elevenlabs`, adapter version `elevenlabs-tts-adapter-v1`, and output format `mp3_44100_128`. The configured model and voice are read from the private launcher through `REVENUE_LAB_ELEVENLABS_MODEL_ID` and `REVENUE_LAB_ELEVENLABS_VOICE_ID`; `eleven_multilingual_v2` is the recommended initial model but is not hard-coded. One voice is fixed per running worker.
 
-Each request contains one narration segment, explicit voice settings, `apply_language_text_normalization=true`, and a stable integer seed derived from the generation fingerprint. The seed improves repeatability for identical inputs but ElevenLabs does not guarantee byte-identical or fully deterministic output. The adapter therefore never treats seed equality as provider idempotency.
+Each request contains one narration segment, explicit voice settings, `apply_text_normalization="auto"`, and a stable integer seed derived from the generation fingerprint. Normalization is selected through a deny-by-default model capability map. `eleven_multilingual_v2` does not send `apply_language_text_normalization` or `language_code`; a future model may enable language text normalization only after its capability is explicitly registered. The seed improves repeatability for identical inputs but ElevenLabs does not guarantee byte-identical or fully deterministic output. The adapter therefore never treats seed equality as provider idempotency.
 
 The adapter captures `character-cost`, `request-id`, and `x-trace-id` response headers. It returns audio bytes and sealed metadata only; API keys, authorization headers, and request text are never logged. The API key exists only in the private launcher/runtime environment and is never persisted in a job payload, Dashboard response, database row, or log.
 
 ## At-most-once generation
 
-The generation fingerprint is SHA-256 over the artifact ID, input SHA-256, provider, adapter version, configured model, configured voice, output format, exact voice settings, Japanese normalization flag, stable-seed algorithm version, and fingerprint schema version. The seed value is then derived from that fingerprint, avoiding a circular fingerprint input. The object key is known before submission:
+The generation fingerprint is SHA-256 over the artifact ID, input SHA-256, provider, adapter version, configured model, configured voice, output format, exact voice settings, the model capability's actual request normalization settings, stable-seed algorithm version, and fingerprint schema version. New scheduling uses `creative-audio-generation-v2`; existing failed artifacts remain terminal and are never reused or resubmitted. The seed value is then derived from that fingerprint, avoiding a circular fingerprint input. The object key is known before submission:
 
 `creative-audio/<plan-id>/<segment-id>/<generation-fingerprint>.mp3`
 

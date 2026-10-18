@@ -38,6 +38,9 @@ describe('Creative Audio Artifact generation API boundary', () => {
     expect(store.enqueueCreativeAudioArtifactGeneration).toHaveBeenNthCalledWith(1, artifactId, expect.objectContaining({
       idempotencyKey, provider: 'elevenlabs', model: 'eleven_multilingual_v2', voice: 'voice-1',
       outputFormat: 'mp3_44100_128', storageBucket: 'revenue-lab-creative-audio',
+      fingerprintSchemaVersion: 'creative-audio-generation-v2',
+      voiceSettings: expect.objectContaining({
+        normalization: { apply_text_normalization: 'auto' } }),
     }))
     const serialized = JSON.stringify(store.enqueueCreativeAudioArtifactGeneration.mock.calls)
     expect(serialized).not.toContain('private-elevenlabs-key')

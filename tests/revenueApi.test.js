@@ -60,6 +60,9 @@ describe('Revenue Lab API', () => {
     expect(store.enqueueCreativeAudioGeneration).toHaveBeenCalledWith(uuid, expect.objectContaining({
       provider: 'elevenlabs', model: 'eleven_multilingual_v2', voice: 'voice-1',
       outputFormat: 'mp3_44100_128', storageBucket: 'revenue-lab-creative-audio',
+      fingerprintSchemaVersion: 'creative-audio-generation-v2',
+      voiceSettings: expect.objectContaining({
+        normalization: { apply_text_normalization: 'auto' } }),
     }))
     expect(JSON.stringify(store.enqueueCreativeAudioGeneration.mock.calls)).not.toContain('private-elevenlabs-key')
   })

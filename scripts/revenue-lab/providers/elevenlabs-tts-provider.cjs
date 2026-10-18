@@ -8,6 +8,30 @@ const ADAPTER_VERSION = 'elevenlabs-tts-adapter-v1'
 const OUTPUT_FORMAT = 'mp3_44100_128'
 const BASE_URL = 'https://api.elevenlabs.io'
 const VOICE_SETTINGS = Object.freeze({ stability: 0.5, similarity_boost: 0.75, style: 0, use_speaker_boost: true, speed: 1 })
+const TEXT_NORMALIZATION = 'auto'
+const DEFAULT_MODEL_CAPABILITY = Object.freeze({ languageTextNormalization: false })
+const MODEL_CAPABILITIES = Object.freeze({
+  eleven_multilingual_v2: Object.freeze({ languageTextNormalization: false }),
+})
+
+function modelCapability(model) {
+  return MODEL_CAPABILITIES[String(model || '').trim()] || DEFAULT_MODEL_CAPABILITY
+}
+
+function requestNormalizationForModel(model) {
+  const settings = { apply_text_normalization: TEXT_NORMALIZATION }
+  if (modelCapability(model).languageTextNormalization) {
+    settings.apply_language_text_normalization = true
+  }
+  return Object.freeze(settings)
+}
+
+function fingerprintSettingsForModel(model) {
+  return Object.freeze({
+    voice_settings: VOICE_SETTINGS,
+    normalization: requestNormalizationForModel(model),
+  })
+}
 
 function safeIdentifier(value, label) {
   const result = String(value || '').trim()
@@ -68,6 +92,7 @@ function createElevenLabsTtsProvider({
   const selectedModel = safeIdentifier(model, 'model ID')
   const selectedVoice = safeIdentifier(voice, 'voice ID')
   if (!Number.isFinite(timeoutMs) || timeoutMs < 5_000 || timeoutMs > 120_000) throw new TypeError('Invalid ElevenLabs timeout')
+  const normalizationSettings = requestNormalizationForModel(selectedModel)
   const root = String(baseUrl).replace(/\/+$/, '')
 
   function normalizeError(error) {
@@ -85,7 +110,7 @@ function createElevenLabsTtsProvider({
         method: 'POST', signal: AbortSignal.timeout(timeoutMs),
         headers: { 'content-type': 'application/json', accept: 'audio/mpeg', 'xi-api-key': apiKey },
         body: JSON.stringify({ text, model_id: selectedModel, voice_settings: VOICE_SETTINGS,
-          seed: stableSeed, apply_text_normalization: 'auto', apply_language_text_normalization: true }),
+          seed: stableSeed, ...normalizationSettings }),
       })
     } catch {
       throw new TextToSpeechProviderError('ELEVENLABS_SUBMISSION_UNCERTAIN', 'ElevenLabs submission outcome is uncertain', { submissionUncertain: true })
@@ -109,8 +134,10 @@ function createElevenLabsTtsProvider({
   }
 
   return { id: PROVIDER_ID, version: ADAPTER_VERSION, model: selectedModel, voice: selectedVoice,
-    outputFormat: OUTPUT_FORMAT, voiceSettings: VOICE_SETTINGS, synthesizeSegment, normalizeError }
+    outputFormat: OUTPUT_FORMAT, voiceSettings: VOICE_SETTINGS,
+    fingerprintSettings: fingerprintSettingsForModel(selectedModel), synthesizeSegment, normalizeError }
 }
 
-module.exports = { ADAPTER_VERSION, BASE_URL, OUTPUT_FORMAT, PROVIDER_ID, VOICE_SETTINGS,
-  createElevenLabsTtsProvider, safeErrorDiagnostics, safeProviderMessage }
+module.exports = { ADAPTER_VERSION, BASE_URL, MODEL_CAPABILITIES, OUTPUT_FORMAT, PROVIDER_ID,
+  TEXT_NORMALIZATION, VOICE_SETTINGS, createElevenLabsTtsProvider, fingerprintSettingsForModel,
+  modelCapability, requestNormalizationForModel, safeErrorDiagnostics, safeProviderMessage }

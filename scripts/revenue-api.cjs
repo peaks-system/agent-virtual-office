@@ -19,7 +19,8 @@ const { COMPOSITION_VERSION: COMPOSITION_V2_VERSION } = require('./revenue-lab/m
 const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
 const { DIRECT_PRODUCT_PLACEHOLDERS, directProductCampaignName } = require('./revenue-lab/direct-product-contract.cjs')
 const { ADAPTER_VERSION: ELEVENLABS_ADAPTER_VERSION, OUTPUT_FORMAT: ELEVENLABS_OUTPUT_FORMAT,
-  PROVIDER_ID: ELEVENLABS_PROVIDER_ID, VOICE_SETTINGS: ELEVENLABS_VOICE_SETTINGS } = require('./revenue-lab/providers/elevenlabs-tts-provider.cjs')
+  PROVIDER_ID: ELEVENLABS_PROVIDER_ID,
+  fingerprintSettingsForModel: elevenLabsFingerprintSettingsForModel } = require('./revenue-lab/providers/elevenlabs-tts-provider.cjs')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -428,8 +429,9 @@ function createRevenueApi({
         const result = await getStore().enqueueCreativeAudioGeneration(audioGenerationMatch[1], {
           provider: config.textToSpeech.provider, providerAdapterVersion: config.textToSpeech.providerAdapterVersion,
           model: config.textToSpeech.requestedModel, voice: env.REVENUE_LAB_ELEVENLABS_VOICE_ID,
-          outputFormat: config.textToSpeech.outputFormat, voiceSettings: ELEVENLABS_VOICE_SETTINGS,
-          fingerprintSchemaVersion: 'creative-audio-generation-v1', storageBucket: config.textToSpeech.storageBucket,
+          outputFormat: config.textToSpeech.outputFormat,
+          voiceSettings: elevenLabsFingerprintSettingsForModel(config.textToSpeech.requestedModel),
+          fingerprintSchemaVersion: 'creative-audio-generation-v2', storageBucket: config.textToSpeech.storageBucket,
           idempotencyKey,
         })
         return reply(res, result?.created === false ? 200 : 201, { data: result })
@@ -443,8 +445,9 @@ function createRevenueApi({
         const result = await getStore().enqueueCreativeAudioArtifactGeneration(audioArtifactGenerationMatch[1], {
           provider: config.textToSpeech.provider, providerAdapterVersion: config.textToSpeech.providerAdapterVersion,
           model: config.textToSpeech.requestedModel, voice: env.REVENUE_LAB_ELEVENLABS_VOICE_ID,
-          outputFormat: config.textToSpeech.outputFormat, voiceSettings: ELEVENLABS_VOICE_SETTINGS,
-          fingerprintSchemaVersion: 'creative-audio-generation-v1', storageBucket: config.textToSpeech.storageBucket,
+          outputFormat: config.textToSpeech.outputFormat,
+          voiceSettings: elevenLabsFingerprintSettingsForModel(config.textToSpeech.requestedModel),
+          fingerprintSchemaVersion: 'creative-audio-generation-v2', storageBucket: config.textToSpeech.storageBucket,
           idempotencyKey,
         })
         return reply(res, result?.created === false ? 200 : 201, { data: result })

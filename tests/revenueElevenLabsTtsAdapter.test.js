@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   ADAPTER_VERSION, OUTPUT_FORMAT, PROVIDER_ID,
   createElevenLabsTtsProvider,
+  fingerprintSettingsForModel,
 } from '../scripts/revenue-lab/providers/elevenlabs-tts-provider.cjs'
 
 describe('ElevenLabs TTS Adapter v1', () => {
@@ -18,14 +19,21 @@ describe('ElevenLabs TTS Adapter v1', () => {
     const fetchImpl = vi.fn(async () => new Response(bytes, { status: 200, headers: {
       'content-type': 'audio/mpeg', 'character-cost': '18', 'request-id': 'req-1', 'x-trace-id': 'trace-1',
     } }))
-    const provider = createElevenLabsTtsProvider({ apiKey: 'test-only', model: 'configured-model',
+    const provider = createElevenLabsTtsProvider({ apiKey: 'test-only', model: 'eleven_multilingual_v2',
       voice: 'configured-voice', fetchImpl })
     const result = await provider.synthesizeSegment({ inputText: '日本語の短いナレーションです。', stableSeed: 42 })
     const [url, options] = fetchImpl.mock.calls[0]
     expect(url).toContain('/v1/text-to-speech/configured-voice?output_format=mp3_44100_128')
     expect(options.headers['xi-api-key']).toBe('test-only')
-    expect(JSON.parse(options.body)).toMatchObject({ model_id: 'configured-model', seed: 42,
-      apply_language_text_normalization: true })
+    const requestBody = JSON.parse(options.body)
+    expect(requestBody).toMatchObject({ model_id: 'eleven_multilingual_v2', seed: 42,
+      apply_text_normalization: 'auto' })
+    expect(requestBody).not.toHaveProperty('apply_language_text_normalization')
+    expect(requestBody).not.toHaveProperty('language_code')
+    expect(fingerprintSettingsForModel('eleven_multilingual_v2')).toEqual({
+      voice_settings: requestBody.voice_settings,
+      normalization: { apply_text_normalization: requestBody.apply_text_normalization },
+    })
     expect(result).toMatchObject({ providerRequestId: 'req-1', providerTraceId: 'trace-1',
       characterCost: 18, contentType: 'audio/mpeg', outputFormat: OUTPUT_FORMAT })
     expect(result.audioSha256).toBe(createHash('sha256').update(bytes).digest('hex'))
