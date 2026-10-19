@@ -22,7 +22,7 @@ async function fixture({ authorize = () => true, env, store } = {}) {
 }
 
 describe('Revenue Lab API', () => {
-  it('validates v2 Product Set asset cardinality and reports foundation-only audio composition', () => {
+  it('validates v2 Product Set asset cardinality and requires every local v2 composition dependency', () => {
     const input = threePicksV2CampaignInput({ idempotencyKey, campaignName: 'v2', items: [1, 2, 3].map(index => ({
       curatedProductId: `${index}1111111-1111-4111-8111-111111111111`,
       productAssetRevisionIds: [`${index}2222222-2222-4222-8222-222222222222`], verifiedFactRef: 'summary',
@@ -32,7 +32,13 @@ describe('Revenue Lab API', () => {
       configured: true, archetype: 'three_picks_v2', templateId: 'hero-carousel-v2', templateSelection: 'server_fixed',
     })
     expect(configurationStatus({}).finalCompositionV2).toMatchObject({ configured: false,
-      missing: ['ELEVENLABS_TTS_NOT_CONFIGURED', 'V2_RENDER_ADAPTER_NOT_CONFIGURED'] })
+      missing: expect.arrayContaining(['REVENUE_LAB_PRODUCT_ASSET_BUCKET', 'REVENUE_LAB_CREATIVE_AUDIO_BUCKET',
+        'REVENUE_LAB_COMPOSITION_BUCKET', 'REVENUE_LAB_FFMPEG_PATH', 'REVENUE_LAB_FFPROBE_PATH']) })
+    expect(configurationStatus({
+      REVENUE_LAB_PRODUCT_ASSET_BUCKET: 'products', REVENUE_LAB_CREATIVE_AUDIO_BUCKET: 'revenue-lab-creative-audio',
+      REVENUE_LAB_COMPOSITION_BUCKET: 'compositions', REVENUE_LAB_FFMPEG_PATH: process.execPath,
+      REVENUE_LAB_FFPROBE_PATH: process.execPath, REVENUE_LAB_COMPOSITION_FONT_PATH: process.execPath,
+    }).finalCompositionV2).toMatchObject({ configured: true, missing: [] })
     expect(() => threePicksV2CampaignInput({ idempotencyKey, campaignName: 'v2', items: input.items.map(item => ({
       ...item, productAssetRevisionIds: [uuid, uuid],
     })) })).toThrow(TypeError)

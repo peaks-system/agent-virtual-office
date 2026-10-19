@@ -4,7 +4,7 @@ import {
   narrationSegments, validateThreePicksV2Output,
 } from '../scripts/revenue-lab/multi-product-shorts-v2-schema.cjs'
 import { compileThreePicksV2Manifest } from '../scripts/revenue-lab/multi-product-shorts-v2-composition.cjs'
-import { buildV2CompositionPlan, createLocalFfmpegCompositionV2Provider } from '../scripts/revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs'
+import { buildV2CompositionPlan, createLocalFfmpegCompositionV2Provider, inspectV2Output } from '../scripts/revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs'
 import { createSupabaseCreativeAudioBlobStore, safeAudioKey } from '../scripts/revenue-lab/creative-audio-blob-store.cjs'
 
 const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
@@ -79,6 +79,10 @@ describe('Creative Archetype v2 schema and compiler', () => {
       'background', 'product_image', 'product_image', 'display_name', 'short_appeal', 'fact_badge', 'subtitle',
     ])
     expect(result.manifest.subtitle_cues.every(cue => cue.duration_seconds === 1.2)).toBe(true)
+    expect(result.manifest.scenes.every(scene => Number.isInteger(scene.start_seconds * 30)
+      && Number.isInteger(scene.duration_seconds * 30))).toBe(true)
+    expect(result.manifest.subtitle_cues.every(cue => Number.isInteger(cue.start_seconds * 30)
+      && Number.isInteger(cue.duration_seconds * 30))).toBe(true)
   })
 
   it('refuses composition until every measured audio segment is ready', () => {
@@ -97,12 +101,29 @@ describe('Creative Archetype v2 schema and compiler', () => {
     const manifest = { manifest_version: MANIFEST_VERSION, archetype: ARCHETYPE, template_id: TEMPLATE_ID,
       layout_id: 'hero-product-layout-v1', output: { width: 1080, height: 1920, fps: 30, container: 'mp4',
         video_codec: 'h264', pixel_format: 'yuv420p', faststart: true, audio: true, duration_seconds: 39 },
-      scenes: [{ id: 'hook', kind: 'hook', layers: [] }], subtitle_cues: [] }
+      scenes: [
+        { id: 'hook', kind: 'hook', start_seconds: 0, duration_seconds: 4, layers: [] },
+        { id: 'product-1', kind: 'product', start_seconds: 4, duration_seconds: 10, layers: [] },
+        { id: 'product-2', kind: 'product', start_seconds: 14, duration_seconds: 10, layers: [] },
+        { id: 'product-3', kind: 'product', start_seconds: 24, duration_seconds: 10, layers: [] },
+        { id: 'cta', kind: 'cta', start_seconds: 34, duration_seconds: 5, layers: [] },
+      ], subtitle_cues: [] }
     expect(buildV2CompositionPlan(manifest)).toMatchObject({ templateId: TEMPLATE_ID,
-      output: { duration_seconds: 39 }, scenes: [{ id: 'hook' }] })
+      output: { duration_seconds: 39 } })
+    expect(buildV2CompositionPlan(manifest).scenes[0]).toMatchObject({ id: 'hook' })
     await expect(provider.render({ manifest, assets: new Map(), audioAssets: new Map() })).resolves.toMatchObject({ pixelWidth: 1080 })
     const unavailable = createLocalFfmpegCompositionV2Provider()
     await expect(unavailable.render({ manifest, assets: new Map(), audioAssets: new Map() })).rejects.toMatchObject({ code: 'COMPOSITION_V2_RENDERER_NOT_CONFIGURED' })
+  })
+
+  it('rejects an FFprobe result unless video, audio, codecs, geometry, fps and duration all match', () => {
+    const valid = { streams: [
+      { codec_type: 'video', codec_name: 'h264', width: 1080, height: 1920, pix_fmt: 'yuv420p', avg_frame_rate: '30/1' },
+      { codec_type: 'audio', codec_name: 'aac' },
+    ], format: { duration: '39.000' } }
+    expect(inspectV2Output(valid, 39)).toMatchObject({ durationSeconds: 39, pixelWidth: 1080, pixelHeight: 1920, fps: 30 })
+    expect(() => inspectV2Output({ ...valid, streams: [valid.streams[0]] }, 39)).toThrowError()
+    expect(() => inspectV2Output({ ...valid, format: { duration: '45.2' } }, 45)).toThrowError()
   })
 
   it('accepts only immutable Creative Audio object keys', () => {

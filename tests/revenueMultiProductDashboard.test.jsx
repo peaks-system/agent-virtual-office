@@ -88,6 +88,8 @@ describe('Multi-product Shorts Dashboard', () => {
     expect(markup).toContain('初回Live ValidationではHookの最初のsegmentだけを生成できます')
     expect(markup).toContain('全planned segmentを生成（15件 / 最大15件）')
     expect(markup).toContain('FFprobe実測duration')
+    expect(markup).toContain('MP4合成に必要なprivate storage・FFmpeg/FFprobe・描画fontを確認してください')
+    expect(markup).not.toContain('v2 rendererはFoundation状態です')
     expect(markup).not.toContain('product-card-v3')
   })
 

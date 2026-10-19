@@ -16,6 +16,7 @@ const { COMPOSITION_VERSION } = require('./revenue-lab/multi-product-shorts-comp
 const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_V2_MODEL, PROMPT_VERSION: THREE_PICKS_V2_PROMPT_VERSION,
   SCHEMA_VERSION: THREE_PICKS_V2_SCHEMA_VERSION, TEMPLATE_ID: THREE_PICKS_V2_TEMPLATE_ID } = require('./revenue-lab/multi-product-shorts-v2-schema.cjs')
 const { COMPOSITION_VERSION: COMPOSITION_V2_VERSION } = require('./revenue-lab/multi-product-shorts-v2-composition.cjs')
+const { rendererConfiguration: v2RendererConfiguration } = require('./revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs')
 const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
 const { DIRECT_PRODUCT_PLACEHOLDERS, directProductCampaignName } = require('./revenue-lab/direct-product-contract.cjs')
 const { ADAPTER_VERSION: ELEVENLABS_ADAPTER_VERSION, OUTPUT_FORMAT: ELEVENLABS_OUTPUT_FORMAT,
@@ -32,6 +33,12 @@ function configurationStatus(env = process.env) {
   const ttsMissing = ['ELEVENLABS_API_KEY', 'REVENUE_LAB_ELEVENLABS_MODEL_ID',
     'REVENUE_LAB_ELEVENLABS_VOICE_ID', 'REVENUE_LAB_FFPROBE_PATH'].filter(key => !env[key])
   if (!audioBucketSeparated) ttsMissing.push('REVENUE_LAB_CREATIVE_AUDIO_BUCKET')
+  const v2Renderer = v2RendererConfiguration({ ffmpegPath: env.REVENUE_LAB_FFMPEG_PATH,
+    ffprobePath: env.REVENUE_LAB_FFPROBE_PATH, fontPath: env.REVENUE_LAB_COMPOSITION_FONT_PATH })
+  const v2CompositionMissing = ['REVENUE_LAB_PRODUCT_ASSET_BUCKET', 'REVENUE_LAB_COMPOSITION_BUCKET']
+    .filter(key => !env[key])
+  if (!audioBucketSeparated) v2CompositionMissing.push('REVENUE_LAB_CREATIVE_AUDIO_BUCKET')
+  v2CompositionMissing.push(...v2Renderer.missing)
   return { configured: missing.length === 0, missing, analysis: {
     configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
     requestedModel: env.REVENUE_LAB_OPENAI_MODEL || DEFAULT_MODEL,
@@ -79,10 +86,12 @@ function configurationStatus(env = process.env) {
     provider: 'local_ffmpeg', providerVersion: COMPOSITION_VERSION,
     output: { width: 1080, height: 1920, fps: 30, audio: false },
   }, finalCompositionV2: {
-    configured: false,
-    missing: [...(ttsMissing.length ? ['ELEVENLABS_TTS_NOT_CONFIGURED'] : []), 'V2_RENDER_ADAPTER_NOT_CONFIGURED'],
+    configured: v2CompositionMissing.length === 0,
+    missing: [...new Set(v2CompositionMissing)],
     provider: 'local_ffmpeg', providerVersion: COMPOSITION_V2_VERSION,
-    templateId: THREE_PICKS_V2_TEMPLATE_ID, output: { width: 1080, height: 1920, fps: 30, audio: true, durationRangeSeconds: [35, 45] },
+    templateId: THREE_PICKS_V2_TEMPLATE_ID, templateAudioProfile: 'hero-carousel-v2-synthetic-audio-v1',
+    output: { width: 1080, height: 1920, fps: 30, videoCodec: 'h264', audioCodec: 'aac',
+      audio: true, durationRangeSeconds: [35, 45] },
   }, products: {
     configured: Boolean(env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY),
     missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'].filter(key => !env[key]),
@@ -455,7 +464,7 @@ function createRevenueApi({
       if (req.method === 'POST' && compositionV2Match) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
         if (!UUID.test(compositionV2Match[1])) return fail(res, 400, 'VALIDATION_ERROR', 'plan idが正しくありません。')
-        if (!config.finalCompositionV2.configured) return fail(res, 503, 'COMPOSITION_V2_FOUNDATION_ONLY', 'TTS providerとv2 rendererは未選定です。', { missing: config.finalCompositionV2.missing })
+        if (!config.finalCompositionV2.configured) return fail(res, 503, 'COMPOSITION_V2_NOT_CONFIGURED', 'Three Picks v2 MP4合成のruntime設定を確認してください。', { missing: config.finalCompositionV2.missing })
         const input = await body(req); const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
         if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
         const result = await getStore().enqueueFinalCompositionV2(compositionV2Match[1], { idempotencyKey })

@@ -6,6 +6,7 @@ const { ARCHETYPE, LAYOUT_ID, MANIFEST_VERSION, TEMPLATE_ID, planNarrationSegmen
 
 const COMPOSITION_VERSION = 'local-shorts-composer-v2'
 const BACKGROUND_VERSION = 'subordinate-graphic-background-v1'
+const FRAME_RATE = 30
 const TIMING = Object.freeze({ hook: [3, 4, 5], product: [7, 10, 13], cta: [4, 5, 6], minimum: 35, maximum: 45 })
 const hash = value => createHash('sha256').update(canonicalize(value)).digest('hex')
 const rounded = value => Math.round(value * 1000) / 1000
@@ -13,7 +14,7 @@ const rounded = value => Math.round(value * 1000) / 1000
 function requiredSceneDuration(kind, segments) {
   const [minimum, preferred, maximum] = TIMING[kind]
   const audio = rounded(segments.reduce((sum, segment) => sum + segment.duration_seconds, 0))
-  const duration = Math.max(preferred, Math.ceil((audio + 0.5) * 10) / 10)
+  const duration = Math.max(preferred * FRAME_RATE, Math.ceil((audio + 0.5) * FRAME_RATE)) / FRAME_RATE
   if (duration < minimum || duration > maximum) throw Object.assign(new Error('Measured narration cannot fit scene timing'), { code: 'THREE_PICKS_V2_AUDIO_TIMING_INVALID' })
   return duration
 }
@@ -34,7 +35,7 @@ function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iter
       audio_sha256: artifact.audioSha256 }
   })
   const presentations = [...plan.product_presentations].sort((a, b) => a.presentation_order - b.presentation_order)
-  const itemById = new Map(items.map(item => [item.id, item])); let cursor = 0
+  const itemById = new Map(items.map(item => [item.id, item])); let cursorFrames = 0
   const sceneSpecs = [
     { id: 'hook', kind: 'hook', display: plan.hook.display_text },
     ...presentations.map(item => ({ id: `product-${item.presentation_order}`, kind: 'product', presentation: item })),
@@ -43,15 +44,18 @@ function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iter
   const subtitleCues = []; const scenes = sceneSpecs.map(spec => {
     const segments = measured.filter(segment => segment.scene === spec.id)
     const duration = requiredSceneDuration(spec.kind === 'product' ? 'product' : spec.kind, segments)
-    let audioCursor = rounded(cursor + 0.25)
+    const durationFrames = Math.round(duration * FRAME_RATE)
+    let audioCursorFrames = cursorFrames + Math.ceil(0.25 * FRAME_RATE)
     for (const segment of segments) {
+      const audioDurationFrames = Math.ceil(segment.duration_seconds * FRAME_RATE)
       subtitleCues.push({ segment_id: segment.segment_id, scene_id: spec.id, text: segment.text,
-        start_seconds: audioCursor, duration_seconds: segment.duration_seconds,
+        start_seconds: audioCursorFrames / FRAME_RATE, duration_seconds: audioDurationFrames / FRAME_RATE,
         audio_artifact_id: segment.audio_artifact_id, audio_object_key: segment.audio_object_key,
         audio_sha256: segment.audio_sha256 })
-      audioCursor = rounded(audioCursor + segment.duration_seconds)
+      audioCursorFrames += audioDurationFrames
     }
-    const base = { id: spec.id, kind: spec.kind, start_seconds: cursor, duration_seconds: duration,
+    const base = { id: spec.id, kind: spec.kind, start_seconds: cursorFrames / FRAME_RATE,
+      duration_seconds: durationFrames / FRAME_RATE,
       transition: spec.kind === 'product' ? 'carousel_slide' : 'fade', layers: [] }
     if (spec.kind === 'product') {
       const item = itemById.get(spec.presentation.product_set_item_id)
@@ -73,9 +77,10 @@ function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iter
         { kind: spec.kind === 'hook' ? 'hook_text' : 'cta_text', text: spec.display },
         { kind: 'subtitle', cue_ids: segments.map(segment => segment.segment_id) }]
     }
-    cursor = rounded(cursor + duration)
+    cursorFrames += durationFrames
     return base
   })
+  const cursor = cursorFrames / FRAME_RATE
   if (cursor < TIMING.minimum || cursor > TIMING.maximum) throw Object.assign(new Error('Composition duration is outside 35-45 seconds'), { code: 'THREE_PICKS_V2_DURATION_INVALID' })
   const manifest = {
     manifest_version: MANIFEST_VERSION, archetype: ARCHETYPE, template_id: TEMPLATE_ID, layout_id: LAYOUT_ID,
@@ -90,4 +95,5 @@ function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iter
   return { manifest, compositionFingerprint: hash({ version: COMPOSITION_VERSION, manifest }) }
 }
 
-module.exports = { BACKGROUND_VERSION, COMPOSITION_VERSION, TIMING, compileThreePicksV2Manifest, hash, requiredSceneDuration }
+module.exports = { BACKGROUND_VERSION, COMPOSITION_VERSION, FRAME_RATE, TIMING,
+  compileThreePicksV2Manifest, hash, requiredSceneDuration }

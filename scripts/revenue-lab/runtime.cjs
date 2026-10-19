@@ -13,7 +13,8 @@ const { createRakutenProductProvider } = require('./providers/rakuten-product-pr
 const { createMultiProductShortsClient } = require('./multi-product-shorts-client.cjs')
 const { createMultiProductShortsV2Client } = require('./multi-product-shorts-v2-client.cjs')
 const { createLocalFfmpegCompositionProvider } = require('./providers/local-ffmpeg-composition-provider.cjs')
-const { createLocalFfmpegCompositionV2Provider } = require('./providers/local-ffmpeg-composition-v2-provider.cjs')
+const { createLocalFfmpegCompositionV2Provider,
+  rendererConfiguration: v2RendererConfiguration } = require('./providers/local-ffmpeg-composition-v2-provider.cjs')
 const { createSupabaseCompositionBlobStore } = require('./composition-blob-store.cjs')
 const { createSupabaseCreativeAudioBlobStore } = require('./creative-audio-blob-store.cjs')
 const { createElevenLabsTtsProvider } = require('./providers/elevenlabs-tts-provider.cjs')
@@ -56,8 +57,11 @@ function createRevenueRuntime({
     ? createSupabaseProductAssetBlobStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY, bucket: env.REVENUE_LAB_PRODUCT_ASSET_BUCKET }) : null
   const finalCompositionProvider = env.REVENUE_LAB_FFMPEG_PATH && env.REVENUE_LAB_FFPROBE_PATH
     ? createLocalFfmpegCompositionProvider({ ffmpegPath: env.REVENUE_LAB_FFMPEG_PATH, ffprobePath: env.REVENUE_LAB_FFPROBE_PATH }) : null
-  const finalCompositionV2Provider = env.REVENUE_LAB_FFMPEG_PATH && env.REVENUE_LAB_FFPROBE_PATH
-    ? createLocalFfmpegCompositionV2Provider() : null
+  const v2Renderer = v2RendererConfiguration({ ffmpegPath: env.REVENUE_LAB_FFMPEG_PATH,
+    ffprobePath: env.REVENUE_LAB_FFPROBE_PATH, fontPath: env.REVENUE_LAB_COMPOSITION_FONT_PATH })
+  const finalCompositionV2Provider = v2Renderer.configured
+    ? createLocalFfmpegCompositionV2Provider({ ffmpegPath: env.REVENUE_LAB_FFMPEG_PATH,
+      ffprobePath: env.REVENUE_LAB_FFPROBE_PATH, fontPath: env.REVENUE_LAB_COMPOSITION_FONT_PATH }) : null
   const compositionBlobStore = env.REVENUE_LAB_COMPOSITION_BUCKET
     ? createSupabaseCompositionBlobStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY, bucket: env.REVENUE_LAB_COMPOSITION_BUCKET }) : null
   const audioBucketValid = env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET === 'revenue-lab-creative-audio'

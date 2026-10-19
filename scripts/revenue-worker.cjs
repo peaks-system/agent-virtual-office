@@ -14,7 +14,8 @@ const { createRakutenProductProvider } = require('./revenue-lab/providers/rakute
 const { createMultiProductShortsClient } = require('./revenue-lab/multi-product-shorts-client.cjs')
 const { createMultiProductShortsV2Client } = require('./revenue-lab/multi-product-shorts-v2-client.cjs')
 const { createLocalFfmpegCompositionProvider } = require('./revenue-lab/providers/local-ffmpeg-composition-provider.cjs')
-const { createLocalFfmpegCompositionV2Provider } = require('./revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs')
+const { createLocalFfmpegCompositionV2Provider,
+  rendererConfiguration: v2RendererConfiguration } = require('./revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs')
 const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
 const { createSupabaseCreativeAudioBlobStore } = require('./revenue-lab/creative-audio-blob-store.cjs')
 const { createElevenLabsTtsProvider } = require('./revenue-lab/providers/elevenlabs-tts-provider.cjs')
@@ -34,8 +35,11 @@ async function main() {
     ? createSupabaseProductAssetBlobStore({ url: process.env.SUPABASE_URL, serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY, bucket: process.env.REVENUE_LAB_PRODUCT_ASSET_BUCKET }) : null
   const finalCompositionProvider = process.env.REVENUE_LAB_FFMPEG_PATH && process.env.REVENUE_LAB_FFPROBE_PATH
     ? createLocalFfmpegCompositionProvider({ ffmpegPath: process.env.REVENUE_LAB_FFMPEG_PATH, ffprobePath: process.env.REVENUE_LAB_FFPROBE_PATH }) : null
-  const finalCompositionV2Provider = process.env.REVENUE_LAB_FFMPEG_PATH && process.env.REVENUE_LAB_FFPROBE_PATH
-    ? createLocalFfmpegCompositionV2Provider() : null
+  const v2Renderer = v2RendererConfiguration({ ffmpegPath: process.env.REVENUE_LAB_FFMPEG_PATH,
+    ffprobePath: process.env.REVENUE_LAB_FFPROBE_PATH, fontPath: process.env.REVENUE_LAB_COMPOSITION_FONT_PATH })
+  const finalCompositionV2Provider = v2Renderer.configured
+    ? createLocalFfmpegCompositionV2Provider({ ffmpegPath: process.env.REVENUE_LAB_FFMPEG_PATH,
+      ffprobePath: process.env.REVENUE_LAB_FFPROBE_PATH, fontPath: process.env.REVENUE_LAB_COMPOSITION_FONT_PATH }) : null
   const compositionBlobStore = process.env.REVENUE_LAB_COMPOSITION_BUCKET
     ? createSupabaseCompositionBlobStore({ url: process.env.SUPABASE_URL, serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY, bucket: process.env.REVENUE_LAB_COMPOSITION_BUCKET }) : null
   const audioBucketValid = process.env.REVENUE_LAB_CREATIVE_AUDIO_BUCKET === 'revenue-lab-creative-audio'
