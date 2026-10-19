@@ -2,7 +2,8 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { buildThreePicksCandidatePool, canCreateThreePicks, RevenueLabView,
-  initialAudioLiveValidationArtifactId, threePicksCardPresentation, toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
+  initialAudioLiveValidationArtifactId, threePicksCardPresentation, threePicksTimingPreflight,
+  toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
 
 const fn = vi.fn()
 const handlers = { onReload: fn, onRun: fn, onTrack: fn, onAnalyze: fn, onReview: fn, onTranslate: fn,
@@ -141,6 +142,41 @@ describe('Multi-product Shorts Dashboard', () => {
     ]
     expect(initialAudioLiveValidationArtifactId(artifacts)).toBe('hook-1')
     expect(initialAudioLiveValidationArtifactId([{ ...artifacts[0], status: 'ready' }, ...artifacts.slice(1)])).toBeNull()
+  })
+
+  it('disables composition and shows scene timing when ready Hook audio overflows', () => {
+    const durations = {
+      hook: [3.529, 4.783], 'product-1': [1.858, 5.944, 4.69],
+      'product-2': [5.201, 4.458], 'product-3': [3.204, 2.415, 4.876], cta: [4.505],
+    }
+    const artifacts = Object.entries(durations).flatMap(([sceneId, values]) => values.map((durationSeconds, index) => ({
+      id: `${sceneId}-${index + 1}`, creativeArchetypePlanId: 'plan-timing-overflow', sceneId,
+      segmentId: `${sceneId}-${index + 1}`, segmentOrder: index + 1, status: 'ready', durationSeconds,
+    })))
+    const preflight = threePicksTimingPreflight(artifacts)
+    expect(preflight.fit).toBe(false)
+    expect(preflight.totalRequiredSeconds).toBe(48.033)
+    expect(preflight.scenes.find(scene => scene.id === 'hook')).toMatchObject({
+      requiredSeconds: 8.833, maximumSeconds: 5, overflowSeconds: 3.833, fit: false,
+    })
+    expect(preflight.scenes.filter(scene => scene.id !== 'hook').every(scene => scene.fit)).toBe(true)
+
+    const productSet = { id: 'set-timing-overflow', archetype: 'three_picks_v2', selectionMode: 'human', items: [] }
+    const campaign = { id: 'campaign-timing-overflow', name: 'Timing overflow', status: 'active', lineageKind: 'product_set', origins: [], iterations: [{
+      id: 'iteration-timing-overflow', iterationNumber: 1, status: 'draft', product: null, productSet, publication: null,
+      productionPlans: [], archetypePlans: [{ requestId: 'request-timing-overflow', archetype: 'three_picks_v2', revisionNumber: 4,
+        status: 'succeeded', planId: 'plan-timing-overflow', output: { hook: { display_text: 'Hook' }, product_presentations: [], cta: { display_text: 'CTA' } },
+        productCards: [], audioArtifacts: artifacts, compositions: [] }],
+    }] }
+    const state = { config: { configured: true, missing: [], analysis: {}, commerceTranslation: {}, products: {}, youtubeAnalytics: {},
+      creativeProduction: {}, videoGeneration: {}, imageToVideo: {}, productAssetRevisions: {}, multiProductShorts: {}, finalComposition: {},
+      multiProductShortsV2: { configured: true }, textToSpeech: { configured: true }, finalCompositionV2: { configured: true } },
+      queries: [], opportunities: [], trackingOpportunities: [], analyses: [], commerceTranslations: [], productSearches: [], campaigns: [campaign], latestJob: null }
+    const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
+    expect(markup).toContain('Composition timing preflight')
+    expect(markup).toContain('Hook 8.83s / max 5.00s')
+    expect(markup).toContain('3.83s overflow')
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Shorts MP4を合成<\/button>/)
   })
 
   it('always shows eligible and ineligible candidates when fewer than three are ready', () => {

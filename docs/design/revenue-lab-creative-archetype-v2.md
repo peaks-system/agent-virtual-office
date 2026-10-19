@@ -16,8 +16,12 @@ Three Picks production · three_picks_v2
 │  ├─ Product 3 10 s
 │  └─ CTA 5 s
 ├─ Narration preparation
+│  ├─ Hook: one short narration segment, target 3–4.5 s
 │  └─ deterministic segments → TTS artifact status / measured duration
-└─ Compose MP4 (enabled only when all narration segments are ready)
+├─ Composition timing preflight
+│  ├─ Hook / Product 1–3 / CTA: required duration / maximum duration
+│  └─ overflow reason beside the disabled Compose action
+└─ Compose MP4 (enabled only when all narration segments are ready and every scene fits)
 ```
 
 ```text

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ARCHETYPE, MANIFEST_VERSION, SCHEMA_VERSION, TEMPLATE_ID,
-  narrationSegments, validateThreePicksV2Output,
+  ARCHETYPE, LIMITS, MANIFEST_VERSION, PROMPT_VERSION, SCHEMA_VERSION, SYSTEM_PROMPT, TEMPLATE_ID,
+  narrationSegments, planNarrationSegments, validateThreePicksV2Output,
 } from '../scripts/revenue-lab/multi-product-shorts-v2-schema.cjs'
 import { compileThreePicksV2Manifest } from '../scripts/revenue-lab/multi-product-shorts-v2-composition.cjs'
 import { buildV2CompositionPlan, createLocalFfmpegCompositionV2Provider, inspectV2Output } from '../scripts/revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs'
@@ -17,7 +17,7 @@ function fixture() {
   }))
   const output = {
     archetype: ARCHETYPE, theme: '毎日を軽くする3選',
-    hook: { display_text: '迷ったらこの3つ', tts: '迷ったら、この三つをチェック。' },
+    hook: { display_text: '迷ったらこの3つ', tts: '迷ったらこの三つ。' },
     product_presentations: products.map(product => ({
       product_set_item_id: product.product_set_item_id,
       presentation_order: product.presentation_order,
@@ -35,8 +35,37 @@ describe('Creative Archetype v2 schema and compiler', () => {
     const { products, output } = fixture()
     expect(validateThreePicksV2Output(output, { products })).toEqual(output)
     expect(SCHEMA_VERSION).toBe('multi-product-shorts-plan-v3')
+    expect(PROMPT_VERSION).toBe('three-picks-production-planner-v2')
     expect(TEMPLATE_ID).toBe('hero-carousel-v2')
     expect(JSON.stringify(output)).not.toContain('template')
+  })
+
+  it('keeps a new Hook to one short narration segment without changing Product or CTA limits', () => {
+    const { products, output } = fixture()
+    validateThreePicksV2Output(output, { products })
+    expect(LIMITS).toMatchObject({ hookTts: 14, productTts: 140, ctaTts: 70 })
+    expect(planNarrationSegments(output).filter(segment => segment.scene === 'hook')).toEqual([
+      { segment_id: 'hook-1', segment_order: 1, text: output.hook.tts, scene: 'hook' },
+    ])
+    expect(SYSTEM_PROMPT).toContain('3-4.5 seconds')
+    expect(SYSTEM_PROMPT).toContain('Do not put product descriptions or lists in the Hook narration')
+
+    const tooLong = structuredClone(output)
+    tooLong.hook.tts = 'これは十五文字を超える長いフック原稿です。'
+    expect(() => validateThreePicksV2Output(tooLong, { products })).toThrowError(/1-14 characters/)
+
+    const twoSegments = structuredClone(output)
+    twoSegments.hook.tts = '迷わない。三つです。'
+    expect(() => validateThreePicksV2Output(twoSegments, { products })).toThrowError(/one narration segment/i)
+  })
+
+  it('reads a historical multi-segment Hook without rewriting the stored revision', () => {
+    const { output } = fixture()
+    const historical = structuredClone(output)
+    historical.hook.tts = '夜も昼も快適な車内に。厳選した3つのアイテムを一気にご紹介します。'
+    const before = structuredClone(historical)
+    expect(planNarrationSegments(historical).filter(segment => segment.scene === 'hook')).toHaveLength(2)
+    expect(historical).toEqual(before)
   })
 
   it('splits narration deterministically into bounded stable segments', () => {

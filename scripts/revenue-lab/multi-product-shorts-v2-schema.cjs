@@ -1,7 +1,7 @@
 'use strict'
 
 const ARCHETYPE = 'three_picks_v2'
-const PROMPT_VERSION = 'three-picks-production-planner-v1'
+const PROMPT_VERSION = 'three-picks-production-planner-v2'
 const SCHEMA_VERSION = 'multi-product-shorts-plan-v3'
 const DEFAULT_MODEL = 'gpt-5-mini'
 const TEMPLATE_ID = 'hero-carousel-v2'
@@ -9,7 +9,7 @@ const LAYOUT_ID = 'hero-product-layout-v1'
 const MANIFEST_VERSION = 'three-picks-composition-manifest-v2'
 
 const LIMITS = Object.freeze({
-  hookDisplay: 22, hookTts: 80, displayName: 18, shortAppeal: 28,
+  hookDisplay: 22, hookTts: 14, displayName: 18, shortAppeal: 28,
   factBadge: 18, productTts: 140, ctaDisplay: 18, ctaTts: 70, segment: 42,
 })
 
@@ -17,6 +17,8 @@ const SYSTEM_PROMPT = `Create a Japanese three-product Shorts production plan fr
 The server fixes the template. Do not output a template, layout, coordinates, durations, effects, provider, or ranking.
 Copy display_name and fact_badge exactly. Cite exactly one allowed verified_fact_ref per product.
 Generate only a concise theme, Hook display text and narration, one short appeal and narration per product, and CTA display text and narration.
+Keep Hook display text separate from narration. Hook narration must be one short Japanese sentence of at most 14 characters, targeting 3-4.5 seconds of measured speech.
+Do not put product descriptions or lists in the Hook narration.
 Never invent or alter product identity, price, specification, review, rating, URL, or verified fact.`
 
 const THREE_PICKS_V2_JSON_SCHEMA = {
@@ -95,7 +97,10 @@ function validateThreePicksV2Output(output, input) {
   }
   bounded(output.theme, 48, '$.theme')
   bounded(output.hook?.display_text, LIMITS.hookDisplay, '$.hook.display_text')
-  bounded(output.hook?.tts, LIMITS.hookTts, '$.hook.tts')
+  const hookTts = bounded(output.hook?.tts, LIMITS.hookTts, '$.hook.tts')
+  if (narrationSegments('hook', hookTts).length !== 1) {
+    throw new ThreePicksV2ValidationError('THREE_PICKS_V2_HOOK_SEGMENT_COUNT', 'Hook narration must produce exactly one narration segment', '$.hook.tts')
+  }
   bounded(output.cta?.display_text, LIMITS.ctaDisplay, '$.cta.display_text')
   bounded(output.cta?.tts, LIMITS.ctaTts, '$.cta.tts')
   const source = Array.isArray(input?.products) ? input.products : []
