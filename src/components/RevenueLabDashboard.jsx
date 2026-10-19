@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createDirectProductCampaign as createDirectProductCampaignRequest, createManualCampaign as createManualCampaignRequest, createProductAssetRevision, createProductCandidateDecision, enqueueCreativeAudioArtifactGeneration, enqueueCreativeAudioGeneration, enqueueCreativeProductionPlan, enqueueImageVideoGeneration, enqueueVideoGeneration, createRevenueAnalysisReview, createThreePicksV2Campaign as createThreePicksCampaignRequest, enqueueEnabledRevenueQueries, enqueueFinalComposition, enqueueFinalCompositionV2, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, enqueueThreePicksPlan, enqueueThreePicksV2Plan, loadFinalCompositionPreview, loadRevenueDashboard, registerCampaignPublication, updateRevenueQuery } from '../services/revenueLabApi'
+import { buildWorkspaceUrl, campaignFromLocation, createLatestRequestSequence, deriveWorkspace, installRevenueRefreshLifecycle, shouldPollRevenueLab } from './revenueLabWorkspace'
 import './revenueLabDashboard.css'
 
 const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] }, creativeProduction: { configured: false, missing: ['OPENAI_API_KEY'] }, multiProductShorts: { configured: false, missing: ['OPENAI_API_KEY'] }, multiProductShortsV2: { configured: false, missing: ['OPENAI_API_KEY'], templateId: 'hero-carousel-v2' }, textToSpeech: { configured: false, missing: ['ELEVENLABS_API_KEY'] }, finalComposition: { configured: false, missing: ['REVENUE_LAB_FFMPEG_PATH'] }, finalCompositionV2: { configured: false, missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET', 'REVENUE_LAB_CREATIVE_AUDIO_BUCKET', 'REVENUE_LAB_COMPOSITION_BUCKET', 'REVENUE_LAB_FFMPEG_PATH', 'REVENUE_LAB_FFPROBE_PATH'] }, productAssetRevisions: { configured: false, missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET'] }, videoGeneration: { configured: false, missing: ['POLLO_API_KEY'], provider: 'pollo', requestedModel: 'pollo-v2' }, imageToVideo: { configured: false, missing: ['POLLO_API_KEY', 'REVENUE_LAB_PRODUCT_ASSET_BUCKET'], provider: 'pollo', requestedModel: 'wan-v2-2-flash' }, products: { configured: false, missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], latestJob: null, latestRun: null, latestTrackingRun: null }
@@ -766,6 +767,52 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
   </section>
 }
 
+function RevenueWorkspace({ state, requestedCampaignId, busy, onReload, onSelectCampaign, onGeneratePlan, onGenerateAudio, onCompose, onPreview, onCollectAnalytics }) {
+  const [actionError, setActionError] = useState('')
+  const [previewUrl, setPreviewUrl] = useState('')
+  const keyRef = useRef(newCampaignIdempotencyKey())
+  const model = deriveWorkspace(state, requestedCampaignId)
+  const { campaign, iteration, latestRevision: revision, primaryAction } = model
+  const runPrimary = async () => {
+    if (primaryAction.disabled) return
+    setActionError('')
+    try {
+      if (primaryAction.id === 'generate-plan') await onGeneratePlan(iteration.id, keyRef.current)
+      if (primaryAction.id === 'generate-audio') await onGenerateAudio(revision.planId, keyRef.current)
+      if (primaryAction.id === 'compose') await onCompose(revision.planId, keyRef.current)
+      if (primaryAction.id === 'preview') { const result = await onPreview(primaryAction.outputId); setPreviewUrl(result.previewUrl) }
+      if (primaryAction.id === 'analytics') await onCollectAnalytics?.(model.publication.id)
+      keyRef.current = newCampaignIdempotencyKey()
+    } catch (failure) { setActionError(failure?.message || '操作を開始できませんでした。') }
+  }
+  const configReason = primaryAction.id === 'generate-plan' && !state.config.multiProductShortsV2?.configured ? '制作案生成の接続設定が必要です'
+    : primaryAction.id === 'generate-audio' && !state.config.textToSpeech?.configured ? 'ナレーション生成の接続設定が必要です'
+      : primaryAction.id === 'compose' && !state.config.finalCompositionV2?.configured ? 'MP4生成の接続設定が必要です'
+        : primaryAction.id === 'analytics' && !onCollectAnalytics ? 'Analytics接続が必要です' : ''
+  const actionDisabled = busy || primaryAction.disabled || Boolean(configReason)
+  const actionReason = primaryAction.reason || configReason
+  const artifacts = revision?.audioArtifacts || []
+  const revisions = [...(iteration?.archetypePlans || [])].sort((a, b) => Number(b.revisionNumber || 0) - Number(a.revisionNumber || 0))
+  const pastRevisions = revisions.filter(item => item !== revision)
+  return <section className="revenue-workspace" aria-label="Revenue Lab workspace">
+    <header className="revenue-workspace-header">
+      <div className="revenue-workspace-title"><span>Revenue Lab</span><strong>{campaign?.name || 'Active Campaignなし'}</strong><small>{iteration ? `Iteration ${iteration.iterationNumber}` : 'Iteration —'} · {revision ? `Creative Revision ${revision.revisionNumber}` : 'Creative Revision —'}</small></div>
+      <ol className="revenue-workspace-progress" aria-label="制作進捗">{model.steps.map(step => <li key={step.id} className={`${step.complete ? 'is-complete' : ''}${step.current ? ' is-current' : ''}`}><span>{step.complete ? '✓' : step.current ? '●' : '○'}</span>{step.label}</li>)}</ol>
+      <div className="revenue-workspace-next"><small>次のアクション</small><strong>{model.nextAction}</strong></div>
+      <div className="revenue-workspace-actions"><button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{busy ? '処理中…' : primaryAction.label}</button><button type="button" onClick={onReload} disabled={busy}>Revenue Lab更新</button>{actionReason && <p className="revenue-warning">{actionReason}</p>}{actionError && <p className="revenue-warning" role="alert">{actionError}</p>}</div>
+    </header>
+    {!!model.active.length && <label className="revenue-campaign-select">Campaign<select value={campaign?.id || ''} onChange={event => onSelectCampaign(event.target.value)}>{model.active.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+    {!campaign && <div className="revenue-state"><h3>Active Campaignがありません</h3><p>商品を登録してCampaignを作成してください。</p></div>}
+    {campaign && <>
+      <div className="revenue-workspace-steps">{model.steps.map((step, index) => <section key={step.id} className={`revenue-workspace-step${step.complete ? ' is-complete' : ''}${step.current ? ' is-current' : ''}`}><header><span>{index + 1}</span><h3>{step.label}</h3><small>{step.complete ? '完了' : step.current ? '作業中' : '未着手'}</small></header>{step.current && step.id === 'product' && <p>制作対象の商品を登録してください。</p>}{step.current && step.id === 'plan' && <p>商品情報からThree Picks v2の制作案を生成します。</p>}{step.current && step.id === 'audio' && <><p>最新Revisionのナレーションを生成します。{artifacts.length ? ` ${artifacts.filter(item => item.status === 'ready').length} / ${artifacts.length} ready` : ''}</p><p className="revenue-product-facts">segment単体生成などのLive Validation操作は詳細欄に収納しています。</p></>}{step.current && step.id === 'video' && <div className="revenue-timing-summary">{model.timing.scenes.map(scene => <p key={scene.id}>{scene.label} {scene.ready ? `${scene.required.toFixed(2)}s / max ${scene.maximum.toFixed(2)}s` : `計測待ち / max ${scene.maximum.toFixed(2)}s`}</p>)}</div>}{step.current && step.id === 'publication' && <p>{model.publication ? '公開実績を更新してください。' : 'Previewを確認して公開情報を登録してください。'}</p>}</section>)}</div>
+      {previewUrl && <video className="revenue-workspace-preview" controls preload="metadata" src={previewUrl}>完成動画を再生できません。</video>}
+      <details className="revenue-audit-details revenue-workspace-audit"><summary>監査情報</summary><p>Campaign: {campaign.id}<br />Iteration: {iteration?.id || '—'}<br />Revision: {revision?.revisionNumber || '—'}<br />Prompt: {revision?.promptVersion || '—'}<br />Schema: {revision?.schemaVersion || '—'}<br />Request: {revision?.requestId || '—'}<br />Plan: {revision?.planId || '—'}</p>{!!pastRevisions.length && <details><summary>過去Revision（{pastRevisions.length}件）</summary>{pastRevisions.map(item => <p key={item.planId || item.requestId}>Revision {item.revisionNumber}</p>)}</details>}{(campaign.iterations || []).filter(item => item.id !== iteration?.id).length > 0 && <details><summary>過去Iteration</summary>{campaign.iterations.filter(item => item.id !== iteration?.id).map(item => <p key={item.id}>Iteration {item.iterationNumber}</p>)}</details>}</details>
+    </>}
+    {model.legacy && <details className="revenue-legacy"><summary>Legacy・読取専用</summary><p>Three Picks v1は監査目的でのみ表示します。制作案・音声・MP4の操作はできません。</p></details>}
+    {!!model.archive.length && <details className="revenue-archive"><summary>Archive（{model.archive.length}件）</summary>{model.archive.map(item => <article key={item.id}><strong>{item.name}</strong><small>{campaignStatusLabel(item.status)}</small></article>)}</details>}
+  </section>
+}
+
 function CampaignBoard({ campaigns = [], creativeProductionConfig, videoGenerationConfig, imageToVideoConfig, productAssetRevisionConfig, multiProductConfig, multiProductV2Config, textToSpeechConfig, composerConfig, composerV2Config, busy, onCreateThreePicks, onGenerateThreePicks, onGenerateThreePicksV2, onGenerateAudio, onGenerateAudioArtifact, onCompose, onComposeV2, onPreview, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication }) {
   return <section className="revenue-campaign-board" aria-labelledby="campaign-board-heading">
     <ThreePicksIntake campaigns={campaigns} busy={busy} assetRevisionConfig={productAssetRevisionConfig} onCreate={onCreateThreePicks} onCreateAssetRevision={onCreateAssetRevision} />
@@ -781,7 +828,7 @@ function CampaignBoard({ campaigns = [], creativeProductionConfig, videoGenerati
         {!iteration.registrationOnly && <dl><div><dt>訴求仮説</dt><dd>{iteration.appealHypothesis}</dd></div><div><dt>Hook</dt><dd>{iteration.hookText}</dd></div><div><dt>台本・構成</dt><dd className="revenue-prewrap">{iteration.contentOutline?.text || '—'}</dd></div>{iteration.scriptText && <div><dt>台本本文</dt><dd className="revenue-prewrap">{iteration.scriptText}</dd></div>}</dl>}
         {iteration.registrationOnly && <p className="revenue-product-facts">商品登録が完了しています。CreativeはThree Picks制作案で生成します。</p>}
         {!iteration.registrationOnly && iteration.product && <CreativeProductionPanel iteration={iteration} config={creativeProductionConfig} videoGenerationConfig={videoGenerationConfig} imageToVideoConfig={imageToVideoConfig} busy={busy} onGenerate={onGenerateProduction} onGenerateVideo={onGenerateVideo} onCreateAssetRevision={onCreateAssetRevision} onGenerateImageVideo={onGenerateImageVideo} />}
-      {iteration.productSet && <><div className="revenue-three-picks-lineage">{iteration.productSet.items.map(item => <span key={item.id}>PICK {item.presentationOrder} · {item.productName}{iteration.productSet.archetype === 'three_picks_v2' ? ` · ${item.assetRevisions?.length || 1}素材` : ''}</span>)}</div><details className="revenue-audit-details"><summary>Product Setの履歴・監査情報</summary>{iteration.productSet.items.map(item => <p key={item.id}>PICK {item.presentationOrder} · Asset Revision #{item.assetRevision?.revisionNumber} · {item.assetRevision?.contentSha256 || 'SHA未取得'}</p>)}</details><ThreePicksPanel iteration={iteration} plannerConfig={iteration.productSet.archetype === 'three_picks_v2' ? multiProductV2Config : multiProductConfig} textToSpeechConfig={textToSpeechConfig} composerConfig={iteration.productSet.archetype === 'three_picks_v2' ? composerV2Config : composerConfig} busy={busy} onGeneratePlan={iteration.productSet.archetype === 'three_picks_v2' ? onGenerateThreePicksV2 : onGenerateThreePicks} onGenerateAudio={onGenerateAudio} onGenerateAudioArtifact={onGenerateAudioArtifact} onCompose={iteration.productSet.archetype === 'three_picks_v2' ? onComposeV2 : onCompose} onPreview={onPreview} /></>}
+      {iteration.productSet && <><div className="revenue-three-picks-lineage">{iteration.productSet.items.map(item => <span key={item.id}>PICK {item.presentationOrder} · {item.productName}{iteration.productSet.archetype === 'three_picks_v2' ? ` · ${item.assetRevisions?.length || 1}素材` : ''}</span>)}</div><details className="revenue-audit-details"><summary>Product Setの履歴・監査情報</summary>{iteration.productSet.items.map(item => <p key={item.id}>PICK {item.presentationOrder} · Asset Revision #{item.assetRevision?.revisionNumber} · {item.assetRevision?.contentSha256 || 'SHA未取得'}</p>)}</details>{iteration.productSet.archetype === 'three_picks_v1' ? <details className="revenue-legacy"><summary>Legacy・読取専用</summary><p>Three Picks v1の制作案・音声・MP4操作は無効です。</p></details> : <ThreePicksPanel iteration={iteration} plannerConfig={multiProductV2Config} textToSpeechConfig={textToSpeechConfig} composerConfig={composerV2Config} busy={busy} onGeneratePlan={onGenerateThreePicksV2} onGenerateAudio={onGenerateAudio} onGenerateAudioArtifact={onGenerateAudioArtifact} onCompose={onComposeV2} onPreview={onPreview} />}</>}
         {iteration.publication && <div className="revenue-publication"><span>YouTube Video ID: {iteration.publication.youtubeVideoId}</span><a href={iteration.publication.canonicalUrl || `https://www.youtube.com/watch?v=${encodeURIComponent(iteration.publication.youtubeVideoId)}`} target="_blank" rel="noopener noreferrer">公開動画を開く</a></div>}
         {!iteration.registrationOnly && !iteration.publication && <PublicationRegistrationForm iterationId={iteration.id} busy={busy} onRegister={onRegisterPublication} />}
         <details><summary>監査情報</summary><p>Campaign: {campaign.id}<br />Iteration: {iteration.id}<br />Lineage: {campaign.lineageKind || 'opportunity'}<br />Treatment fingerprint: {iteration.treatmentFingerprint || '—'}<br />AI Analysis: {iteration.sourceAnalysisId || campaign.primaryAnalysisId || (campaign.lineageKind === 'direct_product' ? '対象外（Direct Product）' : '—')}</p></details>
@@ -790,7 +837,7 @@ function CampaignBoard({ campaigns = [], creativeProductionConfig, videoGenerati
   </section>
 }
 
-export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onCreateDirectProduct, onCreateThreePicks, onGenerateThreePicks, onGenerateThreePicksV2, onGenerateAudio, onGenerateAudioArtifact, onCompose, onComposeV2, onPreview, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication, onSave }) {
+export function RevenueLabView({ state, error, busy, requestedCampaignId, onSelectCampaign = campaignId => { if (typeof window !== 'undefined') { window.history.pushState({}, '', buildWorkspaceUrl(window.location, 'revenue', campaignId)); window.dispatchEvent(new PopStateEvent('popstate')) } }, onReload, onRun, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onCreateDirectProduct, onCreateThreePicks, onGenerateThreePicks, onGenerateThreePicksV2, onGenerateAudio, onGenerateAudioArtifact, onCompose, onComposeV2, onPreview, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication, onCollectAnalytics, onSave }) {
   if (!state) return <main className="revenue-shell" aria-busy="true"><div className="revenue-state"><h2>Revenue Lab</h2><p>収益機会を読み込んでいます…</p></div></main>
   const eligible = state.queries.filter(query => query.enabled && !queryNeedsScores(query))
   const enabledQueries = state.queries.filter(query => query.enabled)
@@ -800,11 +847,13 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, o
   const analysisByItem = new Map((state.analyses || []).map(analysis => [analysis.sourceItemId, analysis]))
   const productSearchByAnalysis = new Map((state.productSearches || []).map(search => [search.analysisId, search]))
   return <main className="revenue-shell">
+    <RevenueWorkspace state={state} requestedCampaignId={requestedCampaignId ?? (typeof window === 'undefined' ? null : campaignFromLocation(window.location))} busy={busy} onReload={onReload} onSelectCampaign={onSelectCampaign} onGeneratePlan={onGenerateThreePicksV2} onGenerateAudio={onGenerateAudio} onCompose={onComposeV2} onPreview={onPreview} onCollectAnalytics={onCollectAnalytics} />
+    {error && <div className="revenue-alert" role="alert">{error}</div>}
+    <details className="revenue-advanced-tools"><summary>商品候補・検証・監査ツール</summary><div className="revenue-advanced-tools-body">
     <section className="revenue-hero">
       <div><p className="revenue-kicker">YOUTUBE COMMERCE · PHASE 1</p><h2>今日検討すべき候補</h2><p>本日の発掘と、過去候補の実測成長を分けて確認します。</p></div>
       <div className="revenue-actions"><button onClick={onReload} disabled={busy}>再読込</button><button onClick={onTrack} disabled={busy}>Tracking実行</button><button className="corp-primary" onClick={() => onRun(eligible)} disabled={busy || eligible.length === 0}>Discovery実行</button></div>
     </section>
-    {error && <div className="revenue-alert" role="alert">{error}</div>}
     {!state.config.configured && <section className="revenue-state revenue-config"><h3>接続設定が必要です</h3><p>サーバー側の環境変数を設定してください。</p><code>{state.config.missing.join(', ')}</code></section>}
     {state.config.configured && state.queries.length === 0 && <section className="revenue-state"><h3>検索テーマがありません</h3><p>Supabaseの初期seedを適用して、最大3件のテーマを設定してください。</p></section>}
     <section className="revenue-research-summary" aria-labelledby="revenue-research-heading">
@@ -843,6 +892,7 @@ export function RevenueLabView({ state, error, busy, onReload, onRun, onTrack, o
       <div className="revenue-query-grid">{state.queries.map(query => <QueryEditor key={query.id} query={query} busy={busy} onSave={onSave} />)}</div>
     </section>
     {state.latestJob && <p className="revenue-job" role="status">最新ジョブ: {state.latestJob.status} / 試行 {state.latestJob.attempts}{state.latestJob.errorCode ? ` / ${state.latestJob.errorCode}` : ''}</p>}
+    </div></details>
   </main>
 }
 
@@ -850,12 +900,40 @@ export default function RevenueLabDashboard() {
   const [state, setState] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const reload = async () => {
+  const reloadSequenceRef = useRef(null)
+  if (!reloadSequenceRef.current) reloadSequenceRef.current = createLatestRequestSequence()
+  const [requestedCampaignId, setRequestedCampaignId] = useState(() => typeof window === 'undefined' ? null : campaignFromLocation(window.location))
+  const reload = useCallback(async () => {
+    const requestId = reloadSequenceRef.current.begin()
     setError('')
-    try { setState(await loadRevenueDashboard()) }
-    catch (failure) { setState(previous => previous || EMPTY); setError(failure.message) }
-  }
+    try {
+      const nextState = await loadRevenueDashboard()
+      if (reloadSequenceRef.current.isLatest(requestId)) setState(nextState)
+    } catch (failure) {
+      if (reloadSequenceRef.current.isLatest(requestId)) { setState(previous => previous || EMPTY); setError(failure.message) }
+    }
+  }, [])
   useEffect(() => { reload() }, [])
+  useEffect(() => {
+    const restoreCampaign = () => setRequestedCampaignId(campaignFromLocation(window.location))
+    window.addEventListener('popstate', restoreCampaign)
+    return () => window.removeEventListener('popstate', restoreCampaign)
+  }, [])
+  useEffect(() => {
+    if (!state || typeof window === 'undefined') return
+    const model = deriveWorkspace(state, requestedCampaignId)
+    if (!model.campaign || !model.normalized) return
+    window.history.replaceState({}, '', buildWorkspaceUrl(window.location, 'revenue', model.campaign.id))
+    setRequestedCampaignId(model.campaign.id)
+  }, [state, requestedCampaignId])
+  useEffect(() => {
+    if (!state || typeof window === 'undefined') return undefined
+    return installRevenueRefreshLifecycle({ windowRef: window, documentRef: document, refresh: reload, shouldPoll: () => shouldPollRevenueLab(state) })
+  }, [reload, state])
+  const selectCampaign = campaignId => {
+    if (typeof window !== 'undefined') window.history.pushState({}, '', buildWorkspaceUrl(window.location, 'revenue', campaignId))
+    setRequestedCampaignId(campaignId)
+  }
   const perform = async action => {
     setBusy(true); setError('')
     try { const result = await action(); await reload(); return result }

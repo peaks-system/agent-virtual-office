@@ -13,6 +13,7 @@ import WordPressPanel from './WordPressPanel'
 import SiteSettingsPanel from './SiteSettingsPanel'
 import ProjectSetupGuide from './ProjectSetupGuide'
 import RevenueLabDashboard from './RevenueLabDashboard'
+import { buildWorkspaceUrl, departmentFromLocation, installWorkspacePopstate } from './revenueLabWorkspace'
 
 export function receivedStatus(externalStatus, now) {
   return Object.entries(externalStatus).filter(([,value]) => value && (!value.expiresAt || value.expiresAt > now))
@@ -80,7 +81,12 @@ export default function CorporationDashboard({ children }) {
   const [exportError, setExportError] = useState('')
   const [workspace, setWorkspace] = useState('diagnosis')
   const [siteSettings, setSiteSettings] = useState(null)
-  const [department, setDepartment] = useState('office')
+  const [department, setDepartment] = useState(() => typeof window === 'undefined' ? 'office' : departmentFromLocation(window.location))
+  useEffect(() => installWorkspacePopstate(window, route => setDepartment(route.department)), [])
+  const navigateDepartment = nextDepartment => {
+    if (typeof window !== 'undefined') window.history.pushState({}, '', buildWorkspaceUrl(window.location, nextDepartment))
+    setDepartment(nextDepartment)
+  }
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
   const actual = executableReceivedStatus({ ...externalStatus, ...runStatuses }, now)
   const live = rosterStatusByRole(actual)
@@ -98,8 +104,8 @@ export default function CorporationDashboard({ children }) {
     <header className="corp-header">
       <div className="corp-brand"><span className="corp-monogram" aria-hidden="true">AI</span><div><h1>AI CORPORATION</h1><p>{d('subtitle')}</p></div></div>
       <nav className="corp-departments" aria-label="部門切り替え">
-        <button aria-pressed={department === 'office'} onClick={() => setDepartment('office')}>AI Office</button>
-        <button aria-pressed={department === 'revenue'} onClick={() => setDepartment('revenue')}>Revenue Lab</button>
+        <button aria-pressed={department === 'office'} onClick={() => navigateDepartment('office')}>AI Office</button>
+        <button aria-pressed={department === 'revenue'} onClick={() => navigateDepartment('revenue')}>Revenue Lab</button>
       </nav>
       <div className="corp-metrics">
         <div><strong>{actual.filter(([,s]) => s.status === 'working').length}</strong><span>{d('working')}</span></div>
