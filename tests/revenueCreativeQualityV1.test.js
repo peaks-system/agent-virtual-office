@@ -1,0 +1,158 @@
+import { describe, expect, it } from 'vitest'
+import { prepareThreePicksV2ProductEvidence } from '../scripts/revenue-lab/multi-product-shorts-v2-evidence.cjs'
+import {
+  ARCHETYPE, LAYOUT_ID, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION, MANIFEST_VERSION,
+  PROMPT_VERSION, SCHEMA_VERSION, planNarrationSegments, validateThreePicksV2Output,
+} from '../scripts/revenue-lab/multi-product-shorts-v2-schema.cjs'
+import { compileThreePicksV2Manifest } from '../scripts/revenue-lab/multi-product-shorts-v2-composition.cjs'
+import {
+  QUALITY_LAYOUT, assertV2Manifest, fitMeasuredText, selectQualityAssets,
+} from '../scripts/revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs'
+
+const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
+
+function qualityFixture() {
+  const products = [
+    ['車用ゴミ箱 LEDライト付き 折りたたみ式', ['LEDライト付き', '折りたたみ式', 'マグネット固定']],
+    ['マグネット式スマホホルダー N56磁石', ['N56磁石採用', 'ダッシュボード固定']],
+    ['車載アロマディフューザー USB給電', ['6種類の香り', '1本約2週間']],
+  ].map(([name, facts], index) => ({
+    product_set_item_id: uuid(index + 1), presentation_order: index + 1,
+    source_product_name: name,
+    allowed_verified_fact_refs: ['summary'],
+    fact_candidates: facts.map((text, factIndex) => ({ id: `summary-${factIndex + 1}`, verified_fact_ref: 'summary', text })),
+  }))
+  const copy = [
+    ['車用ゴミ箱', 'LED付きで夜間も使いやすい', '折りたたみ式', 'LEDライト付きで、夜の車内でも捨てやすくなります。', ['LED', '折りたたみ式']],
+    ['スマホホルダー', 'N56磁石でしっかり固定', 'N56磁石', 'N56磁石でスマートフォンをしっかり固定できます。', ['N56磁石']],
+    ['車載アロマ', '6種類の香りから選べる', '約2週間', '6種類の香りを気分に合わせて選べます。', ['6種類', '約2週間']],
+  ]
+  const output = {
+    archetype: ARCHETYPE, theme: '車内を快適にするアイテム',
+    hook: { display_text: '車内快適アイテム3選', tts: '車内快適グッズ三選' },
+    product_presentations: products.map((product, index) => ({
+      product_set_item_id: product.product_set_item_id, presentation_order: index + 1,
+      display_name: copy[index][0], short_appeal: copy[index][1], fact_badge: copy[index][2],
+      tts: copy[index][3], verified_fact_ref: 'summary',
+      identity_anchor: index === 0 ? '車用ゴミ箱' : index === 1 ? 'スマホホルダー' : '車載アロマ',
+      evidence_anchors: copy[index][4],
+    })),
+    cta: { display_text: '気になる商品は概要欄へ', tts: '気になる商品は概要欄から確認できます。' },
+  }
+  return { products, output }
+}
+
+describe('Three Picks v2 Production Creative Quality v1', () => {
+  it('prepares complete semantic evidence without character slicing formal titles or facts', () => {
+    const prepared = prepareThreePicksV2ProductEvidence({
+      productName: '車用ゴミ箱 LEDライト付き 折りたたみ式 マグネット固定',
+      verifiedFactRef: 'summary',
+      verifiedFact: { value: 'LEDライト付き。折りたたみ式。マグネット固定（取り外し可能）。' },
+    })
+    expect(prepared.source_product_name).toBe('車用ゴミ箱 LEDライト付き 折りたたみ式 マグネット固定')
+    expect(prepared.fact_candidates.map(candidate => candidate.text)).toEqual([
+      'LEDライト付き', '折りたたみ式', 'マグネット固定(取り外し可能)',
+    ])
+    expect(JSON.stringify(prepared)).not.toContain('マグネット固定（取り外し')
+  })
+
+  it('uses planner-v3/plan-v4 and validates translated, grounded video copy', () => {
+    const { products, output } = qualityFixture()
+    expect(validateThreePicksV2Output(output, { products })).toEqual(output)
+    expect(PROMPT_VERSION).toBe('three-picks-production-planner-v3')
+    expect(SCHEMA_VERSION).toBe('multi-product-shorts-plan-v4')
+    expect(LAYOUT_ID).toBe('hero-product-layout-v2')
+    expect(MANIFEST_VERSION).toBe('three-picks-composition-manifest-v3')
+  })
+
+  it('rejects unsupported and non-grounded claims such as 水なしUSB式', () => {
+    const { products, output } = qualityFixture()
+    const unsupported = structuredClone(output)
+    unsupported.product_presentations[2].short_appeal = '水なしUSB式で手軽に香る'
+    unsupported.product_presentations[2].evidence_anchors = ['6種類の香り']
+    expect(() => validateThreePicksV2Output(unsupported, { products })).toThrowError(/grounded/i)
+  })
+
+  it('rejects merchant copy, incomplete phrases, and unsupported structured tokens', () => {
+    const { products, output } = qualityFixture()
+    const merchant = structuredClone(output)
+    merchant.product_presentations[0].display_name = '業界最大級ゴミ箱'
+    expect(() => validateThreePicksV2Output(merchant, { products })).toThrowError()
+    const fragment = structuredClone(output)
+    fragment.product_presentations[0].short_appeal = 'LED付きで夜間も（便利'
+    expect(() => validateThreePicksV2Output(fragment, { products })).toThrowError()
+    const token = structuredClone(output)
+    token.product_presentations[1].tts = 'N99磁石でスマートフォンをしっかり固定できます。'
+    expect(() => validateThreePicksV2Output(token, { products })).toThrowError(/grounded/i)
+  })
+
+  it('compiles PICK labels, a bounded image set, and the new layout only for new manifests', () => {
+    const { products, output } = qualityFixture()
+    const items = products.map((product, index) => ({
+      id: product.product_set_item_id,
+      assetRevisions: Array.from({ length: index === 0 ? 4 : 1 }, (_, assetIndex) => ({
+        id: uuid(100 + index * 10 + assetIndex), assetOrder: assetIndex + 1,
+        contentSha256: String(index + assetIndex + 1).repeat(64).slice(0, 64),
+      })),
+    }))
+    const segments = planNarrationSegments(output)
+    const audioArtifacts = segments.map((segment, index) => ({ segmentId: segment.segment_id, status: 'ready', durationSeconds: 1,
+      id: uuid(500 + index), immutableObjectKey: `audio/${segment.segment_id}`, audioSha256: 'a'.repeat(64) }))
+    const input = { requestId: uuid(800), planRevision: 7, campaignId: uuid(801), iterationId: uuid(802),
+      productSetId: uuid(803), plan: output, items, audioArtifacts }
+    const { manifest } = compileThreePicksV2Manifest(input)
+    const first = manifest.scenes.find(scene => scene.id === 'product-1')
+    expect(first.layers.find(layer => layer.kind === 'pick_label')?.text).toBe('PICK 1')
+    expect(first.layers.filter(layer => layer.kind === 'product_image')).toHaveLength(3)
+    expect(first.layers.every(layer => layer.layout_id == null || layer.layout_id === LAYOUT_ID)).toBe(true)
+    const legacy = compileThreePicksV2Manifest({ ...input, schemaVersion: 'multi-product-shorts-plan-v3' }).manifest
+    expect(legacy).toMatchObject({ manifest_version: LEGACY_MANIFEST_VERSION, layout_id: LEGACY_LAYOUT_ID })
+    expect(legacy.scenes.find(scene => scene.id === 'product-1').layers.some(layer => layer.kind === 'pick_label')).toBe(false)
+    expect(legacy.scenes.find(scene => scene.id === 'product-1').layers.filter(layer => layer.kind === 'product_image')).toHaveLength(4)
+  })
+
+  it('fits display names to at most two measured lines and badges to one line', async () => {
+    const measure = async (text, fontSize) => ({ width: Array.from(text).length * fontSize, height: fontSize })
+    const name = await fitMeasuredText({ text: 'マグネット式スマホホルダー', maxWidth: 888,
+      maxLines: 2, maxFontSize: 64, minFontSize: 56, measure })
+    const badge = await fitMeasuredText({ text: 'N56磁石', maxWidth: 888,
+      maxLines: 1, maxFontSize: 42, minFontSize: 38, measure })
+    expect(name.lines.length).toBeLessThanOrEqual(2)
+    expect(name.lines.every(line => line.width <= 888)).toBe(true)
+    expect(badge.lines).toHaveLength(1)
+    await expect(fitMeasuredText({ text: '長'.repeat(81), maxWidth: 888, maxLines: 2,
+      maxFontSize: 64, minFontSize: 56, measure })).rejects.toMatchObject({ code: 'COMPOSITION_V2_TEXT_FIT_INVALID' })
+  })
+
+  it('keeps all quality text regions inside the 1080x1920 safe area without overlap', () => {
+    expect(QUALITY_LAYOUT.safe.left).toBeGreaterThanOrEqual(96)
+    expect(QUALITY_LAYOUT.safe.right).toBeLessThanOrEqual(984)
+    const regions = [QUALITY_LAYOUT.pick, QUALITY_LAYOUT.displayName, QUALITY_LAYOUT.card,
+      QUALITY_LAYOUT.shortAppeal, QUALITY_LAYOUT.factBadge, QUALITY_LAYOUT.subtitle]
+    expect(regions.every(region => region.x >= QUALITY_LAYOUT.safe.left
+      && region.x + region.width <= QUALITY_LAYOUT.safe.right)).toBe(true)
+    expect(regions.every((region, index) => index === 0 || region.y >= regions[index - 1].y + regions[index - 1].height)).toBe(true)
+  })
+
+  it('keeps one-image motion for the full scene and reduces multi-image scenes deterministically', () => {
+    expect(selectQualityAssets([1], 10)).toEqual([1])
+    expect(selectQualityAssets([1, 2, 3, 4], 10)).toEqual([1, 2, 3])
+    expect(selectQualityAssets([1, 2, 3, 4], 7)).toEqual([1, 2])
+  })
+
+  it('accepts stored legacy manifests without mutating or upgrading them', () => {
+    const stored = { manifest_version: LEGACY_MANIFEST_VERSION, archetype: ARCHETYPE,
+      template_id: 'hero-carousel-v2', layout_id: LEGACY_LAYOUT_ID,
+      output: { width: 1080, height: 1920, fps: 30, container: 'mp4', video_codec: 'h264',
+        pixel_format: 'yuv420p', faststart: true, audio: true, duration_seconds: 39 },
+      scenes: [
+        ['hook', 'hook', 0, 4], ['product-1', 'product', 4, 10], ['product-2', 'product', 14, 10],
+        ['product-3', 'product', 24, 10], ['cta', 'cta', 34, 5],
+      ].map(([id, kind, start, duration]) => ({ id, kind, start_seconds: start, duration_seconds: duration, layers: [] })),
+      subtitle_cues: [],
+    }
+    const before = structuredClone(stored)
+    expect(() => assertV2Manifest(stored)).not.toThrow()
+    expect(stored).toEqual(before)
+  })
+})

@@ -16,6 +16,7 @@ const { COMPOSITION_VERSION, buildProductCards, buildRenderManifest } = require(
 const { ARCHETYPE: THREE_PICKS_V2_ARCHETYPE, DEFAULT_MODEL: THREE_PICKS_V2_DEFAULT_MODEL,
   PROMPT_VERSION: THREE_PICKS_V2_PROMPT_VERSION, SCHEMA_VERSION: THREE_PICKS_V2_SCHEMA_VERSION,
   TEMPLATE_ID: THREE_PICKS_V2_TEMPLATE_ID, planNarrationSegments } = require('./multi-product-shorts-v2-schema.cjs')
+const { prepareThreePicksV2ProductEvidence } = require('./multi-product-shorts-v2-evidence.cjs')
 const { COMPOSITION_VERSION: COMPOSITION_V2_VERSION,
   compileThreePicksV2Manifest } = require('./multi-product-shorts-v2-composition.cjs')
 const { directProductCreativeSnapshot, isDirectProductRegistrationPlaceholder } = require('./direct-product-contract.cjs')
@@ -1096,7 +1097,6 @@ function createSupabaseStore({
       assetsByItem.set(asset.product_set_item_id, records)
     }
     if (itemRows.some(row => !(assetsByItem.get(row.id)?.length))) throw new RevenueStoreError('THREE_PICKS_V2_ASSET_INVALID', 'Every product requires an immutable asset revision', 409)
-    const compact = (value, maximum) => Array.from(String(value ?? '').replace(/\s+/g, ' ').trim()).slice(0, maximum).join('')
     const input = {
       contract: { archetype: THREE_PICKS_V2_ARCHETYPE, ranking_allowed: false,
         prompt_version: THREE_PICKS_V2_PROMPT_VERSION, schema_version: THREE_PICKS_V2_SCHEMA_VERSION,
@@ -1104,9 +1104,9 @@ function createSupabaseStore({
       campaign: { id: campaign.id, name: campaign.name, objective: campaign.objective },
       iteration: { id: iteration.id },
       products: itemRows.map(row => ({ product_set_item_id: row.id, presentation_order: row.presentation_order,
-        product_name: row.product_name_snapshot, display_name: compact(row.product_name_snapshot, 18),
-        fact_badge: compact(row.verified_fact_snapshot?.value, 18),
-        allowed_verified_fact_refs: [row.verified_fact_ref], verified_fact: row.verified_fact_snapshot,
+        ...prepareThreePicksV2ProductEvidence({ productName: row.product_name_snapshot,
+          verifiedFactRef: row.verified_fact_ref, verifiedFact: row.verified_fact_snapshot }),
+        allowed_verified_fact_refs: [row.verified_fact_ref],
         price: row.price_snapshot, asset_revisions: assetsByItem.get(row.id) })),
     }
     return rpc('enqueue_three_picks_v2_plan', { p_campaign_iteration_id: iteration.id,
@@ -1302,6 +1302,8 @@ function createSupabaseStore({
     const plans = await request(`creative_archetype_plans?id=eq.${encodeURIComponent(planId)}&select=*&limit=1`)
     const plan = plans?.[0]
     if (!plan || plan.archetype !== THREE_PICKS_V2_ARCHETYPE) throw new RevenueStoreError('COMPOSITION_V2_PLAN_NOT_FOUND', 'Creative Archetype v2 plan was not found', 404)
+    const requestRows = await request(`creative_archetype_requests?id=eq.${encodeURIComponent(plan.request_id)}&select=schema_version&limit=1`)
+    const schemaVersion = requestRows?.[0]?.schema_version
     const itemRows = await request(`campaign_product_set_items?product_set_id=eq.${encodeURIComponent(plan.product_set_id)}&select=*&order=presentation_order.asc`)
     const itemIds = itemRows.map(row => row.id)
     const [links, artifacts] = await Promise.all([
@@ -1318,7 +1320,7 @@ function createSupabaseStore({
     try {
       compiled = compileThreePicksV2Manifest({ requestId: plan.request_id, planRevision: plan.revision_number,
         campaignId: plan.campaign_id, iterationId: plan.campaign_iteration_id, productSetId: plan.product_set_id,
-        plan: plan.output_json, items, audioArtifacts })
+        plan: plan.output_json, items, audioArtifacts, schemaVersion })
     } catch (error) {
       throw new RevenueStoreError(error?.code || 'COMPOSITION_V2_MANIFEST_INVALID', 'Creative Archetype v2 composition is not ready', 409)
     }

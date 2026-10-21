@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ARCHETYPE, LIMITS, MANIFEST_VERSION, PROMPT_VERSION, SCHEMA_VERSION, SYSTEM_PROMPT, TEMPLATE_ID,
+  ARCHETYPE, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION, LIMITS, MANIFEST_VERSION, PROMPT_VERSION, SCHEMA_VERSION, SYSTEM_PROMPT, TEMPLATE_ID,
   narrationSegments, planNarrationSegments, validateThreePicksV2Output,
 } from '../scripts/revenue-lab/multi-product-shorts-v2-schema.cjs'
 import { compileThreePicksV2Manifest } from '../scripts/revenue-lab/multi-product-shorts-v2-composition.cjs'
@@ -12,8 +12,8 @@ const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')
 function fixture() {
   const products = [1, 2, 3].map(index => ({
     product_set_item_id: uuid(index), presentation_order: index,
-    display_name: `商品${index}`, fact_badge: `確認済み${index}`,
-    allowed_verified_fact_refs: ['summary'],
+    source_product_name: `商品${index} 車載用品`, allowed_verified_fact_refs: ['summary'],
+    fact_candidates: [{ id: `summary-${index}`, verified_fact_ref: 'summary', text: `確認済み${index}` }],
   }))
   const output = {
     archetype: ARCHETYPE, theme: '毎日を軽くする3選',
@@ -21,11 +21,11 @@ function fixture() {
     product_presentations: products.map(product => ({
       product_set_item_id: product.product_set_item_id,
       presentation_order: product.presentation_order,
-      display_name: product.display_name, short_appeal: `短い訴求${product.presentation_order}`,
-      fact_badge: product.fact_badge, verified_fact_ref: 'summary',
-      tts: `商品${product.presentation_order}の確認済みポイントです。使い方に合わせて選べます。`,
+      display_name: `商品${product.presentation_order}カテゴリ`, short_appeal: `確認済み${product.presentation_order}で使いやすい`,
+      fact_badge: `確認済み${product.presentation_order}`, verified_fact_ref: 'summary', identity_anchor: `商品${product.presentation_order}`,
+      evidence_anchors: [`確認済み${product.presentation_order}`], tts: `確認済み${product.presentation_order}の仕様で便利に使えます。`,
     })),
-    cta: { display_text: '詳細をチェック', tts: '気になる商品の詳細をチェックしてください。' },
+    cta: { display_text: '気になる商品は概要欄へ', tts: '気になる商品は概要欄から確認できます。' },
   }
   return { products, output }
 }
@@ -34,8 +34,8 @@ describe('Creative Archetype v2 schema and compiler', () => {
   it('keeps the template server-fixed and validates compact grounded output', () => {
     const { products, output } = fixture()
     expect(validateThreePicksV2Output(output, { products })).toEqual(output)
-    expect(SCHEMA_VERSION).toBe('multi-product-shorts-plan-v3')
-    expect(PROMPT_VERSION).toBe('three-picks-production-planner-v2')
+    expect(SCHEMA_VERSION).toBe('multi-product-shorts-plan-v4')
+    expect(PROMPT_VERSION).toBe('three-picks-production-planner-v3')
     expect(TEMPLATE_ID).toBe('hero-carousel-v2')
     expect(JSON.stringify(output)).not.toContain('template')
   })
@@ -43,7 +43,7 @@ describe('Creative Archetype v2 schema and compiler', () => {
   it('keeps a new Hook to one short narration segment without changing Product or CTA limits', () => {
     const { products, output } = fixture()
     validateThreePicksV2Output(output, { products })
-    expect(LIMITS).toMatchObject({ hookTts: 14, productTts: 140, ctaTts: 70 })
+    expect(LIMITS).toMatchObject({ hookTts: 14, productTts: 40, ctaTts: 40 })
     expect(planNarrationSegments(output).filter(segment => segment.scene === 'hook')).toEqual([
       { segment_id: 'hook-1', segment_order: 1, text: output.hook.tts, scene: 'hook' },
     ])
@@ -105,7 +105,7 @@ describe('Creative Archetype v2 schema and compiler', () => {
     expect(result.manifest.product_cards).toBeUndefined()
     expect(result.manifest.scenes.filter(scene => scene.kind === 'product')).toHaveLength(3)
     expect(result.manifest.scenes[1].layers.map(layer => layer.kind)).toEqual([
-      'background', 'product_image', 'product_image', 'display_name', 'short_appeal', 'fact_badge', 'subtitle',
+      'background', 'product_image', 'product_image', 'pick_label', 'display_name', 'short_appeal', 'fact_badge', 'subtitle',
     ])
     expect(result.manifest.subtitle_cues.every(cue => cue.duration_seconds === 1.2)).toBe(true)
     expect(result.manifest.scenes.every(scene => Number.isInteger(scene.start_seconds * 30)
@@ -127,8 +127,8 @@ describe('Creative Archetype v2 schema and compiler', () => {
     const renderImpl = async plan => ({ bytes: Buffer.from('mp4'), durationSeconds: plan.output.duration_seconds,
       pixelWidth: 1080, pixelHeight: 1920, fps: 30, contentType: 'video/mp4' })
     const provider = createLocalFfmpegCompositionV2Provider({ renderImpl })
-    const manifest = { manifest_version: MANIFEST_VERSION, archetype: ARCHETYPE, template_id: TEMPLATE_ID,
-      layout_id: 'hero-product-layout-v1', output: { width: 1080, height: 1920, fps: 30, container: 'mp4',
+    const manifest = { manifest_version: LEGACY_MANIFEST_VERSION, archetype: ARCHETYPE, template_id: TEMPLATE_ID,
+      layout_id: LEGACY_LAYOUT_ID, output: { width: 1080, height: 1920, fps: 30, container: 'mp4',
         video_codec: 'h264', pixel_format: 'yuv420p', faststart: true, audio: true, duration_seconds: 39 },
       scenes: [
         { id: 'hook', kind: 'hook', start_seconds: 0, duration_seconds: 4, layers: [] },

@@ -8,12 +8,22 @@ const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 const { promisify } = require('node:util')
 const { FinalCompositionProvider, FinalCompositionProviderError } = require('../final-composition-provider.cjs')
-const { ARCHETYPE, LAYOUT_ID, MANIFEST_VERSION, TEMPLATE_ID } = require('../multi-product-shorts-v2-schema.cjs')
+const { ARCHETYPE, LAYOUT_ID, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION,
+  MANIFEST_VERSION, TEMPLATE_ID } = require('../multi-product-shorts-v2-schema.cjs')
 const { COMPOSITION_VERSION } = require('../multi-product-shorts-v2-composition.cjs')
 
 const PROVIDER_ID = 'local_ffmpeg'
 const PROVIDER_VERSION = COMPOSITION_VERSION
 const FRAME_RATE = 30
+const QUALITY_LAYOUT = Object.freeze({
+  safe: { left: 96, right: 984 },
+  pick: { x: 96, y: 48, width: 888, height: 48 },
+  displayName: { x: 96, y: 112, width: 888, height: 152 },
+  card: { x: 120, y: 300, width: 840, height: 990 },
+  shortAppeal: { x: 96, y: 1320, width: 888, height: 142 },
+  factBadge: { x: 96, y: 1490, width: 888, height: 78 },
+  subtitle: { x: 96, y: 1640, width: 888, height: 220 },
+})
 const EXEC_OPTIONS = Object.freeze({ windowsHide: true, maxBuffer: 8 * 1024 * 1024, timeout: 300_000 })
 const DEFAULT_FONT_CANDIDATES = Object.freeze([
   'C:\\Windows\\Fonts\\YuGothB.ttc', 'C:\\Windows\\Fonts\\YuGothM.ttc',
@@ -48,8 +58,9 @@ function rendererConfiguration({ ffmpegPath, ffprobePath, fontPath } = {}) {
 
 function assertV2Manifest(manifest) {
   const output = manifest?.output
-  if (manifest?.manifest_version !== MANIFEST_VERSION || manifest?.archetype !== ARCHETYPE
-    || manifest?.template_id !== TEMPLATE_ID || manifest?.layout_id !== LAYOUT_ID
+  const supportedLayout = (manifest?.manifest_version === MANIFEST_VERSION && manifest?.layout_id === LAYOUT_ID)
+    || (manifest?.manifest_version === LEGACY_MANIFEST_VERSION && manifest?.layout_id === LEGACY_LAYOUT_ID)
+  if (!supportedLayout || manifest?.archetype !== ARCHETYPE || manifest?.template_id !== TEMPLATE_ID
     || output?.width !== 1080 || output?.height !== 1920 || output?.fps !== FRAME_RATE
     || output?.container !== 'mp4' || output?.video_codec !== 'h264' || output?.pixel_format !== 'yuv420p'
     || output?.faststart !== true || output?.audio !== true || output?.duration_seconds < 35 || output?.duration_seconds > 45
@@ -75,7 +86,8 @@ function assertV2Manifest(manifest) {
 function buildV2CompositionPlan(manifest) {
   assertV2Manifest(manifest)
   return {
-    templateId: TEMPLATE_ID, layoutId: LAYOUT_ID, output: { ...manifest.output },
+    templateId: TEMPLATE_ID, layoutId: manifest.layout_id, manifestVersion: manifest.manifest_version,
+    output: { ...manifest.output },
     scenes: manifest.scenes.map(scene => ({ id: scene.id, kind: scene.kind,
       start_seconds: scene.start_seconds, duration_seconds: scene.duration_seconds,
       transition: scene.transition, layers: scene.layers })),
@@ -89,6 +101,43 @@ function wrapText(value, width, lines = 2) {
   if (chars.length <= width) return chars.join('')
   return Array.from({ length: lines }, (_, index) => chars.slice(index * width, (index + 1) * width).join(''))
     .filter(Boolean).join('\n')
+}
+function selectQualityAssets(assets, duration) {
+  return assets.slice(0, Math.max(1, Math.min(assets.length, Math.floor(Number(duration) / 3))))
+}
+async function fitMeasuredText({ text, maxWidth, maxLines, maxFontSize, minFontSize, measure }) {
+  const characters = Array.from(String(text || '').replace(/\s+/g, ' ').trim())
+  if (!characters.length || characters.length > 80) throw sealed('COMPOSITION_V2_TEXT_FIT_INVALID')
+  const sizes = []
+  for (let size = maxFontSize; size >= minFontSize; size -= 2) sizes.push(size)
+  for (const fontSize of sizes) {
+    const splits = maxLines === 1 ? [[]] : Array.from({ length: characters.length - 1 }, (_, index) => index + 1)
+      .sort((a, b) => Math.abs(a - characters.length / 2) - Math.abs(b - characters.length / 2))
+      .map(index => [characters.slice(0, index).join(''), characters.slice(index).join('')])
+    const candidates = characters.length === 1 || maxLines === 1
+      ? [[characters.join('')]] : [[characters.join('')], ...splits]
+    for (const lines of candidates) {
+      if (lines.length > maxLines || lines.some(line => !line)) continue
+      const measured = []
+      for (const line of lines) measured.push({ text: line, ...(await measure(line, fontSize)) })
+      if (measured.every(line => Number(line.width) <= maxWidth)) return { fontSize, lines: measured }
+    }
+  }
+  throw sealed('COMPOSITION_V2_TEXT_FIT_INVALID')
+}
+
+async function measureFfmpegText({ ffmpegPath, execute, fontPath, root, name, text, fontSize }) {
+  const textPath = join(root, `${name}-measure.txt`)
+  await writeFile(textPath, text, 'utf8')
+  const { stderr } = await execute(ffmpegPath, ['-hide_banner', '-loglevel', 'debug', '-f', 'lavfi',
+    '-i', 'color=c=black:s=1080x1920:r=1:d=0.04', '-vf', `drawtext=fontfile='${filterPath(fontPath)}':textfile='${filterPath(textPath)}':fontsize=${fontSize}`,
+    '-frames:v', '1', '-f', 'null', '-'], EXEC_OPTIONS)
+  const matches = [...String(stderr || '').matchAll(/text_w:(\d+)\s+text_h:(\d+)/g)]
+  const match = matches.at(-1)
+  if (match) return { width: Number(match[1]), height: Number(match[2]) }
+  const shaped = [...String(stderr || '').matchAll(/width64:\s*(\d+)/g)].at(-1)
+  if (!shaped) throw sealed('COMPOSITION_V2_TEXT_MEASURE_FAILED')
+  return { width: Number(shaped[1]) / 64, height: fontSize }
 }
 function fpsValue(stream) {
   const [numerator, denominator] = String(stream?.avg_frame_rate || stream?.r_frame_rate || '0/1').split('/').map(Number)
@@ -201,6 +250,101 @@ async function renderScene({ ffmpegPath, execute, fontPath, preset, root, plan, 
   return outputPath
 }
 
+async function addQualityTextFilter({ ffmpegPath, execute, filters, input, root, fontPath, name, text,
+  region, maxLines, maxFontSize, minFontSize, color = 'white', boxColor = 'black@0.58', enable, animationStart }) {
+  let measureIndex = 0
+  const fitted = await fitMeasuredText({ text, maxWidth: region.width - 32, maxLines, maxFontSize, minFontSize,
+    measure: (line, fontSize) => measureFfmpegText({ ffmpegPath, execute, fontPath, root,
+      name: `${name}-${measureIndex += 1}`, text: line, fontSize }) })
+  const textPath = join(root, `${name}.txt`)
+  await writeFile(textPath, fitted.lines.map(line => line.text).join('\n'), 'utf8')
+  const output = `${name}-out`
+  const options = [`fontfile='${filterPath(fontPath)}'`, `textfile='${filterPath(textPath)}'`,
+    `fontsize=${fitted.fontSize}`, `fontcolor=${color}`, 'line_spacing=8', 'x=(w-text_w)/2', `y=${region.y}`,
+    'box=1', `boxcolor=${boxColor}`, 'boxborderw=16']
+  if (enable) options.push(`enable='${enable}'`)
+  if (Number.isFinite(animationStart)) options.push(`alpha='if(lt(t\\,${animationStart})\\,0\\,if(lt(t\\,${animationStart + 0.25})\\,(t-${animationStart})/0.25\\,1))'`)
+  filters.push(`[${input}]drawtext=${options.join(':')}[${output}]`)
+  return output
+}
+
+async function renderQualityScene({ ffmpegPath, execute, fontPath, preset, root, plan, scene, assets }) {
+  const duration = frameSeconds(scene.duration_seconds); const frames = Math.round(duration * FRAME_RATE)
+  const outputPath = join(root, `scene-${scene.id}.mp4`)
+  const inputs = ['-f', 'lavfi', '-i', `color=c=0xe8edf2:s=1080x1920:r=${FRAME_RATE}:d=${duration}`]
+  const cardFilter = scene.kind === 'product'
+    ? `,drawbox=x=${QUALITY_LAYOUT.card.x}:y=${QUALITY_LAYOUT.card.y}:w=${QUALITY_LAYOUT.card.width}:h=${QUALITY_LAYOUT.card.height}:color=white@1:t=fill` : ''
+  const filters = [`[0:v]format=yuv420p,drawbox=x=0:y=0:w=iw:h=280:color=0x111827@0.96:t=fill,`
+    + `drawbox=x=0:y=1600:w=iw:h=320:color=0x111827@0.96:t=fill${cardFilter}[base]`]
+  let current = 'base'
+  if (scene.kind === 'product') {
+    const allImages = scene.layers.filter(layer => layer.kind === 'product_image').sort((a, b) => a.asset_order - b.asset_order)
+    const imageLayers = selectQualityAssets(allImages, duration)
+    if (imageLayers.length < 1) throw sealed('COMPOSITION_V2_ASSET_INVALID')
+    const crossfade = 0.2; const clipDuration = (duration + (imageLayers.length - 1) * crossfade) / imageLayers.length
+    const clipFrames = Math.ceil(clipDuration * FRAME_RATE)
+    for (const [index, layer] of imageLayers.entries()) {
+      const bytes = assets?.get(layer.product_asset_revision_id)
+      if (!Buffer.isBuffer(bytes) || sha256(bytes) !== layer.content_sha256) throw sealed('COMPOSITION_V2_ASSET_HASH_MISMATCH')
+      const assetPath = join(root, `asset-${scene.id}-${index + 1}.img`); await writeFile(assetPath, bytes); inputs.push('-i', assetPath)
+      const totalFrames = imageLayers.length === 1 ? frames : clipFrames
+      const zoom = `1+0.035*on/${Math.max(1, totalFrames - 1)}`
+      const drift = index % 2 === 0 ? `6*sin(PI*on/${Math.max(1, totalFrames - 1)})` : `-6*sin(PI*on/${Math.max(1, totalFrames - 1)})`
+      filters.push(`[${index + 1}:v]scale=${QUALITY_LAYOUT.card.width}:${QUALITY_LAYOUT.card.height}:force_original_aspect_ratio=decrease,`
+        + `pad=${QUALITY_LAYOUT.card.width}:${QUALITY_LAYOUT.card.height}:(ow-iw)/2:(oh-ih)/2:color=white,`
+        + `zoompan=z='${zoom}':x='iw/2-(iw/zoom/2)+${drift}':y='ih/2-(ih/zoom/2)':`
+        + `d=${totalFrames}:s=${QUALITY_LAYOUT.card.width}x${QUALITY_LAYOUT.card.height}:fps=${FRAME_RATE},`
+        + `trim=duration=${clipDuration},setpts=PTS-STARTPTS,format=yuv420p[quality-image-${index}]`)
+    }
+    let carousel = 'quality-image-0'
+    for (let index = 1; index < imageLayers.length; index += 1) {
+      const output = `quality-carousel-${index}`; const offset = rounded(index * (clipDuration - crossfade))
+      filters.push(`[${carousel}][quality-image-${index}]xfade=transition=slideleft:duration=${crossfade}:offset=${offset}[${output}]`); carousel = output
+    }
+    filters.push(`[base][${carousel}]overlay=x=${QUALITY_LAYOUT.card.x}:y=${QUALITY_LAYOUT.card.y}:eof_action=pass:shortest=0,`
+      + `trim=duration=${duration},setpts=PTS-STARTPTS[with-quality-image]`); current = 'with-quality-image'
+    const layerText = kind => scene.layers.find(layer => layer.kind === kind)?.text
+    const pick = layerText('pick_label'); const name = layerText('display_name')
+    const appeal = layerText('short_appeal'); const fact = layerText('fact_badge')
+    if (!pick || !name || !appeal || !fact) throw sealed('COMPOSITION_V2_TEXT_LAYER_INVALID')
+    current = await addQualityTextFilter({ ffmpegPath, execute, filters, input: current, root, fontPath,
+      name: `${scene.id}-pick`, text: pick, region: QUALITY_LAYOUT.pick, maxLines: 1,
+      maxFontSize: 32, minFontSize: 28, color: '0x94a3b8', boxColor: 'black@0', animationStart: 0.05 })
+    current = await addQualityTextFilter({ ffmpegPath, execute, filters, input: current, root, fontPath,
+      name: `${scene.id}-name`, text: name, region: QUALITY_LAYOUT.displayName, maxLines: 2,
+      maxFontSize: 64, minFontSize: 56, boxColor: '0x0f172a@0.72', animationStart: 0.1 })
+    current = await addQualityTextFilter({ ffmpegPath, execute, filters, input: current, root, fontPath,
+      name: `${scene.id}-appeal`, text: appeal, region: QUALITY_LAYOUT.shortAppeal, maxLines: 2,
+      maxFontSize: 52, minFontSize: 42, color: '0x0f172a', boxColor: 'white@0.9', animationStart: 0.35 })
+    current = await addQualityTextFilter({ ffmpegPath, execute, filters, input: current, root, fontPath,
+      name: `${scene.id}-fact`, text: fact, region: QUALITY_LAYOUT.factBadge, maxLines: 1,
+      maxFontSize: 42, minFontSize: 34, boxColor: '0x047857@0.92', animationStart: 0.75 })
+  } else {
+    const kind = scene.kind === 'hook' ? 'hook_text' : 'cta_text'; const text = scene.layers.find(layer => layer.kind === kind)?.text
+    if (!text) throw sealed('COMPOSITION_V2_TEXT_LAYER_INVALID')
+    current = await addQualityTextFilter({ ffmpegPath, execute, filters, input: current, root, fontPath,
+      name: `${scene.id}-title`, text, region: { ...QUALITY_LAYOUT.safe, x: 96, y: 650, width: 888, height: 240 },
+      maxLines: 2, maxFontSize: scene.kind === 'hook' ? 86 : 76, minFontSize: 52,
+      boxColor: '0x0f172a@0.74', animationStart: 0.2 })
+  }
+  const cueIds = new Set(scene.layers.find(layer => layer.kind === 'subtitle')?.cue_ids || [])
+  const cues = plan.subtitleCues.filter(cue => cueIds.has(cue.segment_id))
+  for (const [index, cue] of cues.entries()) {
+    const localStart = rounded(Number(cue.start_seconds) - Number(scene.start_seconds)); const localEnd = rounded(localStart + Number(cue.duration_seconds))
+    if (localStart < 0 || localEnd > duration + 0.1) throw sealed('COMPOSITION_V2_SUBTITLE_TIMING_INVALID')
+    current = await addQualityTextFilter({ ffmpegPath, execute, filters, input: current, root, fontPath,
+      name: `${scene.id}-subtitle-${index + 1}`, text: cue.text, region: QUALITY_LAYOUT.subtitle,
+      maxLines: 2, maxFontSize: 46, minFontSize: 36, boxColor: 'black@0.78',
+      enable: `between(t\\,${localStart}\\,${localEnd})` })
+  }
+  filters.push(`[${current}]fade=t=in:st=0:d=0.18,fade=t=out:st=${Math.max(0, duration - 0.18)}:d=0.18,`
+    + `trim=duration=${duration},setpts=PTS-STARTPTS[vout]`)
+  await execute(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-y', ...inputs, '-filter_complex', filters.join(';'),
+    '-map', '[vout]', '-an', '-r', String(FRAME_RATE), '-frames:v', String(frames), '-c:v', 'libx264', '-preset', preset,
+    '-crf', '19', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outputPath], EXEC_OPTIONS)
+  return outputPath
+}
+
 async function prepareNarration({ ffprobePath, execute, root, plan, audioAssets }) {
   const filesBySha = new Map()
   const narration = []
@@ -284,7 +428,8 @@ async function renderWithFfmpeg(plan, { assets, audioAssets }, {
   try {
     const narration = await prepareNarration({ ffprobePath, execute, root, plan, audioAssets })
     const scenePaths = []
-    for (const scene of plan.scenes) scenePaths.push(await renderScene({
+    const sceneRenderer = plan.layoutId === LAYOUT_ID ? renderQualityScene : renderScene
+    for (const scene of plan.scenes) scenePaths.push(await sceneRenderer({
       ffmpegPath, execute, fontPath, preset, root, plan, scene, assets,
     }))
     const concatPath = join(root, 'scenes.txt')
@@ -324,6 +469,6 @@ function createLocalFfmpegCompositionV2Provider({ renderImpl, ffmpegPath, ffprob
   return new LocalV2Provider()
 }
 
-module.exports = { PROVIDER_ID, PROVIDER_VERSION, TEMPLATE_AUDIO_PROFILE, assertV2Manifest,
-  buildV2CompositionPlan, createLocalFfmpegCompositionV2Provider, inspectV2Output,
-  rendererConfiguration, resolveCompositionFont }
+module.exports = { PROVIDER_ID, PROVIDER_VERSION, QUALITY_LAYOUT, TEMPLATE_AUDIO_PROFILE, assertV2Manifest,
+  buildV2CompositionPlan, createLocalFfmpegCompositionV2Provider, fitMeasuredText, inspectV2Output,
+  rendererConfiguration, resolveCompositionFont, selectQualityAssets }

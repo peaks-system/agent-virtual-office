@@ -52,9 +52,10 @@ describe('Creative Archetype v2 real FFmpeg renderer', () => {
     const imageLayer = (id, order, role = 'supporting') => ({ kind: 'product_image', role,
       asset_order: order, product_asset_revision_id: id, content_sha256: sha256(assetBytes[assetIds.indexOf(id)]),
       layout_id: LAYOUT_ID, motion: order === 1 ? 'hero_slow_zoom' : 'supporting_carousel' })
-    const productLayers = (name, appeal, fact, ids) => [
+    const productLayers = (pick, name, appeal, fact, ids) => [
       { kind: 'background', recipe_version: 'subordinate-graphic-background-v1', prominence: 'subordinate' },
       ...ids.map((id, index) => imageLayer(id, index + 1, index === 0 ? 'hero' : 'supporting')),
+      { kind: 'pick_label', text: `PICK ${pick}` },
       { kind: 'display_name', text: name }, { kind: 'short_appeal', text: appeal },
       { kind: 'fact_badge', text: fact, verified_fact_ref: 'summary' },
       { kind: 'subtitle', cue_ids: [] },
@@ -62,9 +63,9 @@ describe('Creative Archetype v2 real FFmpeg renderer', () => {
     const scenes = [
       scene('hook', 'hook', 0, 4, [{ kind: 'background', recipe_version: 'subordinate-graphic-background-v1', prominence: 'subordinate' },
         { kind: 'hook_text', text: '毎日を軽くする3選' }, { kind: 'subtitle', cue_ids: [] }]),
-      scene('product-1', 'product', 4, 10, productLayers('商品A', 'すぐ使える', '確認済み', [assetIds[0]])),
-      scene('product-2', 'product', 14, 10, productLayers('商品B', '暮らしにフィット', '公式情報', assetIds.slice(0, 3))),
-      scene('product-3', 'product', 24, 10, productLayers('商品C', '選びやすい', '仕様確認済み', assetIds.slice(2, 4))),
+      scene('product-1', 'product', 4, 10, productLayers(1, '車載ダストボックス', 'LED付きで夜間も使いやすい', '折りたたみ式', [assetIds[0]])),
+      scene('product-2', 'product', 14, 10, productLayers(2, 'スマホホルダー', 'N56磁石でしっかり固定', 'N56磁石', assetIds.slice(0, 3))),
+      scene('product-3', 'product', 24, 10, productLayers(3, '車載アロマ', '6種類の香りから選べる', '約2週間', assetIds.slice(2, 4))),
       scene('cta', 'cta', 34, 5, [{ kind: 'background', recipe_version: 'subordinate-graphic-background-v1', prominence: 'subordinate' },
         { kind: 'cta_text', text: '詳細をチェック' }, { kind: 'subtitle', cue_ids: [] }]),
     ]

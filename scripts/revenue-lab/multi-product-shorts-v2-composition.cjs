@@ -2,7 +2,8 @@
 
 const { createHash } = require('node:crypto')
 const { canonicalize } = require('./canonical-json.cjs')
-const { ARCHETYPE, LAYOUT_ID, MANIFEST_VERSION, TEMPLATE_ID, planNarrationSegments } = require('./multi-product-shorts-v2-schema.cjs')
+const { ARCHETYPE, LAYOUT_ID, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION, MANIFEST_VERSION,
+  SCHEMA_VERSION, TEMPLATE_ID, planNarrationSegments } = require('./multi-product-shorts-v2-schema.cjs')
 
 const COMPOSITION_VERSION = 'local-shorts-composer-v2'
 const BACKGROUND_VERSION = 'subordinate-graphic-background-v1'
@@ -10,6 +11,7 @@ const FRAME_RATE = 30
 const TIMING = Object.freeze({ hook: [3, 4, 5], product: [7, 10, 13], cta: [4, 5, 6], minimum: 35, maximum: 45 })
 const hash = value => createHash('sha256').update(canonicalize(value)).digest('hex')
 const rounded = value => Math.round(value * 1000) / 1000
+const selectSceneAssets = (assets, duration) => assets.slice(0, Math.max(1, Math.min(assets.length, Math.floor(duration / 3))))
 
 function requiredSceneDuration(kind, segments) {
   const [minimum, preferred, maximum] = TIMING[kind]
@@ -20,8 +22,12 @@ function requiredSceneDuration(kind, segments) {
 }
 
 function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iterationId, productSetId,
-  plan, items, audioArtifacts }) {
+  plan, items, audioArtifacts, schemaVersion = SCHEMA_VERSION }) {
   if (plan?.archetype !== ARCHETYPE || !Array.isArray(items) || items.length !== 3) throw new TypeError('Invalid v2 composition input')
+  const legacy = schemaVersion === 'multi-product-shorts-plan-v3'
+  if (!legacy && schemaVersion !== SCHEMA_VERSION) throw Object.assign(new Error('Unsupported Three Picks schema version'), { code: 'THREE_PICKS_V2_SCHEMA_UNSUPPORTED' })
+  const layoutId = legacy ? LEGACY_LAYOUT_ID : LAYOUT_ID
+  const manifestVersion = legacy ? LEGACY_MANIFEST_VERSION : MANIFEST_VERSION
   const audioBySegment = new Map((audioArtifacts || []).map(artifact => [artifact.segmentId, artifact]))
   const plannedSegments = planNarrationSegments(plan)
   const measured = plannedSegments.map(segment => {
@@ -64,9 +70,10 @@ function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iter
       base.product_set_item_id = item.id
       base.layers = [
         { kind: 'background', recipe_version: BACKGROUND_VERSION, prominence: 'subordinate' },
-        ...item.assetRevisions.map((asset, index) => ({ kind: 'product_image', role: index === 0 ? 'hero' : 'supporting',
+        ...(legacy ? item.assetRevisions : selectSceneAssets(item.assetRevisions, duration)).map((asset, index) => ({ kind: 'product_image', role: index === 0 ? 'hero' : 'supporting',
           asset_order: asset.assetOrder, product_asset_revision_id: asset.id, content_sha256: asset.contentSha256,
-          layout_id: LAYOUT_ID, motion: index === 0 ? 'hero_slow_zoom' : 'supporting_carousel' })),
+          layout_id: layoutId, motion: index === 0 ? 'hero_slow_zoom' : 'supporting_carousel' })),
+        ...(!legacy ? [{ kind: 'pick_label', text: `PICK ${spec.presentation.presentation_order}` }] : []),
         { kind: 'display_name', text: spec.presentation.display_name },
         { kind: 'short_appeal', text: spec.presentation.short_appeal },
         { kind: 'fact_badge', text: spec.presentation.fact_badge, verified_fact_ref: spec.presentation.verified_fact_ref },
@@ -83,7 +90,7 @@ function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iter
   const cursor = cursorFrames / FRAME_RATE
   if (cursor < TIMING.minimum || cursor > TIMING.maximum) throw Object.assign(new Error('Composition duration is outside 35-45 seconds'), { code: 'THREE_PICKS_V2_DURATION_INVALID' })
   const manifest = {
-    manifest_version: MANIFEST_VERSION, archetype: ARCHETYPE, template_id: TEMPLATE_ID, layout_id: LAYOUT_ID,
+    manifest_version: manifestVersion, archetype: ARCHETYPE, template_id: TEMPLATE_ID, layout_id: layoutId,
     lineage: { campaign_id: campaignId, campaign_iteration_id: iterationId, product_set_id: productSetId,
       creative_archetype_request_id: requestId, plan_revision: planRevision },
     output: { width: 1080, height: 1920, fps: 30, container: 'mp4', video_codec: 'h264',
@@ -96,4 +103,4 @@ function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iter
 }
 
 module.exports = { BACKGROUND_VERSION, COMPOSITION_VERSION, FRAME_RATE, TIMING,
-  compileThreePicksV2Manifest, hash, requiredSceneDuration }
+  compileThreePicksV2Manifest, hash, requiredSceneDuration, selectSceneAssets }

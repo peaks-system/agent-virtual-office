@@ -70,7 +70,7 @@ describe('Multi-product Shorts Dashboard', () => {
     const campaign = { id: 'campaign-v2', name: 'Creative Archetype v2', status: 'active', lineageKind: 'product_set', origins: [], iterations: [{
       id: 'iteration-v2', iterationNumber: 1, status: 'draft', product: null, productSet, publication: null,
       productionPlans: [], archetypePlans: [{ requestId: 'request-v2', archetype: 'three_picks_v2', revisionNumber: 1,
-        status: 'succeeded', planId: 'plan-v2', output: { hook: { display_text: '3つを紹介' }, product_presentations: presentations,
+        status: 'succeeded', planId: 'plan-v2', schemaVersion: 'multi-product-shorts-plan-v4', output: { hook: { display_text: '3つを紹介' }, product_presentations: presentations,
           cta: { display_text: '詳細を見る' } }, productCards: [], audioArtifacts: Array.from({ length: 15 }, (_, index) => ({
             id: `audio-${index + 1}`, creativeArchetypePlanId: 'plan-v2', sceneId: index < 3 ? 'hook' : `product-${Math.ceil((index - 2) / 4)}`,
             segmentId: index < 3 ? `hook-${index + 1}` : `product-${index - 2}`, segmentOrder: index + 1,
@@ -83,7 +83,7 @@ describe('Multi-product Shorts Dashboard', () => {
     const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
     expect(markup).toContain('Creative Archetype v2 Plan')
     expect(markup).toContain('hero-carousel-v2')
-    expect(markup).toContain('hero-product-layout-v1')
+    expect(markup).toContain('hero-product-layout-v2')
     expect(markup).toContain('0 / 15 ready')
     expect(markup).toContain('このsegmentだけ音声生成')
     expect(markup).toContain('初回Live ValidationではHookの最初のsegmentだけを生成できます')

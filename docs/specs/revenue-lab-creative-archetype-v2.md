@@ -1,7 +1,7 @@
 ---
 status: frozen
-version: 1.0
-date: 2026-10-14
+version: 1.1
+date: 2026-10-19
 ---
 
 # Revenue Lab Creative Archetype v2
@@ -37,6 +37,12 @@ Limits after whitespace compaction:
 - Per-product narration: 140 characters.
 - CTA display text: 18 characters; CTA narration: 70 characters.
 
+### Production Creative Quality v1
+
+New revisions use `three-picks-production-planner-v3` and `multi-product-shorts-plan-v4`. The server supplies the complete normalized product title as `source_product_name` plus bounded `fact_candidates` made only from complete semantic units. UI truncation is never reused as planner evidence, and no candidate may end inside a bracket, word, symbol sequence, or verified-fact statement.
+
+The planner translates commerce copy into video copy instead of copying it. `display_name` is a 4–14 character category identity; `short_appeal` is one complete 8–22 character benefit phrase; `fact_badge` is one grounded 3–12 character line; and product narration is one natural 12–40 character sentence. Every appeal, badge, and narration includes evidence anchors that occur verbatim in the selected fact candidate. The validator rejects changed identity, unsupported structured claims, dangling fragments, authority/superlative badges, and claims without an evidence anchor. Hook narration remains one segment and at most 14 characters. CTA copy must identify the description as its destination.
+
 ## Narration and audio artifacts
 
 Hook narration must validate to exactly one deterministic segment. Product and CTA narration retain punctuation-based splitting with the fixed 42-character segment maximum. Segment IDs and input fingerprints are stable for identical plans. TTS generation is segment-based. Subtitle cue timing uses each ready audio artifact's measured duration; timing is never estimated from the full narration string.
@@ -50,6 +56,10 @@ Hook narration must validate to exactly one deterministic segment. Product and C
 Default timing is 39 seconds: Hook 4 seconds, three product scenes at 10 seconds each, CTA 5 seconds. The compiler may expand within 35–45 seconds to fit measured narration while preserving Hook 3–5 seconds, each product 7–13 seconds, and CTA 4–6 seconds. It fails closed when measured audio cannot fit these bounds.
 
 The template deterministically owns 1080×1920 layout, 30 fps H.264/yuv420p output, product-first safe areas, image motion, transition timing, text animation, subtitle placement, SE timing, BGM loop and ducking envelope. Background B-roll remains optional and visually subordinate; the initial implementation uses a deterministic low-prominence graphic background. FFmpeg commands and local paths are never persisted.
+
+New revisions compile `three-picks-composition-manifest-v3` with `hero-product-layout-v2`. The v2 layout keeps every text pixel inside 96 px horizontal safe margins, uses actual FFmpeg font metrics to fit a two-line 56–64 px display name and two-line appeal, rejects an overflowing one-line badge before rendering, and reserves a separate subtitle band. Product scenes use a neutral 840 px product card with contained imagery. One-image motion spans the full scene; multi-image scenes keep each selected image visible for at least about three seconds and deterministically reduce excess assets. `PICK 1` through `PICK 3` remain visually subordinate.
+
+Compatibility is version-dispatched. Stored v1-layout/v2-manifest requests continue through the unchanged legacy renderer. Existing revisions and outputs are read from their stored `final_composition_requests.render_manifest`; they are never reconstructed, revalidated with the v4 validator, upgraded, or backfilled.
 
 ## Dashboard and API
 

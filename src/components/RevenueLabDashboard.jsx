@@ -735,6 +735,8 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
   const isV2 = iteration.productSet?.archetype === 'three_picks_v2'
   const revisionSelection = threePicksRevisionSelection(revisions)
   const visibleRevisions = isV2 ? [revisionSelection.latest].filter(Boolean) : revisions
+  const activeLayoutId = revisionSelection.latest?.schemaVersion === 'multi-product-shorts-plan-v4'
+    ? 'hero-product-layout-v2' : 'hero-product-layout-v1'
   const generate = async () => { setSubmitting(true); try { await onGeneratePlan(iteration.id, keyRef.current); keyRef.current = newCampaignIdempotencyKey() } finally { setSubmitting(false) } }
   const compose = async planId => {
     setSubmitting(true); setCompositionError('')
@@ -747,7 +749,7 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
   const preview = async outputId => { const result = await onPreview(outputId); setPreviewUrl(result.previewUrl) }
   return <section className="revenue-three-picks-panel">
     <div className="revenue-product-heading"><strong>{isV2 ? 'Creative Archetype v2 Plan' : 'Three Picks Plan'}</strong><button className="corp-primary" disabled={busy || submitting || !plannerConfig?.configured} onClick={generate}>{submitting ? '処理中…' : revisions.length ? '新しい制作案を生成' : 'Three Picks制作案を生成'}</button></div>
-    {isV2 && <p className="revenue-three-picks-template"><strong>固定テンプレート:</strong> hero-carousel-v2 · hero-product-layout-v1 · 35〜45秒</p>}
+    {isV2 && <p className="revenue-three-picks-template"><strong>固定テンプレート:</strong> hero-carousel-v2 · {activeLayoutId} · 35〜45秒</p>}
     {!plannerConfig?.configured && <p className="revenue-warning">OPENAI_API_KEYを設定すると制作案を生成できます。</p>}
     {visibleRevisions.map((revision, index) => { const revisionArtifacts = isV2 ? audioArtifactsForPlan(revision) : revision.audioArtifacts || []; const counts = creativeAudioStatusCounts(revisionArtifacts); const timingPreflight = threePicksTimingPreflight(revisionArtifacts); return <details key={`${revision.planId || 'no-plan'}:${revision.requestId}`} open={index === 0}><summary>{isV2 ? <><strong>制作案 Revision {revision.revisionNumber}</strong> · 最新 · artifact {revisionArtifacts.length}件 · ready {counts.ready} / planned {counts.planned} / failed {counts.failed}</> : <>制作案 {revisions.length - index} · {jobStatusLabel(revision.status)}</>}</summary>
       {revision.output && (isV2
