@@ -10,9 +10,10 @@ import { createSupabaseCreativeAudioBlobStore, safeAudioKey } from '../scripts/r
 const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 
 function fixture() {
+  const identities = ['車用ゴミ箱', 'スマホホルダー', 'アロマディフューザー']
   const products = [1, 2, 3].map(index => ({
     product_set_item_id: uuid(index), presentation_order: index,
-    source_product_name: `商品${index} 車載用品`, allowed_verified_fact_refs: ['summary'],
+    source_product_name: `${identities[index - 1]} 車載用品`, allowed_verified_fact_refs: ['summary'],
     fact_candidates: [{ id: `summary-${index}`, verified_fact_ref: 'summary', text: `確認済み${index}` }],
   }))
   const output = {
@@ -21,8 +22,8 @@ function fixture() {
     product_presentations: products.map(product => ({
       product_set_item_id: product.product_set_item_id,
       presentation_order: product.presentation_order,
-      display_name: `商品${product.presentation_order}カテゴリ`, short_appeal: `確認済み${product.presentation_order}で使いやすい`,
-      fact_badge: `確認済み${product.presentation_order}`, verified_fact_ref: 'summary', identity_anchor: `商品${product.presentation_order}`,
+      display_name: identities[product.presentation_order - 1], short_appeal: `確認済み${product.presentation_order}で使いやすい`,
+      fact_badge: `確認済み${product.presentation_order}`, verified_fact_ref: 'summary', identity_anchor: identities[product.presentation_order - 1],
       evidence_anchors: [`確認済み${product.presentation_order}`], tts: `確認済み${product.presentation_order}の仕様で便利に使えます。`,
     })),
     cta: { display_text: '気になる商品は概要欄へ', tts: '気になる商品は概要欄から確認できます。' },

@@ -42,6 +42,33 @@ function qualityFixture() {
   return { products, output }
 }
 
+function revisionSevenIdentityFixture() {
+  const fixture = qualityFixture()
+  const identities = [
+    {
+      source: 'LEDライト付き 車 ゴミ箱 車用ゴミ箱 折りたたみ式 車内収納用品',
+      anchor: '車用ゴミ箱',
+      display: '車載ダストボックス',
+    },
+    {
+      source: '車 マグネット 車載ホルダー スマホホルダー N56磁石対応',
+      anchor: 'スマホホルダー',
+      display: 'マグネット式スマホホルダー',
+    },
+    {
+      source: '車用 カーアロマディフューザー USB給電 フレグランス用品',
+      anchor: 'カーアロマディフューザー',
+      display: '車載アロマディフューザー',
+    },
+  ]
+  fixture.products.forEach((product, index) => { product.source_product_name = identities[index].source })
+  fixture.output.product_presentations.forEach((item, index) => {
+    item.identity_anchor = identities[index].anchor
+    item.display_name = identities[index].display
+  })
+  return fixture
+}
+
 describe('Three Picks v2 Production Creative Quality v1', () => {
   it('prepares complete semantic evidence without character slicing formal titles or facts', () => {
     const prepared = prepareThreePicksV2ProductEvidence({
@@ -105,6 +132,37 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
     expect(SCHEMA_VERSION).toBe('multi-product-shorts-plan-v4')
     expect(LAYOUT_ID).toBe('hero-product-layout-v2')
     expect(MANIFEST_VERSION).toBe('three-picks-composition-manifest-v3')
+  })
+
+  it('accepts Revision 7-style natural display identities and SEO word-order changes', () => {
+    const { products, output } = revisionSevenIdentityFixture()
+    expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
+  })
+
+  it.each([
+    ['generic token only', 0, '車用', '車載商品'],
+    ['different category', 1, 'スマホホルダー', 'ワイヤレス充電器'],
+    ['merchant name only', 1, 'ACME', 'ACMEセレクト'],
+    ['model number only', 1, 'ZX100', 'ZX100モデル'],
+  ])('rejects identity based on %s', (_label, productIndex, identityAnchor, displayName) => {
+    const { products, output } = revisionSevenIdentityFixture()
+    products[productIndex].source_product_name = `${identityAnchor} ${products[productIndex].source_product_name}`
+    output.product_presentations[productIndex].identity_anchor = identityAnchor
+    output.product_presentations[productIndex].display_name = displayName
+    let failure
+    try { validateThreePicksV2Output(output, { products }) } catch (error) { failure = error }
+    expect(failure).toMatchObject({
+      code: 'THREE_PICKS_V2_IDENTITY_CHANGED',
+      productIndex: productIndex + 1,
+      fieldPath: `$.product_presentations[${productIndex}].display_name`,
+      product_index: productIndex + 1,
+      field_path: `$.product_presentations[${productIndex}].display_name`,
+    })
+    expect(failure.reason).toMatch(/identity token|category token/i)
+    expect(failure.safeDiagnostics).toEqual({ code: 'THREE_PICKS_V2_IDENTITY_CHANGED',
+      product_index: productIndex + 1, field_path: `$.product_presentations[${productIndex}].display_name`,
+      reason: failure.reason })
+    expect(JSON.stringify(failure.safeDiagnostics)).not.toContain(products[productIndex].source_product_name)
   })
 
   it('rejects unsupported and non-grounded claims such as 水なしUSB式', () => {

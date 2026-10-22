@@ -17,6 +17,26 @@ describe('Multi-product Shorts Worker', () => {
     expect(store.persistThreePicksSuccess).toHaveBeenCalledWith(request, result)
   })
 
+  it('propagates sealed schema-v4 identity diagnostics through the failed job', async () => {
+    const request = { id: uuid(1), archetype: 'three_picks_v2', revisionNumber: 8, inputSnapshot: { products: [] } }
+    const safeDiagnostics = { code: 'THREE_PICKS_V2_IDENTITY_CHANGED', product_index: 2,
+      field_path: '$.product_presentations[1].display_name', reason: 'no compatible identity token found' }
+    const failure = Object.assign(new Error('Display identity is incompatible'), {
+      code: safeDiagnostics.code, safeDiagnostics,
+    })
+    const store = { getThreePicksRequest: vi.fn(async () => request), markThreePicksRunning: vi.fn(),
+      persistThreePicksV2Success: vi.fn(), persistThreePicksFailure: vi.fn() }
+    const planner = { plan: vi.fn(async () => { throw failure }) }
+    const handler = createJobHandlers({ store, youtube: {}, multiProductShortsV2Planner: planner }).get('creative.archetype.plan')
+    await expect(handler({ payload: { creative_archetype_request_id: request.id } })).rejects.toMatchObject({
+      code: safeDiagnostics.code,
+      message: 'Three Picks planning failed: product 2; $.product_presentations[1].display_name; no compatible identity token found',
+      safeDiagnostics,
+    })
+    expect(store.persistThreePicksFailure).toHaveBeenCalledWith(request.id, failure)
+    expect(store.persistThreePicksV2Success).not.toHaveBeenCalled()
+  })
+
   it('hash-verifies three immutable assets, renders once, and persists an immutable MP4', async () => {
     const bytes = Buffer.from('immutable-product-image')
     const sha = createHash('sha256').update(bytes).digest('hex')

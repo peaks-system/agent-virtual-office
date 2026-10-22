@@ -12,6 +12,25 @@ class RevenueJobError extends Error {
   }
 }
 
+const THREE_PICKS_IDENTITY_REASONS = new Set([
+  'identity anchor is not grounded in source product name',
+  'display name must not copy the formal product title',
+  'identity anchor has no distinctive category token',
+  'no compatible identity token found',
+])
+
+function safeThreePicksDiagnostics(error) {
+  const diagnostics = error?.safeDiagnostics
+  const productIndex = Number(diagnostics?.product_index)
+  const fieldPath = diagnostics?.field_path
+  const reason = diagnostics?.reason
+  if (error?.code !== 'THREE_PICKS_V2_IDENTITY_CHANGED' || !Number.isInteger(productIndex)
+    || productIndex < 1 || productIndex > 3
+    || fieldPath !== `$.product_presentations[${productIndex - 1}].display_name`
+    || !THREE_PICKS_IDENTITY_REASONS.has(reason)) return null
+  return { code: error.code, product_index: productIndex, field_path: fieldPath, reason }
+}
+
 function createJobHandlers({ store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
   multiProductShortsV2Planner,
   finalCompositionProvider, finalCompositionV2Provider, compositionBlobStore, videoGenerationProvider,
@@ -376,7 +395,11 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
     } catch (error) {
       try { await store.persistThreePicksFailure(requestId, error) }
       catch { console.error('[revenue-lab] Three Picks failure state could not be persisted', { requestId }) }
-      throw new RevenueJobError(error?.code || 'THREE_PICKS_PLAN_FAILED', 'Three Picks planning failed')
+      const safeDiagnostics = safeThreePicksDiagnostics(error)
+      const message = safeDiagnostics
+        ? `Three Picks planning failed: product ${safeDiagnostics.product_index}; ${safeDiagnostics.field_path}; ${safeDiagnostics.reason}`
+        : 'Three Picks planning failed'
+      throw new RevenueJobError(error?.code || 'THREE_PICKS_PLAN_FAILED', message, { safeDiagnostics })
     }
   }
 

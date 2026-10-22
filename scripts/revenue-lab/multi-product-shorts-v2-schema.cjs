@@ -46,13 +46,27 @@ const THREE_PICKS_V2_JSON_SCHEMA = { type: 'object', additionalProperties: false
   } }
 
 class ThreePicksV2ValidationError extends Error {
-  constructor(code, message, fieldPath = null) {
+  constructor(code, message, fieldPath = null, { productIndex = null, reason = null } = {}) {
     super(message); this.name = 'ThreePicksV2ValidationError'; this.code = code; this.fieldPath = fieldPath
+    this.productIndex = productIndex; this.reason = reason
+    this.product_index = productIndex; this.field_path = fieldPath
+    this.safeDiagnostics = { code, product_index: productIndex, field_path: fieldPath, reason }
   }
 }
 
 const RANKING_PATTERN = /(?:ランキング|順位|第\s*[一二三123]\s*位|[一二三123]\s*位|best\s*(?:one|two|three|[123])|top\s*[123]|rank(?:ed|ing)?)/iu
 const PROMOTIONAL_PATTERN = /(?:業界最大級|業界初|最高級|最上級|権威|監修|公認|No\.?\s*1)/iu
+const IDENTITY_MODEL_PATTERN = /(?:\d|^[a-z][a-z\d_.-]*$)/iu
+const IDENTITY_MERCHANT_PATTERN = /(?:公式|正規)?(?:ショップ|ストア|商店|販売店|ブランド|セレクト)$/iu
+const IDENTITY_FEATURE_PATTERN = /(?:led|usb|磁石|マグネット|ライト|折りたたみ|給電|防水|強力|高性能|便利)$/iu
+const IDENTITY_CONCEPTS = Object.freeze([
+  ['waste-container', ['ゴミ箱', 'ごみ箱', 'ダストボックス', 'くず入れ', 'ゴミ入れ']],
+  ['smartphone', ['スマートフォン', 'スマホ', '携帯電話']],
+  ['holder', ['ホルダー', 'マウント', 'スタンド']],
+  ['aroma', ['アロマ', '芳香剤', 'フレグランス']],
+  ['diffuser', ['ディフューザー', 'ディフューザ']],
+  ['charger', ['ワイヤレス充電器', '充電器', 'チャージャー']],
+])
 const compact = value => String(value ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim()
 const length = value => Array.from(compact(value)).length
 
@@ -88,20 +102,55 @@ function narrationSegments(scope, value) {
 
 const normalizeForEvidence = value => compact(value).replace(/[\s。、，,.・「」『』【】（）()\[\]]/gu, '').toLowerCase()
 const structuredTokens = value => compact(value).match(/[A-Za-z]+\d*|\d+(?:\.\d+)?/gu) || []
+const normalizeIdentityText = value => compact(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+
+function identityDescriptor(value) {
+  const normalized = normalizeIdentityText(value); const joined = normalized.replace(/\s+/gu, '')
+  const concepts = new Set(IDENTITY_CONCEPTS
+    .filter(([, aliases]) => aliases.some(alias => joined.includes(normalizeIdentityText(alias).replace(/\s+/gu, ''))))
+    .map(([concept]) => concept))
+  const tokens = normalized.split(/\s+/u).map(token => token
+    .replace(/^(?:自動車用|車載|車用|カー)/u, '')
+    .replace(/(?:専用|用品|商品|アイテム|グッズ|タイプ|モデル|本体|セット|用|式)$/u, ''))
+    .filter(token => Array.from(token).length >= 2
+      && /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(token)
+      && !IDENTITY_MODEL_PATTERN.test(token) && !IDENTITY_MERCHANT_PATTERN.test(token)
+      && !IDENTITY_FEATURE_PATTERN.test(token))
+  return { concepts, joined, tokens }
+}
+
+function compatibleIdentity(anchor, displayName) {
+  const anchorIdentity = identityDescriptor(anchor); const displayIdentity = identityDescriptor(displayName)
+  if (anchorIdentity.concepts.size > 0) {
+    return [...anchorIdentity.concepts].every(concept => displayIdentity.concepts.has(concept))
+  }
+  if (anchorIdentity.tokens.length === 0) return false
+  return anchorIdentity.tokens.some(token => displayIdentity.joined.includes(token)
+    || displayIdentity.tokens.some(displayToken => token.includes(displayToken) && Array.from(displayToken).length >= 2))
+}
+
 function isAnchored(text, anchors) {
   const normalized = normalizeForEvidence(text)
   return anchors.some(anchor => { const candidate = normalizeForEvidence(anchor)
     return candidate.length >= 2 && (normalized.includes(candidate) || candidate.includes(normalized)) })
 }
 
-function validateGroundedPresentation(item, product, path) {
+function validateGroundedPresentation(item, product, path, productIndex) {
   const candidates = (product.fact_candidates || []).filter(candidate => candidate.verified_fact_ref === item.verified_fact_ref)
   const evidenceText = normalizeForEvidence(candidates.map(candidate => candidate.text).join(' '))
   const sourceName = normalizeForEvidence(product.source_product_name); const identityAnchor = normalizeForEvidence(item.identity_anchor)
   const displayName = normalizeForEvidence(item.display_name)
-  if (identityAnchor.length < 2 || !sourceName.includes(identityAnchor)
-    || !(displayName.includes(identityAnchor) || identityAnchor.includes(displayName)) || displayName === sourceName) {
-    throw new ThreePicksV2ValidationError('THREE_PICKS_V2_IDENTITY_CHANGED', 'Display identity is not grounded in the product title', `${path}.display_name`)
+  const identityField = `${path}.display_name`
+  let identityReason = null
+  if (identityAnchor.length < 2 || !sourceName.includes(identityAnchor)) identityReason = 'identity anchor is not grounded in source product name'
+  else if (displayName === sourceName) identityReason = 'display name must not copy the formal product title'
+  else if (identityDescriptor(item.identity_anchor).concepts.size === 0
+    && identityDescriptor(item.identity_anchor).tokens.length === 0) identityReason = 'identity anchor has no distinctive category token'
+  else if (!compatibleIdentity(item.identity_anchor, item.display_name)) identityReason = 'no compatible identity token found'
+  if (identityReason) {
+    throw new ThreePicksV2ValidationError('THREE_PICKS_V2_IDENTITY_CHANGED',
+      'Display identity is not compatible with the frozen product lineage', identityField,
+      { productIndex, reason: identityReason })
   }
   const anchors = Array.isArray(item.evidence_anchors) ? item.evidence_anchors.map(compact) : []
   if (anchors.length < 1 || anchors.length > 3 || anchors.some(anchor => !evidenceText.includes(normalizeForEvidence(anchor)))) {
@@ -142,7 +191,7 @@ function validateThreePicksV2Output(output, input) {
     if ([item.display_name, item.short_appeal, item.fact_badge].some(value => normalizeForEvidence(value) === normalizeForEvidence(item.tts))) {
       throw new ThreePicksV2ValidationError('THREE_PICKS_V2_TTS_DUPLICATES_DISPLAY', 'Narration must not repeat on-screen copy verbatim', `${path}.tts`)
     }
-    validateGroundedPresentation(item, product, path); ids.add(item.product_set_item_id); orders.add(item.presentation_order)
+    validateGroundedPresentation(item, product, path, index + 1); ids.add(item.product_set_item_id); orders.add(item.presentation_order)
   })
   return output
 }
