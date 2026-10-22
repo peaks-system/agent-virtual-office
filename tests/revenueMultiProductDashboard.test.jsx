@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { buildThreePicksCandidatePool, canCreateThreePicks, RevenueLabView,
   initialAudioLiveValidationArtifactId, threePicksCardPresentation, threePicksTimingPreflight,
-  toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
+  ThreePicksGenerationFeedback, threePicksGenerationFeedback, toggleThreePicksSelection } from '../src/components/RevenueLabDashboard'
 
 const fn = vi.fn()
 const handlers = { onReload: fn, onRun: fn, onTrack: fn, onAnalyze: fn, onReview: fn, onTranslate: fn,
@@ -25,6 +25,16 @@ function singleCampaign(index) {
 }
 
 describe('Multi-product Shorts Dashboard', () => {
+  it('shows revision success and safe evidence errors beside plan generation', () => {
+    const success = threePicksGenerationFeedback({ revisionNumber: 7 })
+    expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={success} />)).toContain('✓ Revision 7を生成しました')
+    expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={success} />)).toContain('Planner v3 / Layout v2')
+    const failure = threePicksGenerationFeedback(null, new Error('商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。'))
+    const markup = renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={failure} />)
+    expect(markup).toContain('role="alert"')
+    expect(markup).toContain('商品説明の形式を確認してください。')
+  })
+
   it('shows human Three Picks intake and a completed composition lineage', () => {
     const productSet = { id: 'set-1', selectionMode: 'human', items: [1, 2, 3].map(index => ({ id: `item-${index}`,
       presentationOrder: index, productName: `商品${index}`, assetRevision: { revisionNumber: 1 } })) }

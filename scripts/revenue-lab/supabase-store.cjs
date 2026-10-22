@@ -1103,11 +1103,19 @@ function createSupabaseStore({
         template_id: THREE_PICKS_V2_TEMPLATE_ID, template_selection: 'server_fixed' },
       campaign: { id: campaign.id, name: campaign.name, objective: campaign.objective },
       iteration: { id: iteration.id },
-      products: itemRows.map(row => ({ product_set_item_id: row.id, presentation_order: row.presentation_order,
-        ...prepareThreePicksV2ProductEvidence({ productName: row.product_name_snapshot,
-          verifiedFactRef: row.verified_fact_ref, verifiedFact: row.verified_fact_snapshot }),
-        allowed_verified_fact_refs: [row.verified_fact_ref],
-        price: row.price_snapshot, asset_revisions: assetsByItem.get(row.id) })),
+      products: itemRows.map(row => {
+        let evidence
+        try {
+          evidence = prepareThreePicksV2ProductEvidence({ productName: row.product_name_snapshot,
+            verifiedFactRef: row.verified_fact_ref, verifiedFact: row.verified_fact_snapshot })
+        } catch {
+          throw new RevenueStoreError('REVENUE_EVIDENCE_PREPARATION_FAILED',
+            '商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。', 422)
+        }
+        return { product_set_item_id: row.id, presentation_order: row.presentation_order, ...evidence,
+          allowed_verified_fact_refs: [row.verified_fact_ref],
+          price: row.price_snapshot, asset_revisions: assetsByItem.get(row.id) }
+      }),
     }
     return rpc('enqueue_three_picks_v2_plan', { p_campaign_iteration_id: iteration.id,
       p_input_snapshot: input, p_input_fingerprint: inputFingerprint(input),

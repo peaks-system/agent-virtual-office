@@ -726,10 +726,23 @@ export function threePicksTimingPreflight(artifacts = []) {
     totalRequiredSeconds: allReady ? Number(scenes.reduce((sum, scene) => sum + scene.requiredSeconds, 0).toFixed(3)) : null }
 }
 
+export function threePicksGenerationFeedback(result, failure) {
+  if (failure) return { kind: 'error', message: failure.message || '制作案を生成できませんでした。商品説明の形式を確認してください。' }
+  if (!result?.revisionNumber) return null
+  return { kind: 'success', message: `✓ Revision ${result.revisionNumber}を生成しました`, detail: 'Planner v3 / Layout v2' }
+}
+
+export function ThreePicksGenerationFeedback({ feedback }) {
+  if (!feedback) return null
+  return <p className={feedback.kind === 'error' ? 'revenue-warning' : 'revenue-success'}
+    role={feedback.kind === 'error' ? 'alert' : 'status'}>{feedback.message}{feedback.detail && <><br /><small>{feedback.detail}</small></>}</p>
+}
+
 function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, composerConfig, busy, onGeneratePlan, onGenerateAudio, onGenerateAudioArtifact, onCompose, onPreview }) {
   const [submitting, setSubmitting] = useState(false)
   const [previewUrl, setPreviewUrl] = useState('')
   const [compositionError, setCompositionError] = useState('')
+  const [generationFeedback, setGenerationFeedback] = useState(null)
   const keyRef = useRef(newCampaignIdempotencyKey())
   const revisions = iteration.archetypePlans || []
   const isV2 = iteration.productSet?.archetype === 'three_picks_v2'
@@ -737,7 +750,16 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
   const visibleRevisions = isV2 ? [revisionSelection.latest].filter(Boolean) : revisions
   const activeLayoutId = revisionSelection.latest?.schemaVersion === 'multi-product-shorts-plan-v4'
     ? 'hero-product-layout-v2' : 'hero-product-layout-v1'
-  const generate = async () => { setSubmitting(true); try { await onGeneratePlan(iteration.id, keyRef.current); keyRef.current = newCampaignIdempotencyKey() } finally { setSubmitting(false) } }
+  const generate = async () => {
+    setSubmitting(true); setGenerationFeedback(null)
+    try {
+      const result = await onGeneratePlan(iteration.id, keyRef.current)
+      keyRef.current = newCampaignIdempotencyKey()
+      setGenerationFeedback(threePicksGenerationFeedback(result))
+    } catch (failure) {
+      setGenerationFeedback(threePicksGenerationFeedback(null, failure))
+    } finally { setSubmitting(false) }
+  }
   const compose = async planId => {
     setSubmitting(true); setCompositionError('')
     try { await onCompose(planId, keyRef.current); keyRef.current = newCampaignIdempotencyKey() }
@@ -749,6 +771,7 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
   const preview = async outputId => { const result = await onPreview(outputId); setPreviewUrl(result.previewUrl) }
   return <section className="revenue-three-picks-panel">
     <div className="revenue-product-heading"><strong>{isV2 ? 'Creative Archetype v2 Plan' : 'Three Picks Plan'}</strong><button className="corp-primary" disabled={busy || submitting || !plannerConfig?.configured} onClick={generate}>{submitting ? '処理中…' : revisions.length ? '新しい制作案を生成' : 'Three Picks制作案を生成'}</button></div>
+    <ThreePicksGenerationFeedback feedback={generationFeedback} />
     {isV2 && <p className="revenue-three-picks-template"><strong>固定テンプレート:</strong> hero-carousel-v2 · {activeLayoutId} · 35〜45秒</p>}
     {!plannerConfig?.configured && <p className="revenue-warning">OPENAI_API_KEYを設定すると制作案を生成できます。</p>}
     {visibleRevisions.map((revision, index) => { const revisionArtifacts = isV2 ? audioArtifactsForPlan(revision) : revision.audioArtifacts || []; const counts = creativeAudioStatusCounts(revisionArtifacts); const timingPreflight = threePicksTimingPreflight(revisionArtifacts); return <details key={`${revision.planId || 'no-plan'}:${revision.requestId}`} open={index === 0}><summary>{isV2 ? <><strong>制作案 Revision {revision.revisionNumber}</strong> · 最新 · artifact {revisionArtifacts.length}件 · ready {counts.ready} / planned {counts.planned} / failed {counts.failed}</> : <>制作案 {revisions.length - index} · {jobStatusLabel(revision.status)}</>}</summary>

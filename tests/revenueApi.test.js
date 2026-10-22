@@ -90,6 +90,21 @@ describe('Revenue Lab API', () => {
     expect(store.createThreePicksV2Campaign).toHaveBeenCalledOnce()
     expect(store.enqueueThreePicksV2Plan).toHaveBeenCalledWith(uuid, expect.objectContaining({ idempotencyKey }))
   })
+
+  it('returns a sealed 422 response for evidence preparation failures', async () => {
+    const store = { enqueueThreePicksV2Plan: vi.fn(async () => {
+      throw Object.assign(new Error('private product row detail'), { code: 'REVENUE_EVIDENCE_PREPARATION_FAILED', status: 422 })
+    }) }
+    const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test',
+      YOUTUBE_API_KEY: 'test', OPENAI_API_KEY: 'test' }
+    const origin = await fixture({ store, env })
+    const response = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/three-picks-v2-plans`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey }),
+    })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ error: { code: 'REVENUE_EVIDENCE_PREPARATION_FAILED',
+      message: '商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。' } })
+  })
   it('reports missing environment names without values or constructing storage', async () => {
     const status = configurationStatus({ SUPABASE_URL: 'https://safe.test' })
     expect(status).toMatchObject({ configured: false, missing: ['SUPABASE_SERVICE_ROLE_KEY', 'YOUTUBE_API_KEY'], analysis: { configured: false, missing: ['OPENAI_API_KEY'] } })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prepareThreePicksV2ProductEvidence } from '../scripts/revenue-lab/multi-product-shorts-v2-evidence.cjs'
+import { normalizeEvidenceText, prepareThreePicksV2ProductEvidence } from '../scripts/revenue-lab/multi-product-shorts-v2-evidence.cjs'
 import {
   ARCHETYPE, LAYOUT_ID, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION, MANIFEST_VERSION,
   PROMPT_VERSION, SCHEMA_VERSION, planNarrationSegments, validateThreePicksV2Output,
@@ -54,6 +54,48 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
       'LEDライト付き', '折りたたみ式', 'マグネット固定(取り外し可能)',
     ])
     expect(JSON.stringify(prepared)).not.toContain('マグネット固定（取り外し')
+  })
+
+  it('extracts complete anchored candidates from a 500+ character multiline commerce fact', () => {
+    const longFact = [
+      '【強力な固定力】',
+      '● N56ネオジム磁石を採用しスマートフォンを安定して固定',
+      '● 走行中の細かな振動でも向きが変わりにくい保持構造',
+      '【取り付け方法】',
+      '■ ダッシュボードへ貼り付ける台座を付属',
+      '■ 角度を調整できるボールジョイントを搭載',
+      '〈対応機器〉',
+      '◆ 4.7インチから6.9インチまでのスマートフォンに対応',
+      '◆ ケースを装着したままでも利用可能',
+      '※ 機器の形状やケースの素材によって保持力は異なります',
+      '【車内での使いやすさ】',
+      '- 片手で着脱できるため乗車後の操作が簡単',
+      '* 縦向きと横向きの両方へ切り替え可能',
+      '● USB Type-Cケーブルの接続を妨げにくい設計',
+      '【使用上の注意】',
+      '■ 取り付け面の油分やほこりを拭き取ってから設置',
+      '■ 接着後は24時間置いてから端末を装着',
+      '※ 高温になる場所やエアバッグの作動範囲には設置しないでください',
+      '【同梱内容】',
+      '◆ 本体と台座と位置決め用ガイドを同梱',
+      '◆ 取扱説明書に日本語の取り付け手順を掲載',
+      '【保管方法】',
+      '● 使用しないときは直射日光を避けた車内収納へ保管',
+      '● 金属製カードや磁気記録媒体から離して保管',
+      '※ 製品表面の汚れは乾いた柔らかい布で拭き取ってください',
+    ].join('\r\n')
+    expect(Array.from(longFact).length).toBeGreaterThan(500)
+    const prepared = prepareThreePicksV2ProductEvidence({
+      productName: '車載用マグネット式スマートフォンホルダー N56対応モデル',
+      verifiedFactRef: 'summary', verifiedFact: { value: longFact },
+    })
+    expect(prepared.fact_candidates.length).toBeGreaterThan(0)
+    expect(prepared.fact_candidates.every(candidate => Array.from(candidate.text).length <= 120)).toBe(true)
+    expect(prepared.fact_candidates.every(candidate => normalizeEvidenceText(longFact).includes(candidate.text))).toBe(true)
+    expect(prepared.fact_candidates.some(candidate => candidate.text.includes('N56ネオジム磁石'))).toBe(true)
+    expect(prepared.fact_candidates.every(candidate => !/^[●■◆*※-]/u.test(candidate.text))).toBe(true)
+    expect(() => prepareThreePicksV2ProductEvidence({ productName: '商品1', verifiedFactRef: 'summary', verifiedFact: { value: 'LEDライト付き。折りたたみ式。' } })).not.toThrow()
+    expect(() => prepareThreePicksV2ProductEvidence({ productName: '商品3', verifiedFactRef: 'summary', verifiedFact: { value: '6種類の香り。1本約2週間。' } })).not.toThrow()
   })
 
   it('uses planner-v3/plan-v4 and validates translated, grounded video copy', () => {

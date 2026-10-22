@@ -585,6 +585,9 @@ function createRevenueApi({
       }
       return fail(res, 404, 'NOT_FOUND', 'Revenue Labの操作が見つかりません。')
     } catch (error) {
+      if (error?.code === 'REVENUE_EVIDENCE_PREPARATION_FAILED') {
+        return fail(res, 422, error.code, '商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。')
+      }
       const inputCodes = new Set(['UNSUPPORTED_MEDIA_TYPE', 'PAYLOAD_TOO_LARGE'])
       if (error instanceof SyntaxError || error instanceof TypeError || inputCodes.has(error?.code)) {
         const status = error?.code === 'UNSUPPORTED_MEDIA_TYPE' ? 415 : error?.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400

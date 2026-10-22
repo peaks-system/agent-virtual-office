@@ -59,6 +59,32 @@ describe('Creative Archetype v2 store', () => {
     expect(calls.some(call => call.url.includes('/rpc/enqueue_three_picks_plan'))).toBe(false)
   })
 
+  it('maps an unusable verified fact to a safe evidence preparation error before RPC', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      calls.push({ url, body: options.body ? JSON.parse(options.body) : null })
+      if (url.includes('/campaign_iterations?')) return response([{ id: uuid(1), campaign_id: uuid(2), product_set_id: uuid(3), curated_product_id: null }])
+      if (url.includes('/campaigns?')) return response([{ id: uuid(2), name: 'v2', objective: null }])
+      if (url.includes('/campaign_product_sets?')) return response([{ id: uuid(3), archetype: 'three_picks_v2', status: 'locked' }])
+      if (url.includes('/campaign_product_set_items?')) return response([1, 2, 3].map(index => ({
+        id: uuid(10 + index), product_name_snapshot: `商品${index}`, verified_fact_ref: 'summary',
+        verified_fact_snapshot: { key: 'summary', value: index === 2 ? 'A'.repeat(121) : `事実${index}` }, presentation_order: index,
+      })))
+      if (url.includes('/campaign_product_set_item_assets?')) return response([1, 2, 3].map(index => ({
+        product_set_item_id: uuid(10 + index), product_asset_revision_id: uuid(20 + index),
+        asset_order: 1, content_sha256_snapshot: 'a'.repeat(64),
+      })))
+      if (url.includes('/rpc/enqueue_three_picks_v2_plan')) return response({ requestId: uuid(50), created: true })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await expect(store.enqueueThreePicksV2Plan(uuid(1), { idempotencyKey: uuid(99) })).rejects.toMatchObject({
+      code: 'REVENUE_EVIDENCE_PREPARATION_FAILED', status: 422,
+      message: '商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。',
+    })
+    expect(calls.some(call => call.url.includes('/rpc/enqueue_three_picks_v2_plan'))).toBe(false)
+  })
+
   it('persists deterministic narration segments as provider-neutral planned audio artifacts', async () => {
     const calls = []
     const fetchImpl = vi.fn(async (url, options = {}) => {
