@@ -50,7 +50,7 @@ describe('Revenue Lab workspace derivation', () => {
     const model = deriveWorkspace({ campaigns: [planned] }, planned.id)
     expect(model.latestRevision.revisionNumber).toBe(2)
     expect(model.steps.map(step => step.label)).toEqual(['商品', '制作案', '音声', '動画', '公開・分析'])
-    expect(model.primaryAction.id).toBe('generate-audio')
+    expect(model.primaryAction).toMatchObject({ id: 'generate-audio', label: 'この原稿で音声を生成' })
 
     const audio = ['hook', 'product-1', 'product-2', 'product-3', 'cta'].map(id => readyAudio(id))
     const composable = deriveWorkspace({ campaigns: [campaign({ iterations: [{ id: 'i', iterationNumber: 1, productSet: { archetype: 'three_picks_v2', items: [] }, archetypePlans: [revision({ audioArtifacts: audio })] }] })] })
@@ -68,6 +68,25 @@ describe('Revenue Lab workspace derivation', () => {
     expect(deriveWorkspace({ campaigns: [completed] }).primaryAction.id).toBe('analytics')
     completed.iterations[0].publication.latestPerformance = { views: 10 }
     expect(deriveWorkspace({ campaigns: [completed] }).primaryAction.id).toBe('complete')
+  })
+
+  it('distinguishes queued, succeeded, and failed plan generation from hydrated revision state', () => {
+    const productSet = { archetype: 'three_picks_v2', items: [] }
+    const withRevision = latest => ({ campaigns: [campaign({ iterations: [{ id: 'i', iterationNumber: 1, productSet, archetypePlans: [latest] }] })] })
+    expect(deriveWorkspace(withRevision(revision({ revisionNumber: 9, status: 'queued', planId: null })))).toMatchObject({
+      planFeedback: { kind: 'pending', message: 'Revision 9の制作案を生成中' },
+    })
+    expect(deriveWorkspace(withRevision(revision({ revisionNumber: 9, status: 'succeeded', output: {} })))).toMatchObject({
+      planFeedback: { kind: 'success', message: '✓ Revision 9の制作案を生成しました' },
+    })
+    expect(deriveWorkspace({ ...withRevision(revision({ revisionNumber: 9, status: 'failed', planId: null,
+      safeErrorCode: 'THREE_PICKS_V2_UNGROUNDED_CLAIM' })), latestJob: { jobType: 'creative.archetype.plan', status: 'failed',
+      errorCode: 'THREE_PICKS_V2_UNGROUNDED_CLAIM',
+      errorMessage: 'Three Picks planning failed: product 3; $.product_presentations[2].short_appeal; claim is not supported by selected evidence candidates' } })).toMatchObject({
+      planFeedback: { kind: 'error', message: '制作案の生成に失敗しました',
+        detail: 'PICK 3のshort_appealが選択した根拠データで確認できませんでした。' },
+      primaryAction: { id: 'generate-plan' },
+    })
   })
 
   it('AC-11 disables composition and exposes the local reason when Hook timing overflows', () => {

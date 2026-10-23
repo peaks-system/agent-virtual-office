@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createDirectProductCampaign as createDirectProductCampaignRequest, createManualCampaign as createManualCampaignRequest, createProductAssetRevision, createProductCandidateDecision, enqueueCreativeAudioArtifactGeneration, enqueueCreativeAudioGeneration, enqueueCreativeProductionPlan, enqueueImageVideoGeneration, enqueueVideoGeneration, createRevenueAnalysisReview, createThreePicksV2Campaign as createThreePicksCampaignRequest, enqueueEnabledRevenueQueries, enqueueFinalComposition, enqueueFinalCompositionV2, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, enqueueThreePicksPlan, enqueueThreePicksV2Plan, loadFinalCompositionPreview, loadRevenueDashboard, registerCampaignPublication, updateRevenueQuery } from '../services/revenueLabApi'
-import { buildWorkspaceUrl, campaignFromLocation, createLatestRequestSequence, deriveWorkspace, installRevenueRefreshLifecycle, shouldPollRevenueLab } from './revenueLabWorkspace'
+import { buildWorkspaceUrl, campaignFromLocation, createLatestRequestSequence, deriveWorkspace, installRevenueRefreshLifecycle, planGenerationFeedback, shouldPollRevenueLab } from './revenueLabWorkspace'
 import './revenueLabDashboard.css'
 
 const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] }, creativeProduction: { configured: false, missing: ['OPENAI_API_KEY'] }, multiProductShorts: { configured: false, missing: ['OPENAI_API_KEY'] }, multiProductShortsV2: { configured: false, missing: ['OPENAI_API_KEY'], templateId: 'hero-carousel-v2' }, textToSpeech: { configured: false, missing: ['ELEVENLABS_API_KEY'] }, finalComposition: { configured: false, missing: ['REVENUE_LAB_FFMPEG_PATH'] }, finalCompositionV2: { configured: false, missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET', 'REVENUE_LAB_CREATIVE_AUDIO_BUCKET', 'REVENUE_LAB_COMPOSITION_BUCKET', 'REVENUE_LAB_FFMPEG_PATH', 'REVENUE_LAB_FFPROBE_PATH'] }, productAssetRevisions: { configured: false, missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET'] }, videoGeneration: { configured: false, missing: ['POLLO_API_KEY'], provider: 'pollo', requestedModel: 'pollo-v2' }, imageToVideo: { configured: false, missing: ['POLLO_API_KEY', 'REVENUE_LAB_PRODUCT_ASSET_BUCKET'], provider: 'pollo', requestedModel: 'wan-v2-2-flash' }, products: { configured: false, missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], latestJob: null, latestRun: null, latestTrackingRun: null }
@@ -726,23 +726,39 @@ export function threePicksTimingPreflight(artifacts = []) {
     totalRequiredSeconds: allReady ? Number(scenes.reduce((sum, scene) => sum + scene.requiredSeconds, 0).toFixed(3)) : null }
 }
 
-export function threePicksGenerationFeedback(result, failure) {
+export function threePicksGenerationFeedback(revision, failure, latestJob = null) {
+  const hydrated = planGenerationFeedback(revision, latestJob)
+  if (hydrated) return hydrated
   if (failure) return { kind: 'error', message: failure.message || '制作案を生成できませんでした。商品説明の形式を確認してください。' }
-  if (!result?.revisionNumber) return null
-  return { kind: 'success', message: `✓ Revision ${result.revisionNumber}を生成しました`, detail: 'Planner v3 / Layout v2' }
+  return null
 }
 
 export function ThreePicksGenerationFeedback({ feedback }) {
   if (!feedback) return null
-  return <p className={feedback.kind === 'error' ? 'revenue-warning' : 'revenue-success'}
+  const className = feedback.kind === 'error' ? 'revenue-warning' : feedback.kind === 'success' ? 'revenue-success' : 'revenue-product-facts'
+  return <p className={className}
     role={feedback.kind === 'error' ? 'alert' : 'status'}>{feedback.message}{feedback.detail && <><br /><small>{feedback.detail}</small></>}</p>
 }
 
-function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, composerConfig, busy, onGeneratePlan, onGenerateAudio, onGenerateAudioArtifact, onCompose, onPreview }) {
+function ThreePicksScriptReview({ output }) {
+  if (!output) return null
+  const products = [...(output.product_presentations || [])].sort((a, b) => a.presentation_order - b.presentation_order)
+  return <section className="revenue-script-review" aria-label="音声生成前の文章確認">
+    <h4>音声生成前の文章確認</h4>
+    <p><strong>Hook TTS:</strong> {output.hook?.tts}</p>
+    <div className="revenue-three-picks-cards">{products.map(item => <article key={item.product_set_item_id}>
+      <span>PICK {item.presentation_order}</span><strong>{item.display_name}</strong><p>{item.short_appeal}</p>
+      <small className="revenue-fact-badge">{item.fact_badge}</small><p><strong>TTS:</strong> {item.tts}</p>
+    </article>)}</div>
+    <p><strong>CTA TTS:</strong> {output.cta?.tts}</p>
+  </section>
+}
+
+function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, composerConfig, busy, latestJob = null, onGeneratePlan, onGenerateAudio, onGenerateAudioArtifact, onCompose, onPreview }) {
   const [submitting, setSubmitting] = useState(false)
   const [previewUrl, setPreviewUrl] = useState('')
   const [compositionError, setCompositionError] = useState('')
-  const [generationFeedback, setGenerationFeedback] = useState(null)
+  const [generationFailure, setGenerationFailure] = useState(null)
   const keyRef = useRef(newCampaignIdempotencyKey())
   const revisions = iteration.archetypePlans || []
   const isV2 = iteration.productSet?.archetype === 'three_picks_v2'
@@ -750,14 +766,15 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
   const visibleRevisions = isV2 ? [revisionSelection.latest].filter(Boolean) : revisions
   const activeLayoutId = revisionSelection.latest?.schemaVersion === 'multi-product-shorts-plan-v4'
     ? 'hero-product-layout-v2' : 'hero-product-layout-v1'
+  const generationFeedback = threePicksGenerationFeedback(revisionSelection.latest, generationFailure, latestJob)
+  useEffect(() => { setGenerationFailure(null) }, [revisionSelection.latest?.requestId, revisionSelection.latest?.status])
   const generate = async () => {
-    setSubmitting(true); setGenerationFeedback(null)
+    setSubmitting(true); setGenerationFailure(null)
     try {
-      const result = await onGeneratePlan(iteration.id, keyRef.current)
+      await onGeneratePlan(iteration.id, keyRef.current)
       keyRef.current = newCampaignIdempotencyKey()
-      setGenerationFeedback(threePicksGenerationFeedback(result))
     } catch (failure) {
-      setGenerationFeedback(threePicksGenerationFeedback(null, failure))
+      setGenerationFailure(failure)
     } finally { setSubmitting(false) }
   }
   const compose = async planId => {
@@ -776,7 +793,7 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
     {!plannerConfig?.configured && <p className="revenue-warning">OPENAI_API_KEYを設定すると制作案を生成できます。</p>}
     {visibleRevisions.map((revision, index) => { const revisionArtifacts = isV2 ? audioArtifactsForPlan(revision) : revision.audioArtifacts || []; const counts = creativeAudioStatusCounts(revisionArtifacts); const timingPreflight = threePicksTimingPreflight(revisionArtifacts); return <details key={`${revision.planId || 'no-plan'}:${revision.requestId}`} open={index === 0}><summary>{isV2 ? <><strong>制作案 Revision {revision.revisionNumber}</strong> · 最新 · artifact {revisionArtifacts.length}件 · ready {counts.ready} / planned {counts.planned} / failed {counts.failed}</> : <>制作案 {revisions.length - index} · {jobStatusLabel(revision.status)}</>}</summary>
       {revision.output && (isV2
-        ? <><p><strong>Hook:</strong> {revision.output.hook?.display_text}</p><div className="revenue-three-picks-cards">{[...(revision.output.product_presentations || [])].sort((a, b) => a.presentation_order - b.presentation_order).map(item => <article key={item.product_set_item_id}><span>PICK {item.presentation_order}</span><strong>{item.display_name}</strong><p>{item.short_appeal}</p><small className="revenue-fact-badge">{item.fact_badge}</small><details><summary>ナレーション原稿</summary><p>{item.tts}</p></details></article>)}</div><p><strong>CTA:</strong> {revision.output.cta?.display_text}</p></>
+        ? <><p><strong>Hook:</strong> {revision.output.hook?.display_text}</p><ThreePicksScriptReview output={revision.output} /><p><strong>CTA:</strong> {revision.output.cta?.display_text}</p></>
         : <><p><strong>Hook:</strong> {revision.output.hook}</p><div className="revenue-three-picks-cards">{revision.productCards.map(card => { const view = threePicksCardPresentation(card); return <article key={card.id}><span>PICK {card.pickNumber}</span><strong>{view.displayName}</strong><p>{view.shortAppeal}</p><small className="revenue-fact-badge">{view.factBadge}</small><details><summary>ナレーション原稿</summary><p>{view.tts}</p></details></article> })}</div><p><strong>Summary:</strong> {revision.output.summary}</p><p><strong>CTA:</strong> {revision.output.cta}</p></>)}
       {isV2 && revision.planId && (() => { const artifacts = revisionArtifacts; const plannedCount = artifacts.filter(item => item.status === 'planned').length; const initialTargetId = initialAudioLiveValidationArtifactId(artifacts); return <div className="revenue-audio-readiness"><details><summary><strong>TTS narration segments</strong> <span>{artifacts.filter(item => item.status === 'ready').length} / {artifacts.length} ready</span></summary><p>ElevenLabsでsegment単位に生成し、字幕cueにはFFprobe実測durationを使います。</p>{initialTargetId && <p className="revenue-product-facts">初回Live ValidationではHookの最初のsegmentだけを生成できます。</p>}<div className="revenue-audio-segments">{artifacts.map(item => { const canGenerateSingle = item.status === 'planned' && (!initialTargetId || item.id === initialTargetId); return <article key={`${revision.planId}:${item.id}`}><div><strong>{item.sceneId || 'scene'} · {item.segmentId}</strong><span>{jobStatusLabel(item.status)}</span></div>{item.inputText && <p>{item.inputText}</p>}{item.id === initialTargetId && <small>初回Live Validation推奨</small>}{item.status === 'planned' && <button type="button" disabled={busy || submitting || !textToSpeechConfig?.configured || !canGenerateSingle} onClick={() => generateAudioArtifact(item.id)}>このsegmentだけ音声生成</button>}</article> })}</div></details><button type="button" disabled={busy || submitting || !textToSpeechConfig?.configured || plannedCount === 0 || Boolean(initialTargetId)} onClick={() => generateAudio(revision.planId)}>全planned segmentを生成（{plannedCount}件 / 最大15件）</button>{artifacts.some(item => item.status === 'submission_uncertain') && <p className="revenue-warning">送信結果を確認できないsegmentがあります。二重課金防止のため自動再送信しません。</p>}{artifacts.some(item => item.status === 'failed') && <p className="revenue-warning">音声生成に失敗したsegmentがあります。無音fallbackは行いません。</p>}<details className="revenue-audit-details"><summary>TTS履歴・監査情報</summary>{artifacts.map(item => <p key={`${revision.planId}:${item.id}`}>{item.segmentId} · {jobStatusLabel(item.status)}{item.durationSeconds ? ` · ${item.durationSeconds}秒` : ''}{item.safeErrorCode ? ` · ${item.safeErrorCode}` : ''}</p>)}</details></div> })()}
       {isV2 && revision.planId && <section className="revenue-audio-readiness" aria-label="Composition timing preflight"><strong>Composition timing preflight</strong>{timingPreflight.scenes.map(scene => <div key={scene.id} className="revenue-composition-status"><span>{scene.label} {scene.ready ? `${scene.requiredSeconds.toFixed(2)}s / max ${scene.maximumSeconds.toFixed(2)}s` : `計測待ち / max ${scene.maximumSeconds.toFixed(2)}s`}</span><small>{!scene.ready ? 'ready音声の実測durationが必要です' : scene.fit ? 'fit' : `${scene.overflowSeconds.toFixed(2)}s overflow — TTS原稿を短縮してください`}</small></div>)}</section>}
@@ -824,12 +841,12 @@ function RevenueWorkspace({ state, requestedCampaignId, busy, onReload, onSelect
       <div className="revenue-workspace-title"><span>Revenue Lab</span><strong>{campaign?.name || 'Active Campaignなし'}</strong><small>{iteration ? `Iteration ${iteration.iterationNumber}` : 'Iteration —'} · {revision ? `Creative Revision ${revision.revisionNumber}` : 'Creative Revision —'}</small></div>
       <ol className="revenue-workspace-progress" aria-label="制作進捗">{model.steps.map(step => <li key={step.id} className={`${step.complete ? 'is-complete' : ''}${step.current ? ' is-current' : ''}`}><span>{step.complete ? '✓' : step.current ? '●' : '○'}</span>{step.label}</li>)}</ol>
       <div className="revenue-workspace-next"><small>次のアクション</small><strong>{model.nextAction}</strong></div>
-      <div className="revenue-workspace-actions"><button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{busy ? '処理中…' : primaryAction.label}</button><button type="button" onClick={onReload} disabled={busy}>Revenue Lab更新</button>{actionReason && <p className="revenue-warning">{actionReason}</p>}{actionError && <p className="revenue-warning" role="alert">{actionError}</p>}</div>
+      <div className="revenue-workspace-actions"><button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{busy ? '処理中…' : primaryAction.label}</button><button type="button" onClick={onReload} disabled={busy}>Revenue Lab更新</button><ThreePicksGenerationFeedback feedback={model.planFeedback} />{actionReason && <p className="revenue-warning">{actionReason}</p>}{actionError && <p className="revenue-warning" role="alert">{actionError}</p>}</div>
     </header>
     {!!model.active.length && <label className="revenue-campaign-select">Campaign<select value={campaign?.id || ''} onChange={event => onSelectCampaign(event.target.value)}>{model.active.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
     {!campaign && <div className="revenue-state"><h3>Active Campaignがありません</h3><p>商品を登録してCampaignを作成してください。</p></div>}
     {campaign && <>
-      <div className="revenue-workspace-steps">{model.steps.map((step, index) => <section key={step.id} className={`revenue-workspace-step${step.complete ? ' is-complete' : ''}${step.current ? ' is-current' : ''}`}><header><span>{index + 1}</span><h3>{step.label}</h3><small>{step.complete ? '完了' : step.current ? '作業中' : '未着手'}</small></header>{step.current && step.id === 'product' && <p>制作対象の商品を登録してください。</p>}{step.current && step.id === 'plan' && <p>商品情報からThree Picks v2の制作案を生成します。</p>}{step.current && step.id === 'audio' && <><p>最新Revisionのナレーションを生成します。{artifacts.length ? ` ${artifacts.filter(item => item.status === 'ready').length} / ${artifacts.length} ready` : ''}</p><p className="revenue-product-facts">segment単体生成などのLive Validation操作は詳細欄に収納しています。</p></>}{step.current && step.id === 'video' && <div className="revenue-timing-summary">{model.timing.scenes.map(scene => <p key={scene.id}>{scene.label} {scene.ready ? `${scene.required.toFixed(2)}s / max ${scene.maximum.toFixed(2)}s` : `計測待ち / max ${scene.maximum.toFixed(2)}s`}</p>)}</div>}{step.current && step.id === 'publication' && <p>{model.publication ? '公開実績を更新してください。' : 'Previewを確認して公開情報を登録してください。'}</p>}</section>)}</div>
+      <div className="revenue-workspace-steps">{model.steps.map((step, index) => <section key={step.id} className={`revenue-workspace-step${step.complete ? ' is-complete' : ''}${step.current ? ' is-current' : ''}`}><header><span>{index + 1}</span><h3>{step.label}</h3><small>{step.complete ? '完了' : step.current ? '作業中' : '未着手'}</small></header>{step.current && step.id === 'product' && <p>制作対象の商品を登録してください。</p>}{step.current && step.id === 'plan' && <p>商品情報からThree Picks v2の制作案を生成します。</p>}{step.current && step.id === 'audio' && <><p>最新Revisionの全原稿を確認してから音声を生成してください。{artifacts.length ? ` ${artifacts.filter(item => item.status === 'ready').length} / ${artifacts.length} ready` : ''}</p><ThreePicksScriptReview output={revision?.output} /><p className="revenue-product-facts">segment単体生成などのLive Validation操作は「商品候補・検証・監査ツール」に収納しています。</p></>}{step.current && step.id === 'video' && <div className="revenue-timing-summary">{model.timing.scenes.map(scene => <p key={scene.id}>{scene.label} {scene.ready ? `${scene.required.toFixed(2)}s / max ${scene.maximum.toFixed(2)}s` : `計測待ち / max ${scene.maximum.toFixed(2)}s`}</p>)}</div>}{step.current && step.id === 'publication' && <p>{model.publication ? '公開実績を更新してください。' : 'Previewを確認して公開情報を登録してください。'}</p>}</section>)}</div>
       {previewUrl && <video className="revenue-workspace-preview" controls preload="metadata" src={previewUrl}>完成動画を再生できません。</video>}
       <details className="revenue-audit-details revenue-workspace-audit"><summary>監査情報</summary><p>Campaign: {campaign.id}<br />Iteration: {iteration?.id || '—'}<br />Revision: {revision?.revisionNumber || '—'}<br />Prompt: {revision?.promptVersion || '—'}<br />Schema: {revision?.schemaVersion || '—'}<br />Request: {revision?.requestId || '—'}<br />Plan: {revision?.planId || '—'}</p>{!!pastRevisions.length && <details><summary>過去Revision（{pastRevisions.length}件）</summary>{pastRevisions.map(item => <p key={item.planId || item.requestId}>Revision {item.revisionNumber}</p>)}</details>}{(campaign.iterations || []).filter(item => item.id !== iteration?.id).length > 0 && <details><summary>過去Iteration</summary>{campaign.iterations.filter(item => item.id !== iteration?.id).map(item => <p key={item.id}>Iteration {item.iterationNumber}</p>)}</details>}</details>
     </>}

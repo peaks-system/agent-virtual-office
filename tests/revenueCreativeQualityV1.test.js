@@ -170,7 +170,16 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
     const unsupported = structuredClone(output)
     unsupported.product_presentations[2].short_appeal = '水なしUSB式で手軽に香る'
     unsupported.product_presentations[2].evidence_anchors = ['6種類の香り']
-    expect(() => validateThreePicksV2Output(unsupported, { products })).toThrowError(/grounded/i)
+    let failure
+    try { validateThreePicksV2Output(unsupported, { products }) } catch (error) { failure = error }
+    expect(failure).toMatchObject({
+      code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM',
+      product_index: 3,
+      field_path: '$.product_presentations[2].short_appeal',
+      reason: 'claim is not supported by selected evidence candidates',
+    })
+    expect(Object.keys(failure.safeDiagnostics).sort()).toEqual(['code', 'field_path', 'product_index', 'reason'])
+    expect(JSON.stringify(failure.safeDiagnostics)).not.toContain(products[2].source_product_name)
   })
 
   it('rejects merchant copy, incomplete phrases, and unsupported structured tokens', () => {
@@ -184,6 +193,23 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
     const token = structuredClone(output)
     token.product_presentations[1].tts = 'N99磁石でスマートフォンをしっかり固定できます。'
     expect(() => validateThreePicksV2Output(token, { products })).toThrowError(/grounded/i)
+  })
+
+  it.each([
+    ['display name length', output => { output.product_presentations[0].display_name = '箱' },
+      'THREE_PICKS_V2_TEXT_LIMIT', 1, '$.product_presentations[0].display_name', 'text is outside the allowed length'],
+    ['TTS grounding', output => { output.product_presentations[1].tts = 'N99磁石でスマートフォンをしっかり固定できます。' },
+      'THREE_PICKS_V2_UNGROUNDED_CLAIM', 2, '$.product_presentations[1].tts', 'claim is not supported by selected evidence candidates'],
+    ['Hook length', output => { output.hook.tts = 'これは十四文字を明確に超える長いフック原稿です' },
+      'THREE_PICKS_V2_TEXT_LIMIT', null, '$.hook.tts', 'text is outside the allowed length'],
+    ['CTA destination', output => { output.cta = { display_text: '今すぐ確認', tts: '気になる商品を確認できます。' } },
+      'THREE_PICKS_V2_CTA_DESTINATION_REQUIRED', null, '$.cta', 'CTA does not identify the description destination'],
+  ])('keeps sealed diagnostics for %s', (_label, mutate, code, productIndex, fieldPath, reason) => {
+    const { products, output } = qualityFixture()
+    mutate(output)
+    let failure
+    try { validateThreePicksV2Output(output, { products }) } catch (error) { failure = error }
+    expect(failure.safeDiagnostics).toEqual({ code, product_index: productIndex, field_path: fieldPath, reason })
   })
 
   it('compiles PICK labels, a bounded image set, and the new layout only for new manifests', () => {

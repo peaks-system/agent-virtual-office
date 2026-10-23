@@ -5,6 +5,7 @@ const { rankProductCandidates } = require('./product-ranking.cjs')
 const { createImageToVideoRequest } = require('./image-to-video-request.cjs')
 const { isDirectProductRegistrationPlaceholder } = require('./direct-product-contract.cjs')
 const { createHash } = require('node:crypto')
+const { SAFE_VALIDATION_REASONS } = require('./multi-product-shorts-v2-schema.cjs')
 
 class RevenueJobError extends Error {
   constructor(code, message, { safeDiagnostics = null } = {}) {
@@ -24,11 +25,16 @@ function safeThreePicksDiagnostics(error) {
   const productIndex = Number(diagnostics?.product_index)
   const fieldPath = diagnostics?.field_path
   const reason = diagnostics?.reason
-  if (error?.code !== 'THREE_PICKS_V2_IDENTITY_CHANGED' || !Number.isInteger(productIndex)
-    || productIndex < 1 || productIndex > 3
-    || fieldPath !== `$.product_presentations[${productIndex - 1}].display_name`
-    || !THREE_PICKS_IDENTITY_REASONS.has(reason)) return null
-  return { code: error.code, product_index: productIndex, field_path: fieldPath, reason }
+  const fieldMatch = typeof fieldPath === 'string' && fieldPath.match(/^\$\.product_presentations\[([0-2])\](?:\.(?:product_set_item_id|presentation_order|display_name|short_appeal|fact_badge|tts|verified_fact_ref|identity_anchor|evidence_anchors))?$/u)
+  const globalField = typeof fieldPath === 'string' && /^(?:\$\.(?:theme|hook\.(?:display_text|tts)|cta(?:\.(?:display_text|tts))?|product_presentations)|\$input\.products)$/u.test(fieldPath)
+  const expectedReason = SAFE_VALIDATION_REASONS[error?.code]
+  const validIdentity = error?.code === 'THREE_PICKS_V2_IDENTITY_CHANGED' && THREE_PICKS_IDENTITY_REASONS.has(reason)
+  if ((!expectedReason || reason !== expectedReason) && !validIdentity) return null
+  if (!fieldMatch && !globalField) return null
+  const expectedProductIndex = fieldMatch ? Number(fieldMatch[1]) + 1 : null
+  if (expectedProductIndex == null ? diagnostics?.product_index != null
+    : !Number.isInteger(productIndex) || productIndex !== expectedProductIndex) return null
+  return { code: error.code, product_index: expectedProductIndex, field_path: fieldPath, reason }
 }
 
 function createJobHandlers({ store, youtube, analyst, creativeProducer, multiProductShortsPlanner,

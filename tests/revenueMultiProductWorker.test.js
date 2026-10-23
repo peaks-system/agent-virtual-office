@@ -37,6 +37,24 @@ describe('Multi-product Shorts Worker', () => {
     expect(store.persistThreePicksV2Success).not.toHaveBeenCalled()
   })
 
+  it('propagates sealed schema-v4 grounding diagnostics through the failed job', async () => {
+    const request = { id: uuid(1), archetype: 'three_picks_v2', revisionNumber: 9, inputSnapshot: { products: [] } }
+    const safeDiagnostics = { code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', product_index: 3,
+      field_path: '$.product_presentations[2].short_appeal', reason: 'claim is not supported by selected evidence candidates' }
+    const failure = Object.assign(new Error('raw planner output must not be persisted'), {
+      code: safeDiagnostics.code, safeDiagnostics,
+    })
+    const store = { getThreePicksRequest: vi.fn(async () => request), markThreePicksRunning: vi.fn(),
+      persistThreePicksV2Success: vi.fn(), persistThreePicksFailure: vi.fn() }
+    const planner = { plan: vi.fn(async () => { throw failure }) }
+    const handler = createJobHandlers({ store, youtube: {}, multiProductShortsV2Planner: planner }).get('creative.archetype.plan')
+    await expect(handler({ payload: { creative_archetype_request_id: request.id } })).rejects.toMatchObject({
+      code: safeDiagnostics.code,
+      message: 'Three Picks planning failed: product 3; $.product_presentations[2].short_appeal; claim is not supported by selected evidence candidates',
+      safeDiagnostics,
+    })
+  })
+
   it('hash-verifies three immutable assets, renders once, and persists an immutable MP4', async () => {
     const bytes = Buffer.from('immutable-product-image')
     const sha = createHash('sha256').update(bytes).digest('hex')

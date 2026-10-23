@@ -24,7 +24,7 @@ describe('Revenue Lab Workspace UX v2', () => {
   it('AC-7/AC-8 renders five-step progress and one state-derived primary CTA', () => {
     const html = workspaceMarkup([active()])
     for (const label of ['商品', '制作案', '音声', '動画', '公開・分析']) expect(html).toContain(label)
-    expect(html.match(/<button[^>]*>ナレーションを生成<\/button>/g)).toHaveLength(1)
+    expect(html.match(/<button[^>]*>この原稿で音声を生成<\/button>/g)).toHaveLength(1)
   })
 
   it('AC-12 keeps v1 in Legacy read-only without production CTAs', () => {

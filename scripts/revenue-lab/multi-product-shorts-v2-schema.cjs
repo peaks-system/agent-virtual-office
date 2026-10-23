@@ -45,12 +45,37 @@ const THREE_PICKS_V2_JSON_SCHEMA = { type: 'object', additionalProperties: false
       tts: { type: 'string', minLength: 1, maxLength: LIMITS.ctaTts } } },
   } }
 
+const SAFE_VALIDATION_REASONS = Object.freeze({
+  THREE_PICKS_V2_INVALID_OUTPUT: 'planner output does not contain exactly three product presentations',
+  THREE_PICKS_V2_TEXT_LIMIT: 'text is outside the allowed length',
+  THREE_PICKS_V2_RANKING_LANGUAGE: 'ranking language is prohibited',
+  THREE_PICKS_V2_INCOMPLETE_COPY: 'copy is not a complete Japanese phrase',
+  THREE_PICKS_V2_EVIDENCE_ANCHOR_INVALID: 'evidence anchor is not present in selected verified candidates',
+  THREE_PICKS_V2_UNGROUNDED_CLAIM: 'claim is not supported by selected evidence candidates',
+  THREE_PICKS_V2_HOOK_SEGMENT_COUNT: 'hook narration must produce exactly one segment',
+  THREE_PICKS_V2_CTA_DESTINATION_REQUIRED: 'CTA does not identify the description destination',
+  THREE_PICKS_V2_INVALID_INPUT: 'planner input does not contain exactly three products',
+  THREE_PICKS_V2_PRODUCT_MISMATCH: 'product identity is missing or duplicated',
+  THREE_PICKS_V2_ORDER_INVALID: 'presentation order is invalid or duplicated',
+  THREE_PICKS_V2_ORDER_CHANGED: 'presentation order differs from frozen input',
+  THREE_PICKS_V2_UNVERIFIED_FACT: 'verified fact reference is not allowed',
+  THREE_PICKS_V2_PROMOTIONAL_COPY: 'promotional authority language is prohibited',
+  THREE_PICKS_V2_TTS_DUPLICATES_DISPLAY: 'narration duplicates on-screen copy',
+})
+
+function productIndexFromPath(fieldPath) {
+  const match = String(fieldPath || '').match(/^\$\.product_presentations\[([0-2])\](?:\.|$)/u)
+  return match ? Number(match[1]) + 1 : null
+}
+
 class ThreePicksV2ValidationError extends Error {
   constructor(code, message, fieldPath = null, { productIndex = null, reason = null } = {}) {
     super(message); this.name = 'ThreePicksV2ValidationError'; this.code = code; this.fieldPath = fieldPath
-    this.productIndex = productIndex; this.reason = reason
-    this.product_index = productIndex; this.field_path = fieldPath
-    this.safeDiagnostics = { code, product_index: productIndex, field_path: fieldPath, reason }
+    const safeProductIndex = productIndex ?? productIndexFromPath(fieldPath)
+    const safeReason = reason || SAFE_VALIDATION_REASONS[code] || 'schema-v4 validation failed'
+    this.productIndex = safeProductIndex; this.reason = safeReason
+    this.product_index = safeProductIndex; this.field_path = fieldPath
+    this.safeDiagnostics = { code, product_index: safeProductIndex, field_path: fieldPath, reason: safeReason }
   }
 }
 
@@ -205,6 +230,6 @@ function planNarrationSegments(plan) {
 }
 
 module.exports = { ARCHETYPE, DEFAULT_MODEL, LAYOUT_ID, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION,
-  LIMITS, MANIFEST_VERSION, PROMPT_VERSION, SCHEMA_VERSION, SYSTEM_PROMPT, TEMPLATE_ID,
+  LIMITS, MANIFEST_VERSION, PROMPT_VERSION, SAFE_VALIDATION_REASONS, SCHEMA_VERSION, SYSTEM_PROMPT, TEMPLATE_ID,
   THREE_PICKS_V2_JSON_SCHEMA, ThreePicksV2ValidationError, narrationSegments, planNarrationSegments,
   validateThreePicksV2Output }

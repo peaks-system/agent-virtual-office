@@ -25,10 +25,14 @@ function singleCampaign(index) {
 }
 
 describe('Multi-product Shorts Dashboard', () => {
-  it('shows revision success and safe evidence errors beside plan generation', () => {
-    const success = threePicksGenerationFeedback({ revisionNumber: 7 })
-    expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={success} />)).toContain('✓ Revision 7を生成しました')
+  it('shows hydrated revision state and safe evidence errors beside plan generation', () => {
+    const pending = threePicksGenerationFeedback({ revisionNumber: 9, status: 'queued' })
+    expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={pending} />)).toContain('Revision 9の制作案を生成中')
+    const success = threePicksGenerationFeedback({ revisionNumber: 9, status: 'succeeded', planId: 'plan-9', output: {} })
+    expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={success} />)).toContain('✓ Revision 9の制作案を生成しました')
     expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={success} />)).toContain('Planner v3 / Layout v2')
+    expect(threePicksGenerationFeedback({ revisionNumber: 9, status: 'succeeded', planId: 'plan-9', output: {} },
+      new Error('stale optimistic error'))).toEqual(success)
     const failure = threePicksGenerationFeedback(null, new Error('商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。'))
     const markup = renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={failure} />)
     expect(markup).toContain('role="alert"')
@@ -80,8 +84,8 @@ describe('Multi-product Shorts Dashboard', () => {
     const campaign = { id: 'campaign-v2', name: 'Creative Archetype v2', status: 'active', lineageKind: 'product_set', origins: [], iterations: [{
       id: 'iteration-v2', iterationNumber: 1, status: 'draft', product: null, productSet, publication: null,
       productionPlans: [], archetypePlans: [{ requestId: 'request-v2', archetype: 'three_picks_v2', revisionNumber: 1,
-        status: 'succeeded', planId: 'plan-v2', schemaVersion: 'multi-product-shorts-plan-v4', output: { hook: { display_text: '3つを紹介' }, product_presentations: presentations,
-          cta: { display_text: '詳細を見る' } }, productCards: [], audioArtifacts: Array.from({ length: 15 }, (_, index) => ({
+        status: 'succeeded', planId: 'plan-v2', schemaVersion: 'multi-product-shorts-plan-v4', output: { hook: { display_text: '3つを紹介', tts: '車内快適グッズ三選' }, product_presentations: presentations,
+          cta: { display_text: '詳細を見る', tts: '気になる商品は概要欄へ' } }, productCards: [], audioArtifacts: Array.from({ length: 15 }, (_, index) => ({
             id: `audio-${index + 1}`, creativeArchetypePlanId: 'plan-v2', sceneId: index < 3 ? 'hook' : `product-${Math.ceil((index - 2) / 4)}`,
             segmentId: index < 3 ? `hook-${index + 1}` : `product-${index - 2}`, segmentOrder: index + 1,
             inputText: `ナレーションsegment ${index + 1}`, status: 'planned',
@@ -100,6 +104,15 @@ describe('Multi-product Shorts Dashboard', () => {
     expect(markup).toContain('全planned segmentを生成（15件 / 最大15件）')
     expect(markup).toContain('FFprobe実測duration')
     expect(markup).toContain('MP4合成に必要なprivate storage・FFmpeg/FFprobe・描画fontを確認してください')
+    expect(markup).toContain('Hook TTS')
+    expect(markup).toContain('車内快適グッズ三選')
+    expect(markup).toContain('PICK 1')
+    expect(markup).toContain('ナレーション1')
+    expect(markup).toContain('ナレーション2')
+    expect(markup).toContain('ナレーション3')
+    expect(markup).toContain('CTA TTS')
+    expect(markup).toContain('気になる商品は概要欄へ')
+    expect(markup).toMatch(/<button[^>]*>この原稿で音声を生成<\/button>/)
     expect(markup).not.toContain('v2 rendererはFoundation状態です')
     expect(markup).not.toContain('product-card-v3')
   })

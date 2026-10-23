@@ -89,10 +89,10 @@ function primaryAction({ iteration, revision, legacy, timing, composition }) {
   if (legacy) return { id: 'legacy-read-only', label: 'Legacy・読取専用', disabled: true, reason: 'Three Picks v1は通常制作できません' }
   if (!revision || !revision.planId || revision.status !== 'succeeded') {
     const running = revision && ['queued', 'running', 'submitting', 'polling'].includes(revision.status)
-    return { id: 'generate-plan', label: running ? '制作案生成中' : '制作案を生成', disabled: Boolean(running), reason: running ? '制作案生成の完了を待っています' : undefined }
+    return { id: 'generate-plan', label: running ? `Revision ${revision.revisionNumber}の制作案を生成中` : '制作案を生成', disabled: Boolean(running), reason: running ? '制作案生成の完了を待っています' : undefined }
   }
   const artifacts = artifactsFor(revision)
-  if (!artifacts.length || artifacts.some(item => item.status === 'planned')) return { id: 'generate-audio', label: 'ナレーションを生成', disabled: false }
+  if (!artifacts.length || artifacts.some(item => item.status === 'planned')) return { id: 'generate-audio', label: 'この原稿で音声を生成', disabled: false }
   if (artifacts.some(item => ['queued', 'running', 'generating', 'submitting', 'polling'].includes(item.status))) return { id: 'generate-audio', label: 'ナレーション生成中', disabled: true, reason: '音声生成の完了を待っています' }
   if (!timing.ready) return { id: 'generate-audio', label: 'ナレーションを生成', disabled: true, reason: 'ready音声の実測durationが必要です' }
   const overflow = timing.scenes.find(item => item.ready && !item.fit)
@@ -101,6 +101,37 @@ function primaryAction({ iteration, revision, legacy, timing, composition }) {
   if (rendering) return { id: 'compose', label: 'Shorts MP4生成中', disabled: true, reason: '動画生成の完了を待っています' }
   if (composition) return { id: 'preview', label: 'Previewを確認', disabled: false, outputId: composition.output?.id }
   return { id: 'compose', label: 'Shorts MP4を生成', disabled: false }
+}
+
+const FIELD_LABELS = Object.freeze({ display_name: 'display_name', short_appeal: 'short_appeal', fact_badge: 'fact_badge', tts: 'TTS原稿' })
+
+function failedPlanDetail(revision, latestJob) {
+  const code = revision?.safeErrorCode
+  const sameFailure = latestJob?.jobType === 'creative.archetype.plan' && latestJob?.status === 'failed'
+    && latestJob?.errorCode === code
+  const diagnostic = sameFailure && typeof latestJob.errorMessage === 'string'
+    ? latestJob.errorMessage.match(/^Three Picks planning failed: product ([1-3]); \$\.product_presentations\[[0-2]\]\.([a-z_]+); ([a-z0-9 -]+)$/u) : null
+  if (diagnostic && code === 'THREE_PICKS_V2_UNGROUNDED_CLAIM') {
+    return `PICK ${diagnostic[1]}の${FIELD_LABELS[diagnostic[2]] || 'コピー'}が選択した根拠データで確認できませんでした。`
+  }
+  if (code === 'THREE_PICKS_V2_UNGROUNDED_CLAIM') return '商品コピーが選択した根拠データで確認できませんでした。'
+  if (code === 'THREE_PICKS_V2_TEXT_LIMIT') return '動画用コピーが文字数制約を満たしていません。'
+  if (code === 'THREE_PICKS_V2_IDENTITY_CHANGED') return '短縮商品名が元の商品カテゴリと一致しませんでした。'
+  return '制作案が品質チェックを通過しませんでした。'
+}
+
+export function planGenerationFeedback(revision, latestJob = null) {
+  if (!revision?.revisionNumber) return null
+  if (['queued', 'running', 'submitting', 'polling'].includes(revision.status)) {
+    return { kind: 'pending', message: `Revision ${revision.revisionNumber}の制作案を生成中` }
+  }
+  if (revision.status === 'succeeded' && revision.planId && revision.output) {
+    return { kind: 'success', message: `✓ Revision ${revision.revisionNumber}の制作案を生成しました`, detail: 'Planner v3 / Layout v2' }
+  }
+  if (revision.status === 'failed') {
+    return { kind: 'error', message: '制作案の生成に失敗しました', detail: failedPlanDetail(revision, latestJob) }
+  }
+  return null
 }
 
 export function deriveWorkspace(state = {}, requestedCampaignId = null) {
@@ -120,7 +151,7 @@ export function deriveWorkspace(state = {}, requestedCampaignId = null) {
   return {
     ...selection, campaign, iteration, latestRevision: revision, legacy, timing, composition, publication,
     steps: labels.map((label, index) => ({ id: ['product', 'plan', 'audio', 'video', 'publication'][index], label, complete: completed[index], current: index === currentIndex })),
-    currentIndex, primaryAction: action, nextAction: action.label,
+    currentIndex, primaryAction: action, nextAction: action.label, planFeedback: planGenerationFeedback(revision, state.latestJob),
   }
 }
 
