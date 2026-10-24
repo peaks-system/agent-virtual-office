@@ -82,7 +82,7 @@ describe('Revenue Lab workspace derivation', () => {
     expect(deriveWorkspace({ ...withRevision(revision({ revisionNumber: 9, status: 'failed', planId: null,
       safeErrorCode: 'THREE_PICKS_V2_UNGROUNDED_CLAIM' })), latestJob: { jobType: 'creative.archetype.plan', status: 'failed',
       errorCode: 'THREE_PICKS_V2_UNGROUNDED_CLAIM',
-      errorMessage: 'Three Picks planning failed: product 3; $.product_presentations[2].short_appeal; claim is not supported by selected evidence candidates' } })).toMatchObject({
+      errorMessage: 'Three Picks planning failed: product 3; $.product_presentations[2].short_appeal; claim is not supported by selected evidence candidates; field_value_preview=水なしUSB式で手軽に香る; evidence_candidate_ids=summary-1' } })).toMatchObject({
       planFeedback: { kind: 'error', message: '制作案の生成に失敗しました',
         detail: 'PICK 3のshort_appealが選択した根拠データで確認できませんでした。' },
       primaryAction: { id: 'generate-plan' },

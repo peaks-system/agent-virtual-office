@@ -13,9 +13,9 @@ const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')
 
 function qualityFixture() {
   const products = [
-    ['車用ゴミ箱 LEDライト付き 折りたたみ式', ['LEDライト付き', '折りたたみ式', 'マグネット固定']],
+    ['車用ゴミ箱 LEDライト付き 折りたたみ式', ['暗闇でも安心のLEDライト付き', 'ゴミ箱を開くとライトが点灯し、夜でも問題なくご使用頂けます', '折りたたみ式']],
     ['マグネット式スマホホルダー N56磁石', ['N56磁石採用', 'ダッシュボード固定']],
-    ['車載アロマディフューザー USB給電', ['6種類の香り', '1本約2週間']],
+    ['車載アロマディフューザー USB給電', ['6種類の香り', '1本で約2週間']],
   ].map(([name, facts], index) => ({
     product_set_item_id: uuid(index + 1), presentation_order: index + 1,
     source_product_name: name,
@@ -23,9 +23,9 @@ function qualityFixture() {
     fact_candidates: facts.map((text, factIndex) => ({ id: `summary-${factIndex + 1}`, verified_fact_ref: 'summary', text })),
   }))
   const copy = [
-    ['車用ゴミ箱', 'LED付きで夜間も使いやすい', '折りたたみ式', 'LEDライト付きで、夜の車内でも捨てやすくなります。', ['LED', '折りたたみ式']],
-    ['スマホホルダー', 'N56磁石でしっかり固定', 'N56磁石', 'N56磁石でスマートフォンをしっかり固定できます。', ['N56磁石']],
-    ['車載アロマ', '6種類の香りから選べる', '約2週間', '6種類の香りを気分に合わせて選べます。', ['6種類', '約2週間']],
+    ['車用ゴミ箱', 'LED付きで夜間も使いやすい', '折りたたみ式', '暗い車内でもライトがついて使いやすいです。', ['暗闇でも安心のLEDライト付き', '折りたたみ式'], ['summary-1', 'summary-2', 'summary-3']],
+    ['スマホホルダー', 'N56磁石でしっかり固定', 'N56磁石', 'N56磁石でダッシュボードへしっかり固定できます。', ['N56磁石採用'], ['summary-1', 'summary-2']],
+    ['車載アロマ', '6種類の香りから選べる', '1本約2週間', '6種類の香りから気分に合わせて選べます。', ['6種類の香り', '1本で約2週間'], ['summary-1', 'summary-2']],
   ]
   const output = {
     archetype: ARCHETYPE, theme: '車内を快適にするアイテム',
@@ -35,7 +35,7 @@ function qualityFixture() {
       display_name: copy[index][0], short_appeal: copy[index][1], fact_badge: copy[index][2],
       tts: copy[index][3], verified_fact_ref: 'summary',
       identity_anchor: index === 0 ? '車用ゴミ箱' : index === 1 ? 'スマホホルダー' : '車載アロマ',
-      evidence_anchors: copy[index][4],
+      evidence_anchors: copy[index][4], evidence_candidate_ids: copy[index][5],
     })),
     cta: { display_text: '気になる商品は概要欄へ', tts: '気になる商品は概要欄から確認できます。' },
   }
@@ -134,6 +134,52 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
     expect(MANIFEST_VERSION).toBe('three-picks-composition-manifest-v3')
   })
 
+  it('accepts the Revision 9 natural LED/night paraphrase when explicit candidates support every claim', () => {
+    const { products, output } = qualityFixture()
+    expect(output.product_presentations[0]).toMatchObject({
+      short_appeal: 'LED付きで夜間も使いやすい',
+      evidence_candidate_ids: ['summary-1', 'summary-2', 'summary-3'],
+    })
+    expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
+  })
+
+  it.each([
+    ['unsupported feature', '自動開閉で夜間も使いやすい'],
+    ['unsupported number', '3色LEDで夜間も使いやすい'],
+    ['unsupported model/spec', 'USB充電式で夜間も使いやすい'],
+  ])('rejects %s added to a paraphrase', (_label, shortAppeal) => {
+    const { products, output } = qualityFixture()
+    output.product_presentations[0].short_appeal = shortAppeal
+    let failure
+    try { validateThreePicksV2Output(output, { products }) } catch (error) { failure = error }
+    expect(failure).toMatchObject({ code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', product_index: 1,
+      field_path: '$.product_presentations[0].short_appeal', reason: 'claim is not supported by selected evidence candidates' })
+    expect(failure.safeDiagnostics).toMatchObject({ field_value_preview: shortAppeal,
+      evidence_candidate_ids: ['summary-1', 'summary-2', 'summary-3'] })
+  })
+
+  it('keeps fact badges on strict selected-candidate facts', () => {
+    const { products, output } = qualityFixture()
+    expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
+    for (const value of ['業界最強磁石', '約1か月持続']) {
+      const invalid = structuredClone(output)
+      const productIndex = value.includes('磁石') ? 1 : 2
+      invalid.product_presentations[productIndex].fact_badge = value
+      expect(() => validateThreePicksV2Output(invalid, { products })).toThrowError(expect.objectContaining({
+        code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', field_path: `$.product_presentations[${productIndex}].fact_badge`,
+      }))
+    }
+  })
+
+  it('allows grounded TTS paraphrase but rejects a new unsupported feature', () => {
+    const { products, output } = qualityFixture()
+    expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
+    output.product_presentations[0].tts = '自動開閉なので暗い車内でも使いやすいです。'
+    expect(() => validateThreePicksV2Output(output, { products })).toThrowError(expect.objectContaining({
+      code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', field_path: '$.product_presentations[0].tts',
+    }))
+  })
+
   it('accepts Revision 7-style natural display identities and SEO word-order changes', () => {
     const { products, output } = revisionSevenIdentityFixture()
     expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
@@ -159,9 +205,10 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
       field_path: `$.product_presentations[${productIndex}].display_name`,
     })
     expect(failure.reason).toMatch(/identity token|category token/i)
-    expect(failure.safeDiagnostics).toEqual({ code: 'THREE_PICKS_V2_IDENTITY_CHANGED',
+    expect(failure.safeDiagnostics).toMatchObject({ code: 'THREE_PICKS_V2_IDENTITY_CHANGED',
       product_index: productIndex + 1, field_path: `$.product_presentations[${productIndex}].display_name`,
-      reason: failure.reason })
+      reason: failure.reason, field_value_preview: displayName,
+      evidence_candidate_ids: output.product_presentations[productIndex].evidence_candidate_ids })
     expect(JSON.stringify(failure.safeDiagnostics)).not.toContain(products[productIndex].source_product_name)
   })
 
@@ -170,6 +217,7 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
     const unsupported = structuredClone(output)
     unsupported.product_presentations[2].short_appeal = '水なしUSB式で手軽に香る'
     unsupported.product_presentations[2].evidence_anchors = ['6種類の香り']
+    unsupported.product_presentations[2].evidence_candidate_ids = ['summary-1']
     let failure
     try { validateThreePicksV2Output(unsupported, { products }) } catch (error) { failure = error }
     expect(failure).toMatchObject({
@@ -178,7 +226,7 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
       field_path: '$.product_presentations[2].short_appeal',
       reason: 'claim is not supported by selected evidence candidates',
     })
-    expect(Object.keys(failure.safeDiagnostics).sort()).toEqual(['code', 'field_path', 'product_index', 'reason'])
+    expect(failure.safeDiagnostics).toMatchObject({ field_value_preview: '水なしUSB式で手軽に香る', evidence_candidate_ids: ['summary-1'] })
     expect(JSON.stringify(failure.safeDiagnostics)).not.toContain(products[2].source_product_name)
   })
 
@@ -209,7 +257,9 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
     mutate(output)
     let failure
     try { validateThreePicksV2Output(output, { products }) } catch (error) { failure = error }
-    expect(failure.safeDiagnostics).toEqual({ code, product_index: productIndex, field_path: fieldPath, reason })
+    expect(failure.safeDiagnostics).toMatchObject({ code, product_index: productIndex, field_path: fieldPath, reason })
+    expect(failure.safeDiagnostics.field_value_preview).toBeTruthy()
+    expect(Array.from(failure.safeDiagnostics.field_value_preview).length).toBeLessThanOrEqual(100)
   })
 
   it('compiles PICK labels, a bounded image set, and the new layout only for new manifests', () => {

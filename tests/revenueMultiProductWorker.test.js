@@ -40,7 +40,8 @@ describe('Multi-product Shorts Worker', () => {
   it('propagates sealed schema-v4 grounding diagnostics through the failed job', async () => {
     const request = { id: uuid(1), archetype: 'three_picks_v2', revisionNumber: 9, inputSnapshot: { products: [] } }
     const safeDiagnostics = { code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', product_index: 3,
-      field_path: '$.product_presentations[2].short_appeal', reason: 'claim is not supported by selected evidence candidates' }
+      field_path: '$.product_presentations[2].short_appeal', reason: 'claim is not supported by selected evidence candidates',
+      field_value_preview: '水なしUSB式で手軽に香る', evidence_candidate_ids: ['summary-1'] }
     const failure = Object.assign(new Error('raw planner output must not be persisted'), {
       code: safeDiagnostics.code, safeDiagnostics,
     })
@@ -48,11 +49,14 @@ describe('Multi-product Shorts Worker', () => {
       persistThreePicksV2Success: vi.fn(), persistThreePicksFailure: vi.fn() }
     const planner = { plan: vi.fn(async () => { throw failure }) }
     const handler = createJobHandlers({ store, youtube: {}, multiProductShortsV2Planner: planner }).get('creative.archetype.plan')
-    await expect(handler({ payload: { creative_archetype_request_id: request.id } })).rejects.toMatchObject({
+    const rejected = await handler({ payload: { creative_archetype_request_id: request.id } }).catch(error => error)
+    expect(rejected).toMatchObject({
       code: safeDiagnostics.code,
-      message: 'Three Picks planning failed: product 3; $.product_presentations[2].short_appeal; claim is not supported by selected evidence candidates',
       safeDiagnostics,
     })
+    expect(rejected.message).toContain('field_value_preview=水なしUSB式で手軽に香る')
+    expect(rejected.message).toContain('evidence_candidate_ids=summary-1')
+    expect(rejected.message).not.toContain(failure.message)
   })
 
   it('hash-verifies three immutable assets, renders once, and persists an immutable MP4', async () => {

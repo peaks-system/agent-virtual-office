@@ -25,7 +25,7 @@ function safeThreePicksDiagnostics(error) {
   const productIndex = Number(diagnostics?.product_index)
   const fieldPath = diagnostics?.field_path
   const reason = diagnostics?.reason
-  const fieldMatch = typeof fieldPath === 'string' && fieldPath.match(/^\$\.product_presentations\[([0-2])\](?:\.(?:product_set_item_id|presentation_order|display_name|short_appeal|fact_badge|tts|verified_fact_ref|identity_anchor|evidence_anchors))?$/u)
+  const fieldMatch = typeof fieldPath === 'string' && fieldPath.match(/^\$\.product_presentations\[([0-2])\](?:\.(?:product_set_item_id|presentation_order|display_name|short_appeal|fact_badge|tts|verified_fact_ref|identity_anchor|evidence_candidate_ids|evidence_anchors))?$/u)
   const globalField = typeof fieldPath === 'string' && /^(?:\$\.(?:theme|hook\.(?:display_text|tts)|cta(?:\.(?:display_text|tts))?|product_presentations)|\$input\.products)$/u.test(fieldPath)
   const expectedReason = SAFE_VALIDATION_REASONS[error?.code]
   const validIdentity = error?.code === 'THREE_PICKS_V2_IDENTITY_CHANGED' && THREE_PICKS_IDENTITY_REASONS.has(reason)
@@ -34,7 +34,14 @@ function safeThreePicksDiagnostics(error) {
   const expectedProductIndex = fieldMatch ? Number(fieldMatch[1]) + 1 : null
   if (expectedProductIndex == null ? diagnostics?.product_index != null
     : !Number.isInteger(productIndex) || productIndex !== expectedProductIndex) return null
-  return { code: error.code, product_index: expectedProductIndex, field_path: fieldPath, reason }
+  const preview = typeof diagnostics?.field_value_preview === 'string'
+    ? Array.from(diagnostics.field_value_preview.replace(/[\u0000-\u001f\u007f;]/gu, ' ').trim()).slice(0, 100).join('')
+    : ''
+  const candidateIds = [...new Set((Array.isArray(diagnostics?.evidence_candidate_ids)
+    ? diagnostics.evidence_candidate_ids : []).filter(candidateId => /^[A-Za-z0-9_.:-]{1,80}$/u.test(candidateId)))].slice(0, 3)
+  return { code: error.code, product_index: expectedProductIndex, field_path: fieldPath, reason,
+    ...(preview ? { field_value_preview: preview } : {}),
+    ...(candidateIds.length > 0 ? { evidence_candidate_ids: candidateIds } : {}) }
 }
 
 function createJobHandlers({ store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
@@ -402,9 +409,17 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
       try { await store.persistThreePicksFailure(requestId, error) }
       catch { console.error('[revenue-lab] Three Picks failure state could not be persisted', { requestId }) }
       const safeDiagnostics = safeThreePicksDiagnostics(error)
-      const message = safeDiagnostics
-        ? `Three Picks planning failed: product ${safeDiagnostics.product_index}; ${safeDiagnostics.field_path}; ${safeDiagnostics.reason}`
-        : 'Three Picks planning failed'
+      let message = 'Three Picks planning failed'
+      if (safeDiagnostics) {
+        const base = `Three Picks planning failed: product ${safeDiagnostics.product_index}; ${safeDiagnostics.field_path}; ${safeDiagnostics.reason}`
+        const candidateSuffix = safeDiagnostics.evidence_candidate_ids
+          ? `; evidence_candidate_ids=${safeDiagnostics.evidence_candidate_ids.join(',')}` : ''
+        const previewLabel = '; field_value_preview='
+        const previewBudget = Math.max(0, 500 - Array.from(`${base}${candidateSuffix}${previewLabel}`).length)
+        const preview = safeDiagnostics.field_value_preview
+          ? Array.from(safeDiagnostics.field_value_preview).slice(0, previewBudget).join('') : ''
+        message = `${base}${preview ? `${previewLabel}${preview}` : ''}${candidateSuffix}`
+      }
       throw new RevenueJobError(error?.code || 'THREE_PICKS_PLAN_FAILED', message, { safeDiagnostics })
     }
   }

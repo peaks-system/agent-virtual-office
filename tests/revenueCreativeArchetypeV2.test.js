@@ -14,7 +14,7 @@ function fixture() {
   const products = [1, 2, 3].map(index => ({
     product_set_item_id: uuid(index), presentation_order: index,
     source_product_name: `${identities[index - 1]} 車載用品`, allowed_verified_fact_refs: ['summary'],
-    fact_candidates: [{ id: `summary-${index}`, verified_fact_ref: 'summary', text: `確認済み${index}` }],
+    fact_candidates: [{ id: `summary-${index}`, verified_fact_ref: 'summary', text: `確認済み${index}で使いやすい` }],
   }))
   const output = {
     archetype: ARCHETYPE, theme: '毎日を軽くする3選',
@@ -24,6 +24,7 @@ function fixture() {
       presentation_order: product.presentation_order,
       display_name: identities[product.presentation_order - 1], short_appeal: `確認済み${product.presentation_order}で使いやすい`,
       fact_badge: `確認済み${product.presentation_order}`, verified_fact_ref: 'summary', identity_anchor: identities[product.presentation_order - 1],
+      evidence_candidate_ids: [`summary-${product.presentation_order}`],
       evidence_anchors: [`確認済み${product.presentation_order}`], tts: `確認済み${product.presentation_order}の仕様で便利に使えます。`,
     })),
     cta: { display_text: '気になる商品は概要欄へ', tts: '気になる商品は概要欄から確認できます。' },

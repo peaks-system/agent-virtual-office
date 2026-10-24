@@ -110,7 +110,7 @@ function failedPlanDetail(revision, latestJob) {
   const sameFailure = latestJob?.jobType === 'creative.archetype.plan' && latestJob?.status === 'failed'
     && latestJob?.errorCode === code
   const diagnostic = sameFailure && typeof latestJob.errorMessage === 'string'
-    ? latestJob.errorMessage.match(/^Three Picks planning failed: product ([1-3]); \$\.product_presentations\[[0-2]\]\.([a-z_]+); ([a-z0-9 -]+)$/u) : null
+    ? latestJob.errorMessage.match(/^Three Picks planning failed: product ([1-3]); \$\.product_presentations\[[0-2]\]\.([a-z_]+); ([a-z0-9 -]+)(?:; field_value_preview=.{1,100})?(?:; evidence_candidate_ids=[A-Za-z0-9_.:,-]+)?$/u) : null
   if (diagnostic && code === 'THREE_PICKS_V2_UNGROUNDED_CLAIM') {
     return `PICK ${diagnostic[1]}の${FIELD_LABELS[diagnostic[2]] || 'コピー'}が選択した根拠データで確認できませんでした。`
   }
