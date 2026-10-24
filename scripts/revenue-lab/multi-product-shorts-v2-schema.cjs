@@ -104,6 +104,7 @@ class ThreePicksV2ValidationError extends Error {
 const RANKING_PATTERN = /(?:ランキング|順位|第\s*[一二三123]\s*位|[一二三123]\s*位|best\s*(?:one|two|three|[123])|top\s*[123]|rank(?:ed|ing)?)/iu
 const PROMOTIONAL_PATTERN = /(?:業界最大級|業界初|最高級|最上級|権威|監修|公認|No\.?\s*1)/iu
 const UNSUPPORTED_FEATURE_PATTERN = /(?:自動(?:開閉|点灯)?|充電(?:式)?|防水|防滴|抗菌|消臭|急速|ワイヤレス|回転|調整|大容量|最強|高性能|耐熱|防火|省電力)/gu
+const EXPLICIT_HARD_FACT_PATTERN = /(?:アルミニウム製?|アルミ製?|ステンレス製?|スチール製?|鋼製|鉄製|樹脂製|ABS樹脂|シリコン製?|木製|ガラス製|カーボン製?)/giu
 const IDENTITY_MODEL_PATTERN = /(?:\d|^[a-z][a-z\d_.-]*$)/iu
 const IDENTITY_MERCHANT_PATTERN = /(?:公式|正規)?(?:ショップ|ストア|商店|販売店|ブランド|セレクト)$/iu
 const IDENTITY_FEATURE_PATTERN = /(?:led|usb|磁石|マグネット|ライト|折りたたみ|給電|防水|強力|高性能|便利)$/iu
@@ -185,8 +186,11 @@ const PARAPHRASE_CONCEPTS = Object.freeze([
   ['night', /(?:夜間|夜|暗闇|暗い車内)/gu],
   ['usable', /(?:問題なく(?:ご)?使用(?:頂け|でき)|使用でき|使いやす|使え)/gu],
   ['light', /(?:LEDライト|LED|ライトがつく|ライト|点灯)/giu],
+  ['smartphone', /(?:スマートフォン|スマホ|携帯電話)/gu],
+  ['rough-road', /(?:悪路|振動|揺れ)/gu],
+  ['strong-hold', /(?:ガッチリ|しっかり|強力)/gu],
   ['magnet', /(?:磁石|マグネット)/gu],
-  ['fix', /(?:固定|保持)/gu],
+  ['fix', /(?:固定|保持|ホールド|離さ(?:ない|ず)|離れにくい)/gu],
   ['choose', /(?:選べ|選ぶ|選択)/gu],
   ['fragrance', /(?:香り|アロマ|フレグランス)/gu],
 ])
@@ -218,6 +222,8 @@ function paraphraseIsGrounded(value, candidates) {
   const claim = compact(value); const evidence = candidates.map(candidate => compact(candidate.text)).join(' ')
   const normalizedEvidence = normalizeForEvidence(evidence)
   if (structuredTokens(claim).some(token => !normalizedEvidence.includes(normalizeForEvidence(token)))) return false
+  const explicitHardFacts = claim.match(EXPLICIT_HARD_FACT_PATTERN) || []
+  if (explicitHardFacts.some(fact => !normalizedEvidence.includes(normalizeForEvidence(fact)))) return false
   const unsupportedFeatures = claim.match(UNSUPPORTED_FEATURE_PATTERN) || []
   if (unsupportedFeatures.some(feature => !normalizedEvidence.includes(normalizeForEvidence(feature)))) return false
   const claimConcepts = paraphraseConcepts(claim); const evidenceConcepts = paraphraseConcepts(evidence)

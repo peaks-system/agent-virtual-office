@@ -14,7 +14,7 @@ const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')
 function qualityFixture() {
   const products = [
     ['車用ゴミ箱 LEDライト付き 折りたたみ式', ['暗闇でも安心のLEDライト付き', 'ゴミ箱を開くとライトが点灯し、夜でも問題なくご使用頂けます', '折りたたみ式']],
-    ['マグネット式スマホホルダー N56磁石', ['N56磁石採用', 'ダッシュボード固定']],
+    ['マグネット式スマホホルダー N56磁石', ['N56磁石採用でしっかり固定', 'ダッシュボード固定']],
     ['車載アロマディフューザー USB給電', ['6種類の香り', '1本で約2週間']],
   ].map(([name, facts], index) => ({
     product_set_item_id: uuid(index + 1), presentation_order: index + 1,
@@ -65,6 +65,23 @@ function revisionSevenIdentityFixture() {
   fixture.output.product_presentations.forEach((item, index) => {
     item.identity_anchor = identities[index].anchor
     item.display_name = identities[index].display
+  })
+  return fixture
+}
+
+function revisionTwelveGroundingFixture() {
+  const fixture = qualityFixture()
+  fixture.products[1].fact_candidates = [
+    { id: 'summary-4', verified_fact_ref: 'summary', text: '鉄壁磁力 マグネット がさらに進化' },
+    { id: 'summary-5', verified_fact_ref: 'summary', text: 'スマホをガッチリ離さず悪路もホールド' },
+    { id: 'summary-6', verified_fact_ref: 'summary', text: 'ダッシュボード対応' },
+  ]
+  Object.assign(fixture.output.product_presentations[1], {
+    short_appeal: '悪路でもスマホをガッチリ',
+    fact_badge: 'マグネット',
+    tts: '悪路でもスマホをしっかり固定できます。',
+    evidence_candidate_ids: ['summary-5', 'summary-6', 'summary-4'],
+    evidence_anchors: ['スマホをガッチリ離さず悪路もホールド', 'ダッシュボード対応', '鉄壁磁力 マグネット がさらに進化'],
   })
   return fixture
 }
@@ -153,6 +170,48 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
       evidence_candidate_ids: ['summary-1', 'summary-2', 'summary-3'],
     })
     expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
+  })
+
+  it('accepts the Revision 12 compressed appeal and grounded TTS across word-order changes', () => {
+    const { products, output } = revisionTwelveGroundingFixture()
+    expect(output.product_presentations[1]).toMatchObject({
+      short_appeal: '悪路でもスマホをガッチリ',
+      evidence_candidate_ids: ['summary-5', 'summary-6', 'summary-4'],
+    })
+    expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
+    output.product_presentations[1].short_appeal = '悪路でもスマホをしっかり固定'
+    expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
+  })
+
+  it('allows source concept omission without inventing a new claim', () => {
+    const { products, output } = revisionTwelveGroundingFixture()
+    output.product_presentations[1].short_appeal = '悪路でもガッチリ保持'
+    expect(() => validateThreePicksV2Output(output, { products })).not.toThrow()
+  })
+
+  it.each([
+    ['unsupported automation', '段差でも自動でスマホを固定'],
+    ['unsupported numerical rotation', '360度回転して悪路でも固定'],
+    ['unsupported superlative', '最強磁力で悪路でも固定'],
+    ['unsupported material hard fact', 'アルミ製で悪路でも固定'],
+  ])('rejects Revision 12 copy with %s', (_label, shortAppeal) => {
+    const { products, output } = revisionTwelveGroundingFixture()
+    output.product_presentations[1].short_appeal = shortAppeal
+    let failure
+    try { validateThreePicksV2Output(output, { products }) } catch (error) { failure = error }
+    expect(failure).toMatchObject({ code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', product_index: 2,
+      field_path: '$.product_presentations[1].short_appeal', reason: 'claim is not supported by selected evidence candidates' })
+    expect(failure.safeDiagnostics).toMatchObject({ field_value_preview: shortAppeal,
+      evidence_candidate_ids: ['summary-5', 'summary-6', 'summary-4'] })
+  })
+
+  it('rejects stronger holding language when selected evidence has no matching emphasis', () => {
+    const { products, output } = qualityFixture()
+    products[1].fact_candidates[0].text = 'N56磁石採用'
+    output.product_presentations[1].short_appeal = 'N56磁石で強力固定'
+    expect(() => validateThreePicksV2Output(output, { products })).toThrowError(expect.objectContaining({
+      code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', field_path: '$.product_presentations[1].short_appeal',
+    }))
   })
 
   it.each([
