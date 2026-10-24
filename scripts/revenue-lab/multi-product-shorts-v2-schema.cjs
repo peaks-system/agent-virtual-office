@@ -38,7 +38,7 @@ const THREE_PICKS_V2_JSON_SCHEMA = { type: 'object', additionalProperties: false
         tts: { type: 'string', minLength: 12, maxLength: LIMITS.productTts },
         verified_fact_ref: { type: 'string', minLength: 1, maxLength: 160 },
         identity_anchor: { type: 'string', minLength: 2, maxLength: 80 },
-        evidence_candidate_ids: { type: 'array', minItems: 1, maxItems: 3, uniqueItems: true,
+        evidence_candidate_ids: { type: 'array', minItems: 1, maxItems: 3,
           items: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,80}$' } },
         evidence_anchors: { type: 'array', minItems: 1, maxItems: 3,
           items: { type: 'string', minLength: 2, maxLength: 80 } } } } },
@@ -249,7 +249,8 @@ function validateGroundedPresentation(item, product, path, productIndex) {
   const selectedCandidateIds = selectedCandidates.map(candidate => candidate.id)
   const selectedEvidenceText = normalizeForEvidence(selectedCandidates.map(candidate => candidate.text).join(' '))
   const anchors = Array.isArray(item.evidence_anchors) ? item.evidence_anchors.map(compact) : []
-  if (anchors.length < 1 || anchors.length > 3 || anchors.some(anchor => !selectedEvidenceText.includes(normalizeForEvidence(anchor)))) {
+  if (anchors.length < 1 || anchors.length > 3 || new Set(anchors).size !== anchors.length
+    || anchors.some(anchor => !selectedEvidenceText.includes(normalizeForEvidence(anchor)))) {
     throw new ThreePicksV2ValidationError('THREE_PICKS_V2_EVIDENCE_ANCHOR_INVALID', 'Evidence anchors must be copied from verified fact candidates', `${path}.evidence_anchors`)
   }
   for (const [field, value] of [['short_appeal', item.short_appeal], ['tts', item.tts]]) {

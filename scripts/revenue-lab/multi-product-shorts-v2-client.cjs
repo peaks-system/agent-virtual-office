@@ -4,6 +4,24 @@ const { outputText, OpenAIAnalysisError } = require('./openai-client.cjs')
 const { DEFAULT_MODEL, PROMPT_VERSION, SCHEMA_VERSION, SYSTEM_PROMPT,
   THREE_PICKS_V2_JSON_SCHEMA, validateThreePicksV2Output } = require('./multi-product-shorts-v2-schema.cjs')
 
+const SAFE_PROVIDER_TOKEN = /^[A-Za-z0-9_.:-]{1,80}$/u
+
+function safeOpenAiHttpDiagnostics(payload, status) {
+  const providerError = payload?.error
+  const providerErrorCode = typeof providerError?.code === 'string' && SAFE_PROVIDER_TOKEN.test(providerError.code)
+    ? providerError.code : null
+  const providerErrorType = typeof providerError?.type === 'string' && SAFE_PROVIDER_TOKEN.test(providerError.type)
+    ? providerError.type : null
+  const providerMessage = typeof providerError?.message === 'string' ? providerError.message : ''
+  const schemaError = providerErrorCode === 'invalid_json_schema'
+    || /(?:json\s*schema|response\s*schema|unsupported\s*keyword|uniqueItems)/iu.test(providerMessage)
+  return { code: 'OPENAI_HTTP_ERROR',
+    ...(Number.isInteger(status) && status >= 400 && status <= 599 ? { http_status: status } : {}),
+    ...(providerErrorCode ? { provider_error_code: providerErrorCode } : {}),
+    ...(providerErrorType ? { provider_error_type: providerErrorType } : {}),
+    reason: schemaError ? 'response schema contains an unsupported keyword' : 'provider rejected the planning request' }
+}
+
 function createMultiProductShortsV2Client({
   apiKey = process.env.OPENAI_API_KEY,
   model = process.env.REVENUE_LAB_MULTI_PRODUCT_V2_MODEL || DEFAULT_MODEL,
@@ -25,7 +43,11 @@ function createMultiProductShortsV2Client({
     let payload
     try { payload = JSON.parse(await response.text()) }
     catch { throw new OpenAIAnalysisError('OPENAI_INVALID_RESPONSE', 'Creative Archetype v2 planning response was invalid', response.status) }
-    if (!response.ok) throw new OpenAIAnalysisError('OPENAI_HTTP_ERROR', 'OpenAI rejected the Creative Archetype v2 planning request', response.status)
+    if (!response.ok) {
+      const error = new OpenAIAnalysisError('OPENAI_HTTP_ERROR', 'OpenAI rejected the Creative Archetype v2 planning request', response.status)
+      error.safeDiagnostics = safeOpenAiHttpDiagnostics(payload, response.status)
+      throw error
+    }
     let productionPlan
     try { productionPlan = JSON.parse(outputText(payload)) }
     catch (error) {

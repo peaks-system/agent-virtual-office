@@ -59,6 +59,24 @@ describe('Multi-product Shorts Worker', () => {
     expect(rejected.message).not.toContain(failure.message)
   })
 
+  it('propagates only safe OpenAI HTTP diagnostics through the failed job', async () => {
+    const request = { id: uuid(1), archetype: 'three_picks_v2', revisionNumber: 12, inputSnapshot: { products: [] } }
+    const safeDiagnostics = { code: 'OPENAI_HTTP_ERROR', http_status: 400,
+      provider_error_code: 'invalid_json_schema', provider_error_type: 'invalid_request_error',
+      reason: 'response schema contains an unsupported keyword' }
+    const failure = Object.assign(new Error('raw-provider-response-with-secret'), {
+      code: safeDiagnostics.code, safeDiagnostics,
+    })
+    const store = { getThreePicksRequest: vi.fn(async () => request), markThreePicksRunning: vi.fn(),
+      persistThreePicksV2Success: vi.fn(), persistThreePicksFailure: vi.fn() }
+    const planner = { plan: vi.fn(async () => { throw failure }) }
+    const handler = createJobHandlers({ store, youtube: {}, multiProductShortsV2Planner: planner }).get('creative.archetype.plan')
+    const rejected = await handler({ payload: { creative_archetype_request_id: request.id } }).catch(error => error)
+    expect(rejected).toMatchObject({ code: 'OPENAI_HTTP_ERROR', safeDiagnostics })
+    expect(rejected.message).toContain('provider_error_code=invalid_json_schema')
+    expect(rejected.message).not.toContain('raw-provider-response-with-secret')
+  })
+
   it('hash-verifies three immutable assets, renders once, and persists an immutable MP4', async () => {
     const bytes = Buffer.from('immutable-product-image')
     const sha = createHash('sha256').update(bytes).digest('hex')

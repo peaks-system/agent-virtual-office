@@ -736,8 +736,11 @@ export function threePicksGenerationFeedback(revision, failure, latestJob = null
 export function ThreePicksGenerationFeedback({ feedback }) {
   if (!feedback) return null
   const className = feedback.kind === 'error' ? 'revenue-warning' : feedback.kind === 'success' ? 'revenue-success' : 'revenue-product-facts'
-  return <p className={className}
-    role={feedback.kind === 'error' ? 'alert' : 'status'}>{feedback.message}{feedback.detail && <><br /><small>{feedback.detail}</small></>}</p>
+  return <div className={className}
+    role={feedback.kind === 'error' ? 'alert' : 'status'}><p>{feedback.message}{feedback.detail && <><br /><small>{feedback.detail}</small></>}</p>
+    {feedback.audit && <details className="revenue-audit-details"><summary>AI生成エラー監査情報</summary>
+      <small>HTTP: {feedback.audit.httpStatus}<br />Provider code: {feedback.audit.providerErrorCode}<br />
+        Provider type: {feedback.audit.providerErrorType}<br />Reason: {feedback.audit.reason}</small></details>}</div>
 }
 
 function ThreePicksScriptReview({ output }) {

@@ -44,6 +44,26 @@ function safeThreePicksDiagnostics(error) {
     ...(candidateIds.length > 0 ? { evidence_candidate_ids: candidateIds } : {}) }
 }
 
+const SAFE_PROVIDER_REASONS = new Set([
+  'response schema contains an unsupported keyword',
+  'provider rejected the planning request',
+])
+
+function safeThreePicksProviderDiagnostics(error) {
+  const diagnostics = error?.safeDiagnostics
+  if (error?.code !== 'OPENAI_HTTP_ERROR' || diagnostics?.code !== 'OPENAI_HTTP_ERROR'
+    || !Number.isInteger(diagnostics?.http_status) || diagnostics.http_status < 400 || diagnostics.http_status > 599
+    || !SAFE_PROVIDER_REASONS.has(diagnostics?.reason)) return null
+  const providerErrorCode = typeof diagnostics.provider_error_code === 'string'
+    && /^[A-Za-z0-9_.:-]{1,80}$/u.test(diagnostics.provider_error_code) ? diagnostics.provider_error_code : null
+  const providerErrorType = typeof diagnostics.provider_error_type === 'string'
+    && /^[A-Za-z0-9_.:-]{1,80}$/u.test(diagnostics.provider_error_type) ? diagnostics.provider_error_type : null
+  return { code: 'OPENAI_HTTP_ERROR', http_status: diagnostics.http_status,
+    ...(providerErrorCode ? { provider_error_code: providerErrorCode } : {}),
+    ...(providerErrorType ? { provider_error_type: providerErrorType } : {}),
+    reason: diagnostics.reason }
+}
+
 function createJobHandlers({ store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
   multiProductShortsV2Planner,
   finalCompositionProvider, finalCompositionV2Provider, compositionBlobStore, videoGenerationProvider,
@@ -408,9 +428,15 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
     } catch (error) {
       try { await store.persistThreePicksFailure(requestId, error) }
       catch { console.error('[revenue-lab] Three Picks failure state could not be persisted', { requestId }) }
-      const safeDiagnostics = safeThreePicksDiagnostics(error)
+      const safeDiagnostics = safeThreePicksDiagnostics(error) || safeThreePicksProviderDiagnostics(error)
       let message = 'Three Picks planning failed'
-      if (safeDiagnostics) {
+      if (safeDiagnostics?.code === 'OPENAI_HTTP_ERROR') {
+        const codeSuffix = safeDiagnostics.provider_error_code
+          ? `; provider_error_code=${safeDiagnostics.provider_error_code}` : ''
+        const typeSuffix = safeDiagnostics.provider_error_type
+          ? `; provider_error_type=${safeDiagnostics.provider_error_type}` : ''
+        message = `Three Picks planning failed: provider; http_status=${safeDiagnostics.http_status}${codeSuffix}${typeSuffix}; reason=${safeDiagnostics.reason}`
+      } else if (safeDiagnostics) {
         const base = `Three Picks planning failed: product ${safeDiagnostics.product_index}; ${safeDiagnostics.field_path}; ${safeDiagnostics.reason}`
         const candidateSuffix = safeDiagnostics.evidence_candidate_ids
           ? `; evidence_candidate_ids=${safeDiagnostics.evidence_candidate_ids.join(',')}` : ''

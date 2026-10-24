@@ -33,6 +33,19 @@ describe('Revenue Lab route state', () => {
 })
 
 describe('Revenue Lab workspace derivation', () => {
+  it('maps a safe provider schema failure to user copy and keeps technical fields in audit data', () => {
+    const failed = revision({ revisionNumber: 12, status: 'failed', planId: null, output: null,
+      safeErrorCode: 'OPENAI_HTTP_ERROR' })
+    const model = deriveWorkspace({ campaigns: [campaign({ iterations: [{ id: 'iteration-2', iterationNumber: 2,
+      productSet: { archetype: 'three_picks_v2', items: [] }, archetypePlans: [failed] }] })],
+    latestJob: { jobType: 'creative.archetype.plan', status: 'failed', errorCode: 'OPENAI_HTTP_ERROR',
+      errorMessage: 'Three Picks planning failed: provider; http_status=400; provider_error_code=invalid_json_schema; provider_error_type=invalid_request_error; reason=response schema contains an unsupported keyword' } })
+    expect(model.planFeedback).toEqual({ kind: 'error', message: '制作案の生成に失敗しました',
+      detail: 'AI生成設定の形式に問題があります。', audit: { httpStatus: 400,
+        providerErrorCode: 'invalid_json_schema', providerErrorType: 'invalid_request_error',
+        reason: 'response schema contains an unsupported keyword' } })
+  })
+
   it('AC-5/AC-6 selects an explicit active Campaign and deterministically falls back from invalid or voided IDs', () => {
     const older = campaign({ id: 'a', name: 'Older', createdAt: '2026-10-18T00:00:00Z' })
     const newerById = campaign({ id: 'z', name: 'Newest stable', createdAt: '2026-10-19T00:00:00Z', updatedAt: '2026-10-19T01:00:00Z' })

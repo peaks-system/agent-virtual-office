@@ -37,6 +37,14 @@ describe('Multi-product Shorts Dashboard', () => {
     const markup = renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={failure} />)
     expect(markup).toContain('role="alert"')
     expect(markup).toContain('商品説明の形式を確認してください。')
+    const providerMarkup = renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={{ kind: 'error',
+      message: '制作案の生成に失敗しました', detail: 'AI生成設定の形式に問題があります。',
+      audit: { httpStatus: 400, providerErrorCode: 'invalid_json_schema', providerErrorType: 'invalid_request_error',
+        reason: 'response schema contains an unsupported keyword' } }} />)
+    expect(providerMarkup).toContain('AI生成設定の形式に問題があります。')
+    expect(providerMarkup).toContain('<details')
+    expect(providerMarkup).toContain('AI生成エラー監査情報')
+    expect(providerMarkup).toContain('invalid_json_schema')
   })
 
   it('shows human Three Picks intake and a completed composition lineage', () => {

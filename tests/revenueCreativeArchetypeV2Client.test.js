@@ -25,5 +25,22 @@ describe('Creative Archetype v2 planner client', () => {
     const requestBody = JSON.parse(fetchImpl.mock.calls[0][1].body)
     expect(requestBody.text.format.name).toBe('revenue_lab_three_picks_v2')
     expect(JSON.stringify(requestBody.text.format.schema)).not.toContain('template')
+    expect(JSON.stringify(requestBody.text.format.schema)).not.toContain('uniqueItems')
+    expect(requestBody.text.format.schema.properties.product_presentations.items.properties.evidence_candidate_ids)
+      .toMatchObject({ type: 'array', minItems: 1, maxItems: 3 })
+  })
+
+  it('keeps only allowlisted OpenAI HTTP diagnostics without retaining the raw response', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 400, text: async () => JSON.stringify({
+      error: { code: 'invalid_json_schema', type: 'invalid_request_error',
+        message: 'Unsupported keyword uniqueItems. raw-provider-marker must not be retained.' },
+    }) }))
+    const client = createMultiProductShortsV2Client({ apiKey: 'test-key', fetchImpl })
+    const failure = await client.plan({ products: [] }).catch(error => error)
+    expect(failure).toMatchObject({ code: 'OPENAI_HTTP_ERROR', status: 400,
+      safeDiagnostics: { code: 'OPENAI_HTTP_ERROR', http_status: 400,
+        provider_error_code: 'invalid_json_schema', provider_error_type: 'invalid_request_error',
+        reason: 'response schema contains an unsupported keyword' } })
+    expect(JSON.stringify(failure.safeDiagnostics)).not.toContain('raw-provider-marker')
   })
 })

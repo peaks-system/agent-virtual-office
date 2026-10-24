@@ -120,6 +120,18 @@ function failedPlanDetail(revision, latestJob) {
   return '制作案が品質チェックを通過しませんでした。'
 }
 
+function providerPlanAudit(revision, latestJob) {
+  const sameFailure = revision?.safeErrorCode === 'OPENAI_HTTP_ERROR'
+    && latestJob?.jobType === 'creative.archetype.plan' && latestJob?.status === 'failed'
+    && latestJob?.errorCode === 'OPENAI_HTTP_ERROR'
+  const diagnostic = sameFailure && typeof latestJob.errorMessage === 'string'
+    ? latestJob.errorMessage.match(/^Three Picks planning failed: provider; http_status=(4\d\d|5\d\d); provider_error_code=([A-Za-z0-9_.:-]{1,80}); provider_error_type=([A-Za-z0-9_.:-]{1,80}); reason=(response schema contains an unsupported keyword|provider rejected the planning request)$/u)
+    : null
+  if (!diagnostic) return null
+  return { httpStatus: Number(diagnostic[1]), providerErrorCode: diagnostic[2],
+    providerErrorType: diagnostic[3], reason: diagnostic[4] }
+}
+
 export function planGenerationFeedback(revision, latestJob = null) {
   if (!revision?.revisionNumber) return null
   if (['queued', 'running', 'submitting', 'polling'].includes(revision.status)) {
@@ -129,7 +141,11 @@ export function planGenerationFeedback(revision, latestJob = null) {
     return { kind: 'success', message: `✓ Revision ${revision.revisionNumber}の制作案を生成しました`, detail: 'Planner v3 / Layout v2' }
   }
   if (revision.status === 'failed') {
-    return { kind: 'error', message: '制作案の生成に失敗しました', detail: failedPlanDetail(revision, latestJob) }
+    const providerAudit = providerPlanAudit(revision, latestJob)
+    return { kind: 'error', message: '制作案の生成に失敗しました',
+      detail: providerAudit?.providerErrorCode === 'invalid_json_schema'
+        ? 'AI生成設定の形式に問題があります。' : failedPlanDetail(revision, latestJob),
+      ...(providerAudit ? { audit: providerAudit } : {}) }
   }
   return null
 }

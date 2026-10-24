@@ -134,6 +134,18 @@ describe('Three Picks v2 Production Creative Quality v1', () => {
     expect(MANIFEST_VERSION).toBe('three-picks-composition-manifest-v3')
   })
 
+  it.each([
+    ['candidate IDs', item => { item.evidence_candidate_ids = ['summary-1', 'summary-1'] }, 'evidence_candidate_ids'],
+    ['evidence anchors', item => { item.evidence_anchors = ['暗闇でも安心のLEDライト付き', '暗闇でも安心のLEDライト付き'] }, 'evidence_anchors'],
+  ])('keeps deterministic duplicate rejection for %s', (_label, mutate, field) => {
+    const { products, output } = qualityFixture()
+    mutate(output.product_presentations[0])
+    expect(() => validateThreePicksV2Output(output, { products })).toThrowError(expect.objectContaining({
+      code: 'THREE_PICKS_V2_EVIDENCE_ANCHOR_INVALID',
+      field_path: `$.product_presentations[0].${field}`,
+    }))
+  })
+
   it('accepts the Revision 9 natural LED/night paraphrase when explicit candidates support every claim', () => {
     const { products, output } = qualityFixture()
     expect(output.product_presentations[0]).toMatchObject({
