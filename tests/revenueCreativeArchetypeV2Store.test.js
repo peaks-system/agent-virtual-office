@@ -99,6 +99,34 @@ describe('Creative Archetype v2 store', () => {
     expect(calls.some(call => call.url.includes('/rpc/enqueue_three_picks_v2_plan'))).toBe(false)
   })
 
+  it('preserves a safe typed-fact-missing error with the product index before RPC', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      calls.push({ url, body: options.body ? JSON.parse(options.body) : null })
+      if (url.includes('/campaign_iterations?')) return response([{ id: uuid(1), campaign_id: uuid(2), product_set_id: uuid(3), curated_product_id: null }])
+      if (url.includes('/campaigns?')) return response([{ id: uuid(2), name: 'v2', objective: null }])
+      if (url.includes('/campaign_product_sets?')) return response([{ id: uuid(3), archetype: 'three_picks_v2', status: 'locked' }])
+      if (url.includes('/campaign_product_set_items?')) return response([
+        { name: '車用ゴミ箱', fact: 'LEDライト付き' },
+        { name: 'マグネット式スマホホルダー', fact: '毎日の運転を快適にします' },
+        { name: '車載アロマディフューザー', fact: '6種類の香り' },
+      ].map((item, index) => ({ id: uuid(11 + index), product_name_snapshot: item.name,
+        verified_fact_ref: 'summary', verified_fact_snapshot: { key: 'summary', value: item.fact },
+        presentation_order: index + 1 })))
+      if (url.includes('/campaign_product_set_item_assets?')) return response([1, 2, 3].map(index => ({
+        product_set_item_id: uuid(10 + index), product_asset_revision_id: uuid(20 + index),
+        asset_order: 1, content_sha256_snapshot: 'a'.repeat(64),
+      })))
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await expect(store.enqueueThreePicksV2Plan(uuid(1), { idempotencyKey: uuid(99) })).rejects.toMatchObject({
+      code: 'TYPED_FACT_CANDIDATE_MISSING', status: 422, productIndex: 2,
+      reason: 'no safe typed fact candidate could be compiled',
+    })
+    expect(calls.some(call => call.url.includes('/rpc/enqueue_three_picks_v2_plan'))).toBe(false)
+  })
+
   it('persists deterministic narration segments as provider-neutral planned audio artifacts', async () => {
     const calls = []
     const fetchImpl = vi.fn(async (url, options = {}) => {

@@ -767,7 +767,7 @@ function ThreePicksPanel({ iteration, plannerConfig, textToSpeechConfig, compose
   const isV2 = iteration.productSet?.archetype === 'three_picks_v2'
   const revisionSelection = threePicksRevisionSelection(revisions)
   const visibleRevisions = isV2 ? [revisionSelection.latest].filter(Boolean) : revisions
-  const activeLayoutId = revisionSelection.latest?.schemaVersion === 'multi-product-shorts-plan-v4'
+  const activeLayoutId = ['multi-product-shorts-plan-v4', 'multi-product-shorts-plan-v5'].includes(revisionSelection.latest?.schemaVersion)
     ? 'hero-product-layout-v2' : 'hero-product-layout-v1'
   const generationFeedback = threePicksGenerationFeedback(revisionSelection.latest, generationFailure, latestJob)
   useEffect(() => { setGenerationFailure(null) }, [revisionSelection.latest?.requestId, revisionSelection.latest?.status])

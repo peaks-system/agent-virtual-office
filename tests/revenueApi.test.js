@@ -30,6 +30,7 @@ describe('Revenue Lab API', () => {
     expect(input.items).toHaveLength(3)
     expect(configurationStatus({ OPENAI_API_KEY: 'configured' }).multiProductShortsV2).toMatchObject({
       configured: true, archetype: 'three_picks_v2', templateId: 'hero-carousel-v2', templateSelection: 'server_fixed',
+      promptVersion: 'three-picks-production-planner-v4', schemaVersion: 'multi-product-shorts-plan-v5',
     })
     expect(configurationStatus({}).finalCompositionV2).toMatchObject({ configured: false,
       missing: expect.arrayContaining(['REVENUE_LAB_PRODUCT_ASSET_BUCKET', 'REVENUE_LAB_CREATIVE_AUDIO_BUCKET',
@@ -104,6 +105,23 @@ describe('Revenue Lab API', () => {
     expect(response.status).toBe(422)
     expect(await response.json()).toEqual({ error: { code: 'REVENUE_EVIDENCE_PREPARATION_FAILED',
       message: '商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。' } })
+  })
+
+  it('returns a product-specific sealed 422 response for missing typed facts', async () => {
+    const store = { enqueueThreePicksV2Plan: vi.fn(async () => {
+      throw Object.assign(new Error('private product row detail'), { code: 'TYPED_FACT_CANDIDATE_MISSING', status: 422,
+        productIndex: 2, reason: 'no safe typed fact candidate could be compiled' })
+    }) }
+    const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test',
+      YOUTUBE_API_KEY: 'test', OPENAI_API_KEY: 'test' }
+    const origin = await fixture({ store, env })
+    const response = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/three-picks-v2-plans`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey }),
+    })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ error: { code: 'TYPED_FACT_CANDIDATE_MISSING',
+      message: '商品2から安全な事実ラベルを作成できませんでした',
+      details: { product_index: 2, reason: 'no safe typed fact candidate could be compiled' } } })
   })
   it('reports missing environment names without values or constructing storage', async () => {
     const status = configurationStatus({ SUPABASE_URL: 'https://safe.test' })

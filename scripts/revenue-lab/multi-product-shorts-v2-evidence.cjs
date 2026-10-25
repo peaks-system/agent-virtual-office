@@ -106,10 +106,16 @@ function compileTypedFacts({ candidateId, text }) {
   if (/LED(?:ライト)?(?:付き|搭載|点灯)|(?:ライト|LED)が点灯/iu.test(source)) {
     add('feature', 'led', true, 'LED搭載')
   }
-  const magnetGrade = source.match(/\bN(\d{2})\b(?:ネオジム)?磁石/iu)
+  const magnetGrade = source.match(/\bN(\d{2})\b\s*(?:ネオジム)?\s*(?:磁石|マグネット)/iu)
   if (magnetGrade) add('magnet_grade', 'magnet_grade', `N${magnetGrade[1]}`, `N${magnetGrade[1]}磁石`)
+  const magneticFixation = /(?:マグネット\s*(?:固定|式)|磁石\s*固定|強力\s*(?:マグネット|磁石)|(?:鉄壁\s*)?磁力[^。]{0,16}マグネット|\bN\d{2}\b\s*(?:ネオジム)?\s*(?:磁石|マグネット))/iu
+  if (magneticFixation.test(source)) add('feature', 'magnetic_fixation', true, 'マグネット固定')
 
-  const duration = source.match(/(\d+)\s*(本|個|回|枚|台)\s*(?:で)?\s*(約)?\s*(\d+(?:\.\d+)?)\s*(日|週間|か月|ヶ月|月|時間)/u)
+  const duration = source.match(/(\d+)\s*(本|個|回|枚|台)\s*(?:につき|あたり|当たり|で)?\s*(約)?\s*(\d+(?:\.\d+)?)\s*(日|週間|か月|ヶ月|月|時間)/u)
+    || (() => {
+      const reverse = source.match(/(約)?\s*(\d+(?:\.\d+)?)\s*(日|週間|か月|ヶ月|月|時間)\s*[／/]\s*(\d+)\s*(本|個|回|枚|台)/u)
+      return reverse ? [reverse[0], reverse[4], reverse[5], reverse[1], reverse[2], reverse[3]] : null
+    })()
   if (duration) {
     const durationUnit = ['月', 'ヶ月'].includes(duration[5]) ? 'か月' : duration[5]
     const value = { amount: Number(duration[1]), amount_unit: duration[2], approximate: Boolean(duration[3]),
@@ -118,8 +124,13 @@ function compileTypedFacts({ candidateId, text }) {
       `${duration[1]}${duration[2]}${duration[3] ? '約' : ''}${duration[4]}${value.duration_unit}`)
   }
 
-  const quantity = source.match(/(\d+)\s*(個|本|枚|台|袋|セット)\s*(?:入り|入)/u)
-  if (quantity) add('quantity', 'package_quantity', { value: Number(quantity[1]), unit: quantity[2] }, `${quantity[1]}${quantity[2]}入り`)
+  const quantity = duration ? null : source.match(/(\d+)\s*(個|本|枚|台|袋|セット|ヶ(?!月))\s*(入り|入)?/u)
+  if (quantity) add('quantity', 'package_quantity', { value: Number(quantity[1]), unit: quantity[2] },
+    `${quantity[1]}${quantity[2]}${quantity[3] ? '入り' : ''}`)
+  for (const [index, multipliedQuantity] of [...source.matchAll(/[×xX]\s*(\d+)/gu)].entries()) {
+    add('quantity', index === 0 ? 'package_quantity' : `package_quantity_${index + 1}`,
+      { value: Number(multipliedQuantity[1]), unit: null }, `×${multipliedQuantity[1]}`)
+  }
   const count = source.match(/(\d+)\s*(種類|段階|パターン|モード)/u)
   if (count) add('count', 'option_count', { value: Number(count[1]), unit: count[2] }, `${count[1]}${count[2]}`)
 

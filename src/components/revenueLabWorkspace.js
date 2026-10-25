@@ -138,7 +138,9 @@ export function planGenerationFeedback(revision, latestJob = null) {
     return { kind: 'pending', message: `Revision ${revision.revisionNumber}の制作案を生成中` }
   }
   if (revision.status === 'succeeded' && revision.planId && revision.output) {
-    return { kind: 'success', message: `✓ Revision ${revision.revisionNumber}の制作案を生成しました`, detail: 'Planner v3 / Layout v2' }
+    const plannerVersion = revision.promptVersion === 'three-picks-production-planner-v4'
+      || revision.schemaVersion === 'multi-product-shorts-plan-v5' ? 'Planner v4' : 'Planner v3'
+    return { kind: 'success', message: `✓ Revision ${revision.revisionNumber}の制作案を生成しました`, detail: `${plannerVersion} / Layout v2` }
   }
   if (revision.status === 'failed') {
     const providerAudit = providerPlanAudit(revision, latestJob)

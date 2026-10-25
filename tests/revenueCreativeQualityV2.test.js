@@ -76,6 +76,88 @@ describe('Three Picks v2 hard fact / soft copy architecture', () => {
     ]))
   })
 
+  it.each([
+    ['マグネット固定', 'マグネット固定'],
+    ['磁石固定', '磁石固定'],
+    ['強力マグネット', '強力マグネット'],
+    ['マグネット式', 'マグネット式'],
+    ['real product copy', '鉄壁磁力 マグネット がさらに進化'],
+  ])('normalizes the magnet expression family: %s', (_label, text) => {
+    expect(compileTypedFacts({ candidateId: 'summary-1', text })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'feature', key: 'magnetic_fixation', canonical_value: true,
+        display_text: 'マグネット固定' }),
+    ]))
+  })
+
+  it.each([
+    ['N56磁石', 'N56磁石'],
+    ['N56マグネット', 'N56マグネット'],
+  ])('uses an explicit magnet grade without inventing one: %s', (_label, text) => {
+    expect(compileTypedFacts({ candidateId: 'summary-1', text })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'magnet_grade', canonical_value: 'N56', display_text: 'N56磁石' }),
+    ]))
+  })
+
+  it('does not infer a magnet grade from an ungraded expression', () => {
+    const facts = compileTypedFacts({ candidateId: 'summary-1', text: '強力マグネットで固定' })
+    expect(facts.some(fact => fact.type === 'magnet_grade')).toBe(false)
+  })
+
+  it.each([
+    ['1本につき2週間', false, '1本2週間'],
+    ['1本で約2週間', true, '1本約2週間'],
+    ['1本約2週間', true, '1本約2週間'],
+    ['約2週間／1本', true, '1本約2週間'],
+    ['1本あたり約2週間', true, '1本約2週間'],
+  ])('normalizes duration notation %s', (text, approximate, displayText) => {
+    expect(compileTypedFacts({ candidateId: 'summary-1', text })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'duration', canonical_value: expect.objectContaining({
+        amount: 1, amount_unit: '本', duration: 2, duration_unit: '週間', approximate,
+      }), display_text: displayText }),
+    ]))
+  })
+
+  it.each([
+    ['付属品×2', { value: 2, unit: null }, '×2'],
+    ['交換品2個', { value: 2, unit: '個' }, '2個'],
+    ['ボトル2本', { value: 2, unit: '本' }, '2本'],
+    ['シート2枚', { value: 2, unit: '枚' }, '2枚'],
+    ['パーツ2ヶ', { value: 2, unit: 'ヶ' }, '2ヶ'],
+    ['交換用パッド2個入り', { value: 2, unit: '個' }, '2個入り'],
+  ])('normalizes quantity notation %s without inventing a unit', (text, canonicalValue, displayText) => {
+    expect(compileTypedFacts({ candidateId: 'summary-1', text })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'quantity', canonical_value: canonicalValue, display_text: displayText }),
+    ]))
+  })
+
+  it('retains each explicit multiplied quantity and does not truncate a duration unit', () => {
+    const quantities = compileTypedFacts({ candidateId: 'summary-1', text: '本体 ×1、磁器対応リング ×2' })
+      .filter(fact => fact.type === 'quantity')
+    expect(quantities.map(fact => fact.canonical_value)).toEqual([
+      { value: 1, unit: null }, { value: 2, unit: null },
+    ])
+    expect(compileTypedFacts({ candidateId: 'summary-2', text: '本体保証は発送日より6ヶ月' }))
+      .toEqual([])
+  })
+
+  it('compiles the three live-validation product families without inventing numbers or grades', () => {
+    const product1 = typedProduct(1, '車用ゴミ箱 LEDライト付き', '暗闇でも安心のLEDライト付き')
+    const product2 = typedProduct(2, 'スマホホルダー 車 マグネット 車載ホルダー',
+      '鉄壁磁力 マグネット がさらに進化。スマホをガッチリ離さず悪路もホールド。')
+    const product3 = typedProduct(3, '車用 カーアロマディフューザー',
+      'フレグランスボトル1本につき2週間(1日2h利用)※1')
+    expect(product1.fact_candidates.flatMap(candidate => candidate.facts)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'led', display_text: 'LED搭載' }),
+    ]))
+    expect(product2.fact_candidates.flatMap(candidate => candidate.facts)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'magnetic_fixation' }),
+    ]))
+    expect(product3.fact_candidates.flatMap(candidate => candidate.facts)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'duration', display_text: '1本2週間' }),
+    ]))
+    expect(product2.fact_candidates.flatMap(candidate => candidate.facts).some(fact => fact.type === 'magnet_grade')).toBe(false)
+  })
+
   it('leaves ambiguous evidence untyped', () => {
     expect(compileTypedFacts({ candidateId: 'summary-1', text: '毎日の車移動を快適にします' })).toEqual([])
     expect(() => prepareThreePicksV2TypedProductEvidence({ productSetItemId: uuid(1), productName: '車用ゴミ箱',

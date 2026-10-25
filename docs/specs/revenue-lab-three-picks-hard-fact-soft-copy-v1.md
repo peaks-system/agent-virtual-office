@@ -57,3 +57,7 @@ Existing v3/v4 validators remain unchanged for historical and in-flight requests
 ## Non-goals
 
 No bounded repair, DB/RPC/migration change, ElevenLabs change, Final Composer redesign, Publication/Analytics change, Three Picks v1 change, I2V change, Live generation, DB write, commit, push, or merge.
+
+## Future consideration
+
+Consider an explicitly versioned optional `fact_badge` fallback for products with no safely compilable typed fact. This version continues to fail closed instead of omitting the badge.

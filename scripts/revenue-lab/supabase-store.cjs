@@ -1104,7 +1104,7 @@ function createSupabaseStore({
         template_id: THREE_PICKS_V2_TEMPLATE_ID, template_selection: 'server_fixed' },
       campaign: { id: campaign.id, name: campaign.name, objective: campaign.objective },
       iteration: { id: iteration.id },
-      products: itemRows.map(row => {
+      products: itemRows.map((row, productIndex) => {
         let evidence
         try {
           evidence = prepareThreePicksV2TypedProductEvidence({ productSetItemId: row.id,
@@ -1114,6 +1114,13 @@ function createSupabaseStore({
           if (error?.code === 'IDENTITY_CANDIDATE_MISSING') {
             throw new RevenueStoreError('IDENTITY_CANDIDATE_MISSING',
               '商品を識別する短い名称を安全に作成できませんでした。商品名を確認してください。', 422)
+          }
+          if (error?.code === 'TYPED_FACT_CANDIDATE_MISSING') {
+            const failure = new RevenueStoreError('TYPED_FACT_CANDIDATE_MISSING',
+              `商品${productIndex + 1}から安全な事実ラベルを作成できませんでした`, 422)
+            failure.productIndex = productIndex + 1
+            failure.reason = 'no safe typed fact candidate could be compiled'
+            throw failure
           }
           throw new RevenueStoreError('REVENUE_EVIDENCE_PREPARATION_FAILED',
             '商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。', 422)

@@ -28,15 +28,20 @@ describe('Multi-product Shorts Dashboard', () => {
   it('shows hydrated revision state and safe evidence errors beside plan generation', () => {
     const pending = threePicksGenerationFeedback({ revisionNumber: 9, status: 'queued' })
     expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={pending} />)).toContain('Revision 9の制作案を生成中')
-    const success = threePicksGenerationFeedback({ revisionNumber: 9, status: 'succeeded', planId: 'plan-9', output: {} })
+    const succeededRevision = { revisionNumber: 9, status: 'succeeded', planId: 'plan-9', output: {},
+      promptVersion: 'three-picks-production-planner-v4', schemaVersion: 'multi-product-shorts-plan-v5' }
+    const success = threePicksGenerationFeedback(succeededRevision)
     expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={success} />)).toContain('✓ Revision 9の制作案を生成しました')
-    expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={success} />)).toContain('Planner v3 / Layout v2')
-    expect(threePicksGenerationFeedback({ revisionNumber: 9, status: 'succeeded', planId: 'plan-9', output: {} },
-      new Error('stale optimistic error'))).toEqual(success)
+    expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={success} />)).toContain('Planner v4 / Layout v2')
+    expect(threePicksGenerationFeedback(succeededRevision, new Error('stale optimistic error'))).toEqual(success)
     const failure = threePicksGenerationFeedback(null, new Error('商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。'))
     const markup = renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={failure} />)
     expect(markup).toContain('role="alert"')
     expect(markup).toContain('商品説明の形式を確認してください。')
+    const typedFactFailure = threePicksGenerationFeedback(null,
+      Object.assign(new Error('商品2から安全な事実ラベルを作成できませんでした'), { code: 'TYPED_FACT_CANDIDATE_MISSING' }))
+    expect(renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={typedFactFailure} />))
+      .toContain('商品2から安全な事実ラベルを作成できませんでした')
     const providerMarkup = renderToStaticMarkup(<ThreePicksGenerationFeedback feedback={{ kind: 'error',
       message: '制作案の生成に失敗しました', detail: 'AI生成設定の形式に問題があります。',
       audit: { httpStatus: 400, providerErrorCode: 'invalid_json_schema', providerErrorType: 'invalid_request_error',
@@ -143,6 +148,8 @@ describe('Multi-product Shorts Dashboard', () => {
       productCards: [], audioArtifacts: audioArtifacts(revisionNumber, hookStatus), compositions: [],
     })
     const latestRevision = revision(4, 'planned')
+    latestRevision.promptVersion = 'three-picks-production-planner-v4'
+    latestRevision.schemaVersion = 'multi-product-shorts-plan-v5'
     latestRevision.audioArtifacts.push({ id: 'stale-cross-plan-hook', creativeArchetypePlanId: 'plan-rev-3',
       sceneId: 'hook', segmentId: 'hook-1', segmentOrder: 1, inputText: 'stale failed Hook', status: 'failed' })
     const campaign = { id: 'campaign-v2-revisions', name: 'Revision history', status: 'active', lineageKind: 'product_set', origins: [], iterations: [{
@@ -156,6 +163,7 @@ describe('Multi-product Shorts Dashboard', () => {
 
     const markup = renderToStaticMarkup(<RevenueLabView state={state} {...handlers} />)
     expect(markup).toContain('制作案 Revision 4')
+    expect(markup).toContain('hero-product-layout-v2')
     expect(markup).toContain('最新')
     expect(markup).toContain('artifact 11件')
     expect(markup).toContain('ready 0 / planned 11 / failed 0')

@@ -14,7 +14,7 @@ const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_MODEL, PROMPT_VERSION: THREE_PICKS_PR
   SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION } = require('./revenue-lab/multi-product-shorts-schema.cjs')
 const { COMPOSITION_VERSION } = require('./revenue-lab/multi-product-shorts-composition.cjs')
 const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_V2_MODEL, PROMPT_VERSION: THREE_PICKS_V2_PROMPT_VERSION,
-  SCHEMA_VERSION: THREE_PICKS_V2_SCHEMA_VERSION, TEMPLATE_ID: THREE_PICKS_V2_TEMPLATE_ID } = require('./revenue-lab/multi-product-shorts-v2-schema.cjs')
+  SCHEMA_VERSION: THREE_PICKS_V2_SCHEMA_VERSION, TEMPLATE_ID: THREE_PICKS_V2_TEMPLATE_ID } = require('./revenue-lab/multi-product-shorts-v2-schema-v5.cjs')
 const { COMPOSITION_VERSION: COMPOSITION_V2_VERSION } = require('./revenue-lab/multi-product-shorts-v2-composition.cjs')
 const { rendererConfiguration: v2RendererConfiguration } = require('./revenue-lab/providers/local-ffmpeg-composition-v2-provider.cjs')
 const { createSupabaseCompositionBlobStore } = require('./revenue-lab/composition-blob-store.cjs')
@@ -585,6 +585,15 @@ function createRevenueApi({
       }
       return fail(res, 404, 'NOT_FOUND', 'Revenue Labの操作が見つかりません。')
     } catch (error) {
+      if (error?.code === 'TYPED_FACT_CANDIDATE_MISSING') {
+        const productIndex = Number.isInteger(error.productIndex) && error.productIndex >= 1 && error.productIndex <= 3
+          ? error.productIndex : null
+        const reason = error.reason === 'no safe typed fact candidate could be compiled'
+          ? error.reason : 'no safe typed fact candidate could be compiled'
+        return fail(res, 422, error.code,
+          productIndex ? `商品${productIndex}から安全な事実ラベルを作成できませんでした` : '商品から安全な事実ラベルを作成できませんでした',
+          { ...(productIndex ? { product_index: productIndex } : {}), reason })
+      }
       if (error?.code === 'REVENUE_EVIDENCE_PREPARATION_FAILED') {
         return fail(res, 422, error.code, '商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。')
       }

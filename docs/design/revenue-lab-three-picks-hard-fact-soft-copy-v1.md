@@ -25,3 +25,5 @@ frozen product title + verified facts
 Hard facts never depend on reverse semantic matching of model-written badge text. Ambiguous evidence is available only to soft copy. A missing safe identity candidate or unknown selected ID fails before plan persistence.
 
 The formatter preserves the current product-card hierarchy and layout contract. No new visual layer, coordinate, or renderer behavior is introduced. Existing stored plans and manifests remain immutable and version-dispatched.
+
+Future consideration: a later version may allow `fact_badge` to be omitted when evidence contains no safely compilable typed fact. v1 deliberately keeps the badge required and fails before request creation.
