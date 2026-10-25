@@ -32,10 +32,13 @@ describe('Creative Archetype v2 store', () => {
       if (url.includes('/campaign_iterations?')) return response([{ id: uuid(1), campaign_id: uuid(2), product_set_id: uuid(3), curated_product_id: null }])
       if (url.includes('/campaigns?')) return response([{ id: uuid(2), name: 'v2', objective: null }])
       if (url.includes('/campaign_product_sets?')) return response([{ id: uuid(3), archetype: 'three_picks_v2', status: 'locked' }])
-      if (url.includes('/campaign_product_set_items?')) return response([1, 2, 3].map(index => ({ id: uuid(10 + index),
-        product_name_snapshot: index === 1 ? '車用ゴミ箱 LEDライト付き 折りたたみ式 マグネット固定' : `商品${index}`,
-        verified_fact_ref: 'summary', verified_fact_snapshot: { key: 'summary',
-          value: index === 1 ? 'LEDライト付き。折りたたみ式。マグネット固定（取り外し可能）。' : `事実${index}` }, presentation_order: index })))
+      if (url.includes('/campaign_product_set_items?')) return response([
+        { name: '車用ゴミ箱 LEDライト付き 折りたたみ式 マグネット固定', fact: 'LEDライト付き。折りたたみ式。マグネット固定（取り外し可能）。' },
+        { name: 'スマホホルダー 車 マグネット 車載ホルダー N56', fact: 'N56磁石を採用。スマホを悪路でもホールド。' },
+        { name: '車用 カーアロマディフューザー USB式', fact: '6種類の香り。1本で約2週間。USB接続。' },
+      ].map((item, index) => ({ id: uuid(11 + index), product_name_snapshot: item.name,
+        verified_fact_ref: 'summary', verified_fact_snapshot: { key: 'summary', value: item.fact },
+        presentation_order: index + 1 })))
       if (url.includes('/campaign_product_set_item_assets?')) return response([1, 2, 3].map(index => ({ product_set_item_id: uuid(10 + index),
         product_asset_revision_id: uuid(20 + index), asset_order: 1, content_sha256_snapshot: 'a'.repeat(64) })))
       if (url.includes('/rpc/enqueue_three_picks_v2_plan')) return response({ requestId: uuid(50), created: true })
@@ -44,7 +47,10 @@ describe('Creative Archetype v2 store', () => {
     const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
     await store.enqueueThreePicksV2Plan(uuid(1), { idempotencyKey: uuid(99), model: 'gpt-test' })
     const rpc = calls.find(call => call.url.includes('/rpc/enqueue_three_picks_v2_plan'))
-    expect(rpc.body.p_input_snapshot.contract).toMatchObject({ archetype: 'three_picks_v2', template_id: 'hero-carousel-v2' })
+    expect(rpc.body.p_input_snapshot.contract).toMatchObject({ archetype: 'three_picks_v2', template_id: 'hero-carousel-v2',
+      prompt_version: 'three-picks-production-planner-v4', schema_version: 'multi-product-shorts-plan-v5' })
+    expect(rpc.body).toMatchObject({ p_prompt_version: 'three-picks-production-planner-v4',
+      p_schema_version: 'multi-product-shorts-plan-v5' })
     expect(rpc.body.p_input_snapshot.products[0].asset_revisions).toHaveLength(1)
     expect(rpc.body.p_input_snapshot.products[0]).toMatchObject({
       source_product_name: '車用ゴミ箱 LEDライト付き 折りたたみ式 マグネット固定',
@@ -53,6 +59,12 @@ describe('Creative Archetype v2 store', () => {
         { id: 'summary-2', verified_fact_ref: 'summary', text: '折りたたみ式' },
         { id: 'summary-3', verified_fact_ref: 'summary', text: 'マグネット固定(取り外し可能)' },
       ] })
+    expect(rpc.body.p_input_snapshot.products[0].identity_candidates[0]).toMatchObject({
+      display_name: '車載ダストボックス',
+    })
+    expect(rpc.body.p_input_snapshot.products[0].fact_candidates[0].facts[0]).toMatchObject({
+      type: 'feature', key: 'led', display_text: 'LED搭載',
+    })
     expect(rpc.body.p_input_snapshot.products[0].display_name).toBeUndefined()
     expect(rpc.body.p_input_snapshot.products[0].fact_badge).toBeUndefined()
     expect(rpc.body.p_input_snapshot.products[0].verified_fact).toBeUndefined()
@@ -67,8 +79,10 @@ describe('Creative Archetype v2 store', () => {
       if (url.includes('/campaigns?')) return response([{ id: uuid(2), name: 'v2', objective: null }])
       if (url.includes('/campaign_product_sets?')) return response([{ id: uuid(3), archetype: 'three_picks_v2', status: 'locked' }])
       if (url.includes('/campaign_product_set_items?')) return response([1, 2, 3].map(index => ({
-        id: uuid(10 + index), product_name_snapshot: `商品${index}`, verified_fact_ref: 'summary',
-        verified_fact_snapshot: { key: 'summary', value: index === 2 ? 'A'.repeat(121) : `事実${index}` }, presentation_order: index,
+        id: uuid(10 + index), product_name_snapshot: ['車用ゴミ箱', 'マグネット式スマホホルダー', '車載アロマディフューザー'][index - 1],
+        verified_fact_ref: 'summary',
+        verified_fact_snapshot: { key: 'summary', value: index === 1 ? 'LEDライト付き'
+          : index === 2 ? 'A'.repeat(121) : '6種類の香り' }, presentation_order: index,
       })))
       if (url.includes('/campaign_product_set_item_assets?')) return response([1, 2, 3].map(index => ({
         product_set_item_id: uuid(10 + index), product_asset_revision_id: uuid(20 + index),
@@ -178,7 +192,7 @@ describe('Creative Archetype v2 store', () => {
 
   it('compiles ready measured audio into a layer manifest before the dedicated v2 composition RPC', async () => {
     const calls = []
-    let schemaVersion = 'multi-product-shorts-plan-v4'
+    let schemaVersion = 'multi-product-shorts-plan-v5'
     const presentations = [1, 2, 3].map(index => ({ product_set_item_id: uuid(10 + index), presentation_order: index,
       display_name: `商品${index}`, short_appeal: '短い訴求', fact_badge: `事実${index}`,
       verified_fact_ref: 'summary', tts: `商品${index}です。` }))
@@ -207,6 +221,11 @@ describe('Creative Archetype v2 store', () => {
     expect(rpc.body.p_render_manifest).toMatchObject({ manifest_version: 'three-picks-composition-manifest-v3',
       template_id: 'hero-carousel-v2', output: { audio: true } })
     expect(rpc.body.p_render_manifest.product_cards).toBeUndefined()
+    schemaVersion = 'multi-product-shorts-plan-v4'; calls.length = 0
+    await store.enqueueFinalCompositionV2(plan.id, { idempotencyKey: uuid(92) })
+    const v4Rpc = calls.find(call => call.url.includes('/rpc/enqueue_final_composition_v2'))
+    expect(v4Rpc.body.p_render_manifest).toMatchObject({ manifest_version: 'three-picks-composition-manifest-v3',
+      layout_id: 'hero-product-layout-v2' })
     schemaVersion = 'multi-product-shorts-plan-v3'; calls.length = 0
     await store.enqueueFinalCompositionV2(plan.id, { idempotencyKey: uuid(91) })
     const legacyRpc = calls.find(call => call.url.includes('/rpc/enqueue_final_composition_v2'))

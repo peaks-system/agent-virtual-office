@@ -13,10 +13,11 @@ const { buildProductIdentityPrompt } = require('./product-i2v-prompt-builder.cjs
 const { DEFAULT_MODEL: THREE_PICKS_DEFAULT_MODEL, PROMPT_VERSION: THREE_PICKS_PROMPT_VERSION,
   SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION, compactDisplayName, compactFactBadge } = require('./multi-product-shorts-schema.cjs')
 const { COMPOSITION_VERSION, buildProductCards, buildRenderManifest } = require('./multi-product-shorts-composition.cjs')
-const { ARCHETYPE: THREE_PICKS_V2_ARCHETYPE, DEFAULT_MODEL: THREE_PICKS_V2_DEFAULT_MODEL,
-  PROMPT_VERSION: THREE_PICKS_V2_PROMPT_VERSION, SCHEMA_VERSION: THREE_PICKS_V2_SCHEMA_VERSION,
-  TEMPLATE_ID: THREE_PICKS_V2_TEMPLATE_ID, planNarrationSegments } = require('./multi-product-shorts-v2-schema.cjs')
-const { prepareThreePicksV2ProductEvidence } = require('./multi-product-shorts-v2-evidence.cjs')
+const { ARCHETYPE: THREE_PICKS_V2_ARCHETYPE, planNarrationSegments } = require('./multi-product-shorts-v2-schema.cjs')
+const { DEFAULT_MODEL: THREE_PICKS_V2_DEFAULT_MODEL, PROMPT_VERSION: THREE_PICKS_V2_PROMPT_VERSION,
+  SCHEMA_VERSION: THREE_PICKS_V2_SCHEMA_VERSION,
+  TEMPLATE_ID: THREE_PICKS_V2_TEMPLATE_ID } = require('./multi-product-shorts-v2-schema-v5.cjs')
+const { prepareThreePicksV2TypedProductEvidence } = require('./multi-product-shorts-v2-evidence.cjs')
 const { COMPOSITION_VERSION: COMPOSITION_V2_VERSION,
   compileThreePicksV2Manifest } = require('./multi-product-shorts-v2-composition.cjs')
 const { directProductCreativeSnapshot, isDirectProductRegistrationPlaceholder } = require('./direct-product-contract.cjs')
@@ -1106,9 +1107,14 @@ function createSupabaseStore({
       products: itemRows.map(row => {
         let evidence
         try {
-          evidence = prepareThreePicksV2ProductEvidence({ productName: row.product_name_snapshot,
-            verifiedFactRef: row.verified_fact_ref, verifiedFact: row.verified_fact_snapshot })
-        } catch {
+          evidence = prepareThreePicksV2TypedProductEvidence({ productSetItemId: row.id,
+            productName: row.product_name_snapshot, verifiedFactRef: row.verified_fact_ref,
+            verifiedFact: row.verified_fact_snapshot })
+        } catch (error) {
+          if (error?.code === 'IDENTITY_CANDIDATE_MISSING') {
+            throw new RevenueStoreError('IDENTITY_CANDIDATE_MISSING',
+              '商品を識別する短い名称を安全に作成できませんでした。商品名を確認してください。', 422)
+          }
           throw new RevenueStoreError('REVENUE_EVIDENCE_PREPARATION_FAILED',
             '商品情報から動画用の根拠データを作成できませんでした。商品説明の形式を確認してください。', 422)
         }

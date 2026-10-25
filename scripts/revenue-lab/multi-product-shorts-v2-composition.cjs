@@ -3,7 +3,8 @@
 const { createHash } = require('node:crypto')
 const { canonicalize } = require('./canonical-json.cjs')
 const { ARCHETYPE, LAYOUT_ID, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION, MANIFEST_VERSION,
-  SCHEMA_VERSION, TEMPLATE_ID, planNarrationSegments } = require('./multi-product-shorts-v2-schema.cjs')
+  SCHEMA_VERSION: V4_SCHEMA_VERSION, TEMPLATE_ID, planNarrationSegments } = require('./multi-product-shorts-v2-schema.cjs')
+const { SCHEMA_VERSION: V5_SCHEMA_VERSION } = require('./multi-product-shorts-v2-schema-v5.cjs')
 
 const COMPOSITION_VERSION = 'local-shorts-composer-v2'
 const BACKGROUND_VERSION = 'subordinate-graphic-background-v1'
@@ -22,10 +23,12 @@ function requiredSceneDuration(kind, segments) {
 }
 
 function compileThreePicksV2Manifest({ requestId, planRevision, campaignId, iterationId, productSetId,
-  plan, items, audioArtifacts, schemaVersion = SCHEMA_VERSION }) {
+  plan, items, audioArtifacts, schemaVersion = V5_SCHEMA_VERSION }) {
   if (plan?.archetype !== ARCHETYPE || !Array.isArray(items) || items.length !== 3) throw new TypeError('Invalid v2 composition input')
   const legacy = schemaVersion === 'multi-product-shorts-plan-v3'
-  if (!legacy && schemaVersion !== SCHEMA_VERSION) throw Object.assign(new Error('Unsupported Three Picks schema version'), { code: 'THREE_PICKS_V2_SCHEMA_UNSUPPORTED' })
+  if (!legacy && ![V4_SCHEMA_VERSION, V5_SCHEMA_VERSION].includes(schemaVersion)) {
+    throw Object.assign(new Error('Unsupported Three Picks schema version'), { code: 'THREE_PICKS_V2_SCHEMA_UNSUPPORTED' })
+  }
   const layoutId = legacy ? LEGACY_LAYOUT_ID : LAYOUT_ID
   const manifestVersion = legacy ? LEGACY_MANIFEST_VERSION : MANIFEST_VERSION
   const audioBySegment = new Map((audioArtifacts || []).map(artifact => [artifact.segmentId, artifact]))

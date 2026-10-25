@@ -18,6 +18,29 @@ describe('Creative Archetype v2 worker routing', () => {
     expect(store.persistThreePicksV2Success).toHaveBeenCalledWith(request, result)
   })
 
+  it('preserves allowlisted schema-v5 lineage diagnostics for future bounded repair', async () => {
+    const request = { id: uuid(1), archetype: 'three_picks_v2', revisionNumber: 14,
+      inputSnapshot: { contract: { schema_version: 'multi-product-shorts-plan-v5' }, products: [] } }
+    const failure = Object.assign(new Error('unknown fact'), {
+      code: 'THREE_PICKS_V2_FACT_UNKNOWN',
+      safeDiagnostics: { code: 'THREE_PICKS_V2_FACT_UNKNOWN', product_index: 2,
+        field_path: '$.product_presentations[1].fact_id',
+        reason: 'selected fact ID is not present in typed evidence',
+        field_value_preview: 'unknown:fact', evidence_candidate_ids: ['summary-2'] },
+    })
+    const store = { getThreePicksRequest: vi.fn(async () => request), markThreePicksRunning: vi.fn(),
+      persistThreePicksV2Success: vi.fn(), persistThreePicksFailure: vi.fn() }
+    const handler = createJobHandlers({ store, youtube: {}, multiProductShortsV2Planner: {
+      plan: vi.fn(async () => { throw failure }),
+    } }).get('creative.archetype.plan')
+    await expect(handler({ payload: { creative_archetype_request_id: request.id } })).rejects.toMatchObject({
+      code: 'THREE_PICKS_V2_FACT_UNKNOWN',
+      safeDiagnostics: { product_index: 2, field_path: '$.product_presentations[1].fact_id',
+        evidence_candidate_ids: ['summary-2'] },
+    })
+    expect(store.persistThreePicksFailure).toHaveBeenCalledWith(request.id, failure)
+  })
+
   it('routes v2 composition with hash-verified product and segment audio bytes', async () => {
     const productBytes = Buffer.from('product'); const audioBytes = Buffer.from('audio')
     const { createHash } = await import('node:crypto')
