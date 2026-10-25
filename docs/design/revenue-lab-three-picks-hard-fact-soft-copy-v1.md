@@ -8,9 +8,12 @@ frozen product title + verified facts
   -> Evidence Compiler
        fact_candidates[]
        typed facts[] { fact_id, canonical_value, display_text }
+       selectable_facts[] { fact_id, source_candidate_id, type, display_text }
        identity_candidates[] { identity_id, display_name }
   -> Planner v4
-       selects identity_id / fact_id / candidate IDs
+       selects exact identity_candidates[].identity_id
+       selects exact selectable_facts[].fact_id
+       selects fact_candidates[].id only for soft-copy grounding
        writes Hook / short_appeal / product TTS / CTA only
   -> schema-v5 validator
        verifies selected lineage and soft-copy claim constraints

@@ -34,10 +34,14 @@ function v5Fixture() {
   const products = [
     typedProduct(1, '車用ゴミ箱 LEDライト付き 折りたたみ式', '暗闇でも安心のLEDライト付き。ゴミ箱を開くとライトが点灯し、夜でも問題なく使用できます。'),
     typedProduct(2, 'スマホホルダー 車 マグネット 車載ホルダー N56', 'N56磁石を採用。スマホをガッチリ離さず悪路もホールド。'),
-    typedProduct(3, '車用 カーアロマディフューザー USB式', '6種類の香り。1本で約2週間。USB Type-C接続。'),
+    typedProduct(3, '車用 カーアロマディフューザー USB式', '6種類の香り。1本につき2週間。USB Type-C接続。'),
   ]
   const identity = products.map(product => product.identity_candidates[0])
-  const facts = products.map(product => product.fact_candidates.flatMap(candidate => candidate.facts)[0])
+  const facts = [
+    products[0].selectable_facts.find(fact => fact.display_text === 'LED搭載'),
+    products[1].selectable_facts.find(fact => fact.display_text === 'マグネット固定'),
+    products[2].selectable_facts.find(fact => fact.display_text === '1本2週間'),
+  ]
   const plan = {
     archetype: 'three_picks_v2',
     theme: '車内快適アイテム',
@@ -146,13 +150,13 @@ describe('Three Picks v2 hard fact / soft copy architecture', () => {
       '鉄壁磁力 マグネット がさらに進化。スマホをガッチリ離さず悪路もホールド。')
     const product3 = typedProduct(3, '車用 カーアロマディフューザー',
       'フレグランスボトル1本につき2週間(1日2h利用)※1')
-    expect(product1.fact_candidates.flatMap(candidate => candidate.facts)).toEqual(expect.arrayContaining([
+    expect(product1.selectable_facts).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'led', display_text: 'LED搭載' }),
     ]))
-    expect(product2.fact_candidates.flatMap(candidate => candidate.facts)).toEqual(expect.arrayContaining([
+    expect(product2.selectable_facts).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'magnetic_fixation' }),
     ]))
-    expect(product3.fact_candidates.flatMap(candidate => candidate.facts)).toEqual(expect.arrayContaining([
+    expect(product3.selectable_facts).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'duration', display_text: '1本2週間' }),
     ]))
     expect(product2.fact_candidates.flatMap(candidate => candidate.facts).some(fact => fact.type === 'magnet_grade')).toBe(false)
@@ -204,11 +208,25 @@ describe('Three Picks v2 hard fact / soft copy architecture', () => {
       lineage: { identity_id: plan.product_presentations[0].identity_id, fact_id: plan.product_presentations[0].fact_id },
     })
     expect(formatted.product_presentations[1]).toMatchObject({
-      display_name: 'マグネット式スマホホルダー', fact_badge: 'N56磁石',
+      display_name: 'マグネット式スマホホルダー', fact_badge: 'マグネット固定',
     })
     expect(formatted.product_presentations[2]).toMatchObject({
-      display_name: '車載アロマディフューザー', fact_badge: '6種類',
+      display_name: '車載アロマディフューザー', fact_badge: '1本2週間',
     })
+  })
+
+  it('keeps hard fact IDs distinct from soft-copy evidence candidate IDs', () => {
+    const { products, plan } = v5Fixture()
+    const product = products[0]
+    expect(product.selectable_facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fact_id: 'summary-1:feature:led', source_candidate_id: 'summary-1',
+        display_text: 'LED搭載' }),
+    ]))
+    plan.product_presentations[0].fact_id = plan.product_presentations[0].short_appeal_evidence_ids[0]
+    expect(() => validateThreePicksV5PlannerOutput(plan, { products })).toThrowError(expect.objectContaining({
+      code: 'THREE_PICKS_V2_FACT_UNKNOWN', product_index: 1,
+      field_path: '$.product_presentations[0].fact_id',
+    }))
   })
 
   it.each([

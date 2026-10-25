@@ -12,6 +12,8 @@ describe('Three Picks planner-v4 client dispatch', () => {
         source_anchor: `LEDライト付きで夜でも使用できます${index}`,
         facts: [{ fact_id: `summary-${index}:feature:led`, type: 'feature', key: 'led',
           canonical_value: true, display_text: 'LED搭載' }] }],
+      selectable_facts: [{ fact_id: `summary-${index}:feature:led`, source_candidate_id: `summary-${index}`,
+        type: 'feature', key: 'led', canonical_value: true, display_text: 'LED搭載' }],
     }))
     const output = { archetype: 'three_picks_v2', theme: '車内用品',
       hook: { display_text: '車内用品3選', tts: '車内用品三選' },
@@ -33,8 +35,17 @@ describe('Three Picks planner-v4 client dispatch', () => {
     })
     const request = JSON.parse(fetchImpl.mock.calls[0][1].body)
     expect(request.text.format.name).toBe('revenue_lab_three_picks_v2_v5')
-    const fields = request.text.format.schema.properties.product_presentations.items.properties
+    const productSchemas = request.text.format.schema.properties.product_presentations.items.anyOf
+    const fields = productSchemas[0].properties
     expect(fields).not.toHaveProperty('display_name')
     expect(fields).not.toHaveProperty('fact_badge')
+    const plannerProducts = JSON.parse(request.input[1].content).products
+    expect(plannerProducts[0].selectable_facts).toEqual(products[0].selectable_facts)
+    expect(plannerProducts[0].fact_candidates[0]).not.toHaveProperty('facts')
+    expect(plannerProducts[0].fact_candidates[0].id).toBe('summary-1')
+    expect(productSchemas[0].properties.fact_id.enum).toEqual(['summary-1:feature:led'])
+    expect(productSchemas[0].properties.fact_id.enum).not.toContain('summary-1')
+    expect(productSchemas[0].properties.identity_id.enum).toEqual([products[0].identity_candidates[0].identity_id])
+    expect(JSON.stringify(request.text.format.schema)).not.toContain('uniqueItems')
   })
 })

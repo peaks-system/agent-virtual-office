@@ -30,7 +30,9 @@ Every product receives one to three server-generated identity candidates. Candid
 
 ## Planner v4
 
-The planner selects `identity_id`, `fact_id`, and evidence candidate IDs. It generates only Hook, `short_appeal`, product `tts`, and CTA copy. It does not output `display_name` or `fact_badge`, and may not add hard facts that are absent from selected evidence.
+The compiler flattens typed facts into `selectable_facts[]`, where every option carries its exact `fact_id`, `source_candidate_id`, type, and canonical `display_text`. The planner selects `identity_id` only from `identity_candidates[].identity_id` and `fact_id` only from `selectable_facts[].fact_id`. Evidence candidate IDs remain a separate namespace used only by `short_appeal` and product `tts`; a candidate ID is never accepted as a `fact_id`.
+
+The planner generates only Hook, `short_appeal`, product `tts`, and CTA copy. It does not output `display_name` or `fact_badge`, and may not add hard facts that are absent from selected evidence.
 
 ## Deterministic formatter and schema-v5 validation
 

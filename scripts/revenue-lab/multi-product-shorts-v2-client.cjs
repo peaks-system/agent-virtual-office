@@ -32,15 +32,17 @@ function createMultiProductShortsV2Client({
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required')
   async function plan(input) {
     const contract = input?.contract?.schema_version === v5.SCHEMA_VERSION ? v5 : v4
+    const requestInput = contract === v5 ? v5.plannerInput(input) : input
+    const responseSchema = contract === v5 ? v5.responseSchemaForInput(requestInput) : contract.THREE_PICKS_V2_JSON_SCHEMA
     let response
     try {
       response = await fetchImpl(endpoint, {
         method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
         body: JSON.stringify({ model, store: false, reasoning: { effort: 'low' }, max_output_tokens: 2200,
-          input: [{ role: 'developer', content: contract.SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(input) }],
+          input: [{ role: 'developer', content: contract.SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(requestInput) }],
           text: { format: { type: 'json_schema',
             name: contract === v5 ? 'revenue_lab_three_picks_v2_v5' : 'revenue_lab_three_picks_v2',
-            strict: true, schema: contract.THREE_PICKS_V2_JSON_SCHEMA } } }),
+            strict: true, schema: responseSchema } } }),
       })
     } catch { throw new OpenAIAnalysisError('OPENAI_TRANSPORT_ERROR', 'Creative Archetype v2 planning request failed') }
     let payload

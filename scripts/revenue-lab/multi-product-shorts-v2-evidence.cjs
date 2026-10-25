@@ -186,10 +186,15 @@ function prepareThreePicksV2TypedProductEvidence({ productSetItemId, productName
       code: 'TYPED_FACT_CANDIDATE_MISSING',
     })
   }
+  const selectableFacts = factCandidates.flatMap(candidate => candidate.facts.map(fact => ({
+    ...fact,
+    source_candidate_id: candidate.id,
+  })))
   return {
     ...prepared,
     identity_candidates: identityCandidates,
     fact_candidates: factCandidates,
+    selectable_facts: selectableFacts,
   }
 }
 

@@ -8,7 +8,8 @@ const PROMPT_VERSION = 'three-picks-production-planner-v4'
 const SCHEMA_VERSION = 'multi-product-shorts-plan-v5'
 
 const SYSTEM_PROMPT = `Create natural Japanese soft copy for a three-product YouTube Short from the supplied frozen evidence.
-The server fixes the template and deterministically formats product identities and fact badges. Select identity_id and fact_id exactly from each product input. Never output display_name or fact_badge.
+The server fixes the template and deterministically formats product identities and fact badges. Select identity_id exactly from that product's identity_candidates[].identity_id and fact_id exactly from that product's selectable_facts[].fact_id. Never output display_name or fact_badge.
+fact_candidates[].id values are evidence candidate IDs for soft-copy grounding only. Never use a fact_candidates[].id as fact_id. selectable_facts[].source_candidate_id is lineage metadata, not a selectable fact_id.
 Generate only the shared Hook, one short_appeal and one product tts per product, and the CTA. For each product, cite one to three existing evidence candidate IDs separately for short_appeal and tts.
 Do not invent numbers, models, grades, materials, quantities, interfaces, functions, or other hard specifications. Soft copy may paraphrase or omit concepts from the selected evidence but may not add a new product claim. Never use image text as evidence.
 Hook display and narration must express the shared theme, contain no product hard fact, and remain at most 14 characters. CTA must explicitly send viewers to the description, normally 気になる商品は概要欄へ. Do not output coordinates, durations, effects, providers, rankings, prices, reviews, or URLs.`
@@ -42,6 +43,30 @@ const THREE_PICKS_V2_JSON_SCHEMA = { type: 'object', additionalProperties: false
       tts: { type: 'string', minLength: 1, maxLength: LIMITS.ctaTts },
     } },
   } }
+
+function plannerInput(input) {
+  return { ...input, products: (input?.products || []).map(product => ({
+    ...product,
+    fact_candidates: (product.fact_candidates || []).map(({ facts: _facts, ...candidate }) => candidate),
+    selectable_facts: (product.selectable_facts || []).map(fact => ({ ...fact })),
+  })) }
+}
+
+function responseSchemaForInput(input) {
+  const schema = JSON.parse(JSON.stringify(THREE_PICKS_V2_JSON_SCHEMA))
+  const base = schema.properties.product_presentations.items
+  schema.properties.product_presentations.items = { anyOf: (input?.products || []).map(product => ({
+    ...base,
+    properties: {
+      ...base.properties,
+      product_set_item_id: { type: 'string', const: product.product_set_item_id },
+      presentation_order: { type: 'integer', const: product.presentation_order },
+      identity_id: { type: 'string', enum: (product.identity_candidates || []).map(candidate => candidate.identity_id) },
+      fact_id: { type: 'string', enum: (product.selectable_facts || []).map(fact => fact.fact_id) },
+    },
+  })) }
+  return schema
+}
 
 const SAFE_REASONS = Object.freeze({
   THREE_PICKS_V2_INVALID_OUTPUT: 'planner output does not contain exactly three product presentations',
@@ -128,6 +153,15 @@ function selectedCandidates(product, ids, path) {
   return selected
 }
 
+function selectedFact(product, factId) {
+  const fact = (product.selectable_facts || []).find(candidate => candidate.fact_id === factId)
+  if (!fact) return null
+  const candidate = (product.fact_candidates || []).find(entry => entry.id === fact.source_candidate_id)
+  const sourceFact = candidate?.facts?.find(entry => entry.fact_id === fact.fact_id)
+  if (!candidate || !sourceFact || sourceFact.display_text !== fact.display_text) return null
+  return { fact, candidate }
+}
+
 function softCopyIsGrounded(value, candidates) {
   const claim = compact(value)
   const evidence = candidates.map(candidate => compact(candidate.text)).join(' ')
@@ -168,9 +202,7 @@ function validateThreePicksV5PlannerOutput(output, input) {
     if (item.presentation_order !== product.presentation_order) fail('THREE_PICKS_V2_ORDER_INVALID', `${path}.presentation_order`, item.presentation_order)
     const identity = (product.identity_candidates || []).find(candidate => candidate.identity_id === item.identity_id)
     if (!identity) fail('THREE_PICKS_V2_IDENTITY_CANDIDATE_UNKNOWN', `${path}.identity_id`, item.identity_id)
-    const typedFacts = (product.fact_candidates || []).flatMap(candidate => (candidate.facts || [])
-      .map(fact => ({ ...fact, candidate })))
-    if (!typedFacts.some(fact => fact.fact_id === item.fact_id)) fail('THREE_PICKS_V2_FACT_UNKNOWN', `${path}.fact_id`, item.fact_id)
+    if (!selectedFact(product, item.fact_id)) fail('THREE_PICKS_V2_FACT_UNKNOWN', `${path}.fact_id`, item.fact_id)
     for (const [field, idsField, minimum, maximum] of [
       ['short_appeal', 'short_appeal_evidence_ids', 8, LIMITS.shortAppeal],
       ['tts', 'tts_evidence_ids', 12, LIMITS.productTts],
@@ -191,11 +223,7 @@ function formatThreePicksV5Plan(output, input) {
   const productPresentations = output.product_presentations.map(item => {
     const product = byId.get(item.product_set_item_id)
     const identity = product.identity_candidates.find(candidate => candidate.identity_id === item.identity_id)
-    let resolvedFact = null
-    for (const candidate of product.fact_candidates) {
-      const fact = (candidate.facts || []).find(entry => entry.fact_id === item.fact_id)
-      if (fact) { resolvedFact = { fact, candidate }; break }
-    }
+    const resolvedFact = selectedFact(product, item.fact_id)
     const evidenceIds = [...new Set([...item.short_appeal_evidence_ids, ...item.tts_evidence_ids])]
     const evidenceById = new Map(product.fact_candidates.map(candidate => [candidate.id, candidate]))
     return {
@@ -230,8 +258,7 @@ function validateFormattedThreePicksV5Output(plan, input) {
     const item = plan.product_presentations[index]
     const product = byId.get(item.product_set_item_id)
     const identity = product?.identity_candidates?.find(candidate => candidate.identity_id === item.identity_id)
-    const fact = product?.fact_candidates?.flatMap(candidate => candidate.facts || [])
-      .find(candidateFact => candidateFact.fact_id === item.fact_id)
+    const fact = product ? selectedFact(product, item.fact_id)?.fact : null
     if (!identity || item.display_name !== identity.display_name) fail('THREE_PICKS_V2_FORMAT_MISMATCH', `$.product_presentations[${index}].display_name`, item.display_name)
     if (!fact || item.fact_badge !== fact.display_text) fail('THREE_PICKS_V2_FORMAT_MISMATCH', `$.product_presentations[${index}].fact_badge`, item.fact_badge)
     bounded(item.display_name, 4, LIMITS.displayName, `$.product_presentations[${index}].display_name`)
@@ -242,5 +269,6 @@ function validateFormattedThreePicksV5Output(plan, input) {
 
 module.exports = { ARCHETYPE, DEFAULT_MODEL, LAYOUT_ID, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION,
   LIMITS, MANIFEST_VERSION, PROMPT_VERSION, SAFE_REASONS, SCHEMA_VERSION, SYSTEM_PROMPT, TEMPLATE_ID,
-  THREE_PICKS_V2_JSON_SCHEMA, ThreePicksV5ValidationError, formatThreePicksV5Plan, narrationSegments,
+  THREE_PICKS_V2_JSON_SCHEMA, ThreePicksV5ValidationError, formatThreePicksV5Plan, narrationSegments, plannerInput,
+  responseSchemaForInput,
   planNarrationSegments, validateFormattedThreePicksV5Output, validateThreePicksV5PlannerOutput }
