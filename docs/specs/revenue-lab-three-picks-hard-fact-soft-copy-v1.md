@@ -24,6 +24,8 @@ The server splits verified facts into complete semantic candidates. Each candida
 
 The initial allowlist is `feature`, `quantity`, `duration`, `model`, `grade`, `material`, `connection`, `magnet_grade`, and `count`. Ambiguous claims remain soft evidence and are never coerced into typed facts. Text visible only inside product images is not evidence.
 
+Quantitative typed facts retain every material qualifier present in the source. Duration facts preserve the item quantity and unit, duration value and unit, source approximation, maximum/minimum bound, estimate wording, and structured conditions such as per-day usage, usage count, or an explicit usage environment. The compiler never invents a qualifier. Canonical badge text must include every material qualifier; if the complete badge cannot fit the existing one-line 12-character contract, that duration fact is not selectable as a badge rather than being shortened into a misleading statement.
+
 ## Canonical identity
 
 Every product receives one to three server-generated identity candidates. Candidates are category identities derived from the frozen product title, excluding merchant names, SEO duplication, promotional terms, and model-only tokens. If no safe candidate can be produced, enqueue stops with `IDENTITY_CANDIDATE_MISSING`; the model cannot invent a fallback identity.
@@ -32,13 +34,13 @@ Every product receives one to three server-generated identity candidates. Candid
 
 The compiler flattens typed facts into `selectable_facts[]`, where every option carries its exact `fact_id`, `source_candidate_id`, type, and canonical `display_text`. The planner selects `identity_id` only from `identity_candidates[].identity_id` and `fact_id` only from `selectable_facts[].fact_id`. Evidence candidate IDs remain a separate namespace used only by `short_appeal` and product `tts`; a candidate ID is never accepted as a `fact_id`.
 
-The planner generates only Hook, `short_appeal`, product `tts`, and CTA copy. It does not output `display_name` or `fact_badge`, and may not add hard facts that are absent from selected evidence.
+The planner generates only Hook, `short_appeal`, product `tts`, and CTA copy. It does not output `display_name` or `fact_badge`, and may not add hard facts that are absent from selected evidence. When soft copy uses a quantitative fact, it must preserve all attached material conditions and qualifiers.
 
 ## Deterministic formatter and schema-v5 validation
 
 After validating the planner selection and soft copy, the server resolves `identity_id` to `display_name` and `fact_id` to `fact_badge`. The persisted formatted plan keeps the renderer-facing fields `display_name`, `short_appeal`, `fact_badge`, and `tts`, and records selected identity/fact/candidate lineage in JSON metadata.
 
-Validation requires selected IDs to exist in the exact input snapshot. Canonical display strings must equal the compiler output. Soft copy requires explicit evidence candidate IDs and may paraphrase only supported concepts; new numbers, models, materials, interfaces, specifications, or functions are rejected. Hook and CTA cannot introduce product hard facts, and CTA must name the description destination.
+Validation requires selected IDs to exist in the exact input snapshot. Canonical display strings must equal the compiler output. Soft copy requires explicit evidence candidate IDs and may paraphrase only supported concepts; new numbers, models, materials, interfaces, specifications, or functions are rejected. A quantitative duration claim must match the typed value, units, approximation, bound, estimate, and every material condition. Omitting a material condition or adding an absent approximation is rejected. Hook and CTA cannot introduce product hard facts, and CTA must name the description destination.
 
 ## Persistence and compatibility
 
@@ -49,6 +51,7 @@ Existing v3/v4 validators remain unchanged for historical and in-flight requests
 ## Acceptance criteria
 
 - LED, N56 magnet grade, duration, quantity/count, and USB connection examples compile to typed facts and deterministic badges.
+- Duration facts preserve material conditions and qualifiers; canonical badge and soft copy cannot omit them.
 - Ambiguous evidence remains untyped.
 - Canonical identity candidates exclude merchant, SEO duplicate, and model-only output; missing identity fails closed.
 - Planner Structured Outputs contain IDs and soft copy, never free `display_name` or `fact_badge`.

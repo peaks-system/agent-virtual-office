@@ -1,9 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMultiProductShortsV2Client } from '../scripts/revenue-lab/multi-product-shorts-v2-client.cjs'
+import { plannerInput } from '../scripts/revenue-lab/multi-product-shorts-v2-schema-v5.cjs'
 
 const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 
 describe('Three Picks planner-v4 client dispatch', () => {
+  it('preserves typed duration conditions in planner selectable facts', () => {
+    const product = {
+      product_set_item_id: uuid(1), presentation_order: 1,
+      identity_candidates: [{ identity_id: `${uuid(1)}:identity:aroma`, display_name: '車載アロマ' }],
+      fact_candidates: [{ id: 'summary-1', verified_fact_ref: 'summary', text: '1本につき2週間(1日2h利用)',
+        source_anchor: '1本につき2週間(1日2h利用)' }],
+      selectable_facts: [{ fact_id: 'summary-1:duration:usage_duration', source_candidate_id: 'summary-1',
+        type: 'duration', key: 'usage_duration', display_text: '1日2hで2週間', canonical_value: {
+          amount: 1, amount_unit: '本', duration: 2, duration_unit: '週間', approximate: false,
+          conditions: [{ type: 'usage_per_day', value: 2, unit: 'hour' }], bound: null, estimate: false,
+        } }],
+    }
+    expect(plannerInput({ products: [product] }).products[0].selectable_facts[0].canonical_value.conditions)
+      .toEqual([{ type: 'usage_per_day', value: 2, unit: 'hour' }])
+  })
+
   it('uses schema-v5 for new input and returns the deterministic formatted plan', async () => {
     const products = [1, 2, 3].map(index => ({
       product_set_item_id: uuid(index), presentation_order: index, allowed_verified_fact_refs: ['summary'],
@@ -47,5 +64,6 @@ describe('Three Picks planner-v4 client dispatch', () => {
     expect(productSchemas[0].properties.fact_id.enum).not.toContain('summary-1')
     expect(productSchemas[0].properties.identity_id.enum).toEqual([products[0].identity_candidates[0].identity_id])
     expect(JSON.stringify(request.text.format.schema)).not.toContain('uniqueItems')
+    expect(request.input[0].content).toContain('Material conditions and qualifiers')
   })
 })

@@ -62,6 +62,21 @@ function v5Fixture() {
   return { products, plan }
 }
 
+function conditionalDurationFixture({ approximate = false } = {}) {
+  const fixture = v5Fixture()
+  const text = `フレグランスボトル1本につき${approximate ? '約' : ''}2週間(1日2h利用)`
+  const product = typedProduct(3, '車用 カーアロマディフューザー USB式', text)
+  fixture.products[2] = product
+  const item = fixture.plan.product_presentations[2]
+  item.identity_id = product.identity_candidates[0].identity_id
+  item.fact_id = product.selectable_facts.find(fact => fact.type === 'duration').fact_id
+  item.short_appeal = `1日2時間使用で1本${approximate ? '約' : ''}2週間使える`
+  item.short_appeal_evidence_ids = ['summary-1']
+  item.tts = `1日2時間の使用で、ボトル1本${approximate ? '約' : ''}2週間使えます。`
+  item.tts_evidence_ids = ['summary-1']
+  return fixture
+}
+
 describe('Three Picks v2 hard fact / soft copy architecture', () => {
   it.each([
     ['LED evidence', '暗闇でも安心のLEDライト付き', { type: 'feature', key: 'led', canonical_value: true, display_text: 'LED搭載' }],
@@ -121,6 +136,54 @@ describe('Three Picks v2 hard fact / soft copy architecture', () => {
     ]))
   })
 
+  it('retains a material per-day usage condition in canonical duration data and badge copy', () => {
+    const [fact] = compileTypedFacts({ candidateId: 'summary-1',
+      text: 'フレグランスボトル1本につき2週間(1日2h利用)' }).filter(item => item.type === 'duration')
+    expect(fact).toMatchObject({ canonical_value: {
+      amount: 1, amount_unit: '本', duration: 2, duration_unit: '週間', approximate: false,
+      conditions: [{ type: 'usage_per_day', value: 2, unit: 'hour' }],
+    }, display_text: '1日2hで2週間' })
+  })
+
+  it.each([
+    ['1本で最大2週間', { bound: 'maximum', estimate: false, conditions: [] }, '1本最大2週間'],
+    ['1本で2週間が目安', { bound: null, estimate: true, conditions: [] }, '1本2週間目安'],
+    ['1本につき2週間(10回使用時)', { bound: null, estimate: false,
+      conditions: [{ type: 'usage_count', value: 10, unit: 'time' }] }, '10回使用で2週間'],
+    ['1本につき2週間(特定条件下)', { bound: null, estimate: false,
+      conditions: [{ type: 'usage_environment', value: '特定条件下' }] }, '特定条件下で2週間'],
+  ])('retains duration material qualifier: %s', (text, expected, displayText) => {
+    const [fact] = compileTypedFacts({ candidateId: 'summary-1', text }).filter(item => item.type === 'duration')
+    expect(fact).toMatchObject({ canonical_value: expected, display_text: displayText })
+  })
+
+  it('requires material duration conditions in short appeal and product TTS', () => {
+    const { products, plan } = conditionalDurationFixture()
+    const validAppeal = plan.product_presentations[2].short_appeal
+    expect(() => validateThreePicksV5PlannerOutput(plan, { products })).not.toThrow()
+    plan.product_presentations[2].short_appeal = 'ボトル1本で2週間使える'
+    expect(() => validateThreePicksV5PlannerOutput(plan, { products })).toThrowError(expect.objectContaining({
+      code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', product_index: 3,
+      field_path: '$.product_presentations[2].short_appeal',
+    }))
+    plan.product_presentations[2].short_appeal = validAppeal
+    plan.product_presentations[2].tts = 'ボトル1本で2週間使えます。'
+    expect(() => validateThreePicksV5PlannerOutput(plan, { products })).toThrowError(expect.objectContaining({
+      code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM', product_index: 3,
+      field_path: '$.product_presentations[2].tts',
+    }))
+  })
+
+  it('rejects an invented approximation qualifier and accepts one present in source evidence', () => {
+    const exact = conditionalDurationFixture()
+    exact.plan.product_presentations[2].short_appeal = '1日2時間使用で1本約2週間'
+    expect(() => validateThreePicksV5PlannerOutput(exact.plan, { products: exact.products }))
+      .toThrowError(expect.objectContaining({ code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM' }))
+
+    const approximate = conditionalDurationFixture({ approximate: true })
+    expect(() => validateThreePicksV5PlannerOutput(approximate.plan, { products: approximate.products })).not.toThrow()
+  })
+
   it.each([
     ['付属品×2', { value: 2, unit: null }, '×2'],
     ['交換品2個', { value: 2, unit: '個' }, '2個'],
@@ -157,7 +220,7 @@ describe('Three Picks v2 hard fact / soft copy architecture', () => {
       expect.objectContaining({ key: 'magnetic_fixation' }),
     ]))
     expect(product3.selectable_facts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'duration', display_text: '1本2週間' }),
+      expect.objectContaining({ type: 'duration', display_text: '1日2hで2週間' }),
     ]))
     expect(product2.fact_candidates.flatMap(candidate => candidate.facts).some(fact => fact.type === 'magnet_grade')).toBe(false)
   })

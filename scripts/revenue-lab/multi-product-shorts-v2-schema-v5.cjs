@@ -11,6 +11,7 @@ const SYSTEM_PROMPT = `Create natural Japanese soft copy for a three-product You
 The server fixes the template and deterministically formats product identities and fact badges. Select identity_id exactly from that product's identity_candidates[].identity_id and fact_id exactly from that product's selectable_facts[].fact_id. Never output display_name or fact_badge.
 fact_candidates[].id values are evidence candidate IDs for soft-copy grounding only. Never use a fact_candidates[].id as fact_id. selectable_facts[].source_candidate_id is lineage metadata, not a selectable fact_id.
 Generate only the shared Hook, one short_appeal and one product tts per product, and the CTA. For each product, cite one to three existing evidence candidate IDs separately for short_appeal and tts.
+Material conditions and qualifiers attached to quantitative facts must not be omitted. Preserve usage-per-day, usage-count, environment, maximum/minimum, estimate, and approximation qualifiers exactly; never add an approximation that is absent from the source fact.
 Do not invent numbers, models, grades, materials, quantities, interfaces, functions, or other hard specifications. Soft copy may paraphrase or omit concepts from the selected evidence but may not add a new product claim. Never use image text as evidence.
 Hook display and narration must express the shared theme, contain no product hard fact, and remain at most 14 characters. CTA must explicitly send viewers to the description, normally 気になる商品は概要欄へ. Do not output coordinates, durations, effects, providers, rankings, prices, reviews, or URLs.`
 
@@ -123,7 +124,7 @@ function bounded(value, minimum, maximum, path, evidenceIds = []) {
 
 const CONCEPTS = Object.freeze([
   ['night', /(?:夜間|夜|暗闇|暗い車内)/gu],
-  ['usable', /(?:問題なく(?:ご)?使用(?:頂け|でき)|使用でき|使いやす|使え|便利)/gu],
+  ['usable', /(?:問題なく(?:ご)?使用(?:頂け|でき)|使用でき|使いやす|使え|利用|便利)/gu],
   ['light', /(?:LEDライト|LED|ライトがつく|ライト|点灯)/giu],
   ['open', /(?:(?:ふた|蓋|ゴミ箱)を開け|開く)/gu],
   ['smartphone', /(?:スマートフォン|スマホ|携帯電話)/gu],
@@ -162,8 +163,44 @@ function selectedFact(product, factId) {
   return { fact, candidate }
 }
 
+function durationUnitPattern(unit) {
+  if (unit === 'か月') return '(?:か月|ヶ月|月)'
+  if (unit === '時間') return '(?:時間|h)'
+  return unit.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+function durationFactMatchesClaim(claim, fact) {
+  const value = fact.canonical_value || {}
+  const amount = new RegExp(`${value.amount}\\s*${durationUnitPattern(value.amount_unit)}`, 'iu')
+  const duration = new RegExp(`${value.duration}\\s*${durationUnitPattern(value.duration_unit)}`, 'iu')
+  if (!amount.test(claim) || !duration.test(claim)) return false
+  const approximate = /(?:約|およそ)/u.test(claim)
+  if (approximate !== Boolean(value.approximate)) return false
+  const estimate = /目安/u.test(claim)
+  if (estimate !== Boolean(value.estimate)) return false
+  const maximum = /(?:最大|最長)/u.test(claim)
+  const minimum = /(?:最小|最短)/u.test(claim)
+  if (maximum !== (value.bound === 'maximum') || minimum !== (value.bound === 'minimum')) return false
+  return (value.conditions || []).every(condition => {
+    if (condition.type === 'usage_per_day') {
+      return new RegExp(`1\\s*日(?:あたり|当たり)?[^。]{0,12}${condition.value}\\s*(?:h|時間)`, 'iu').test(claim)
+    }
+    if (condition.type === 'usage_count') return new RegExp(`${condition.value}\\s*回`, 'u').test(claim)
+    if (condition.type === 'usage_environment') return normalized(claim).includes(normalized(condition.value))
+    return false
+  })
+}
+
+function durationClaimsGrounded(claim, candidates) {
+  const durationClaim = /\d+(?:\.\d+)?\s*(?:本|個|回|枚|台)[^。]{0,24}\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間)|\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間)[^。]{0,24}\d+(?:\.\d+)?\s*(?:本|個|回|枚|台)/u.test(claim)
+  if (!durationClaim) return true
+  const durationFacts = candidates.flatMap(candidate => candidate.facts || []).filter(fact => fact.type === 'duration')
+  return durationFacts.some(fact => durationFactMatchesClaim(claim, fact))
+}
+
 function softCopyIsGrounded(value, candidates) {
   const claim = compact(value)
+  if (!durationClaimsGrounded(claim, candidates)) return false
   const evidence = candidates.map(candidate => compact(candidate.text)).join(' ')
   const normalizedEvidence = normalized(evidence)
   const hardClaims = claim.match(HARD_PATTERN) || []

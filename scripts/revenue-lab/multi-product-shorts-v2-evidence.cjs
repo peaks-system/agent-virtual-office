@@ -91,6 +91,30 @@ const MATERIALS = Object.freeze([
   ['stainless', /ステンレス製?/u, 'ステンレス製'], ['steel', /(?:スチール|鋼|鉄)製/u, 'スチール製'],
   ['silicone', /シリコン製?/u, 'シリコン製'], ['glass', /ガラス製?/u, 'ガラス製'],
 ])
+const MAX_FACT_BADGE_LENGTH = 12
+
+function durationConditions(source) {
+  const conditions = []
+  const perDay = source.match(/1\s*日(?:あたり|当たり)?\s*(\d+(?:\.\d+)?)\s*(?:h|時間)\s*(?:利用|使用)?/iu)
+  if (perDay) conditions.push({ type: 'usage_per_day', value: Number(perDay[1]), unit: 'hour' })
+  const usageCount = source.match(/(\d+)\s*回\s*(?:利用|使用)(?:時|した場合|で)?/u)
+  if (usageCount) conditions.push({ type: 'usage_count', value: Number(usageCount[1]), unit: 'time' })
+  const environment = source.match(/(?:特定条件下|常温環境|室内環境|屋外環境)/u)
+  if (environment) conditions.push({ type: 'usage_environment', value: environment[0] })
+  return conditions
+}
+
+function durationDisplay(value) {
+  const daily = value.conditions.find(condition => condition.type === 'usage_per_day')
+  const count = value.conditions.find(condition => condition.type === 'usage_count')
+  const environment = value.conditions.find(condition => condition.type === 'usage_environment')
+  const condition = daily ? `1日${daily.value}hで` : count ? `${count.value}回使用で`
+    : environment ? `${environment.value}で` : `${value.amount}${value.amount_unit}`
+  const bound = value.bound === 'maximum' ? '最大' : value.bound === 'minimum' ? '最小' : ''
+  const approximation = value.approximate ? '約' : ''
+  const estimate = value.estimate ? '目安' : ''
+  return `${condition}${bound}${approximation}${value.duration}${value.duration_unit}${estimate}`
+}
 
 function compileTypedFacts({ candidateId, text }) {
   const source = normalizeEvidenceText(text)
@@ -111,17 +135,23 @@ function compileTypedFacts({ candidateId, text }) {
   const magneticFixation = /(?:マグネット\s*(?:固定|式)|磁石\s*固定|強力\s*(?:マグネット|磁石)|(?:鉄壁\s*)?磁力[^。]{0,16}マグネット|\bN\d{2}\b\s*(?:ネオジム)?\s*(?:磁石|マグネット))/iu
   if (magneticFixation.test(source)) add('feature', 'magnetic_fixation', true, 'マグネット固定')
 
-  const duration = source.match(/(\d+)\s*(本|個|回|枚|台)\s*(?:につき|あたり|当たり|で)?\s*(約)?\s*(\d+(?:\.\d+)?)\s*(日|週間|か月|ヶ月|月|時間)/u)
-    || (() => {
-      const reverse = source.match(/(約)?\s*(\d+(?:\.\d+)?)\s*(日|週間|か月|ヶ月|月|時間)\s*[／/]\s*(\d+)\s*(本|個|回|枚|台)/u)
-      return reverse ? [reverse[0], reverse[4], reverse[5], reverse[1], reverse[2], reverse[3]] : null
-    })()
+  const forwardDuration = source.match(/(\d+)\s*(本|個|回|枚|台)\s*(?:につき|あたり|当たり|で)?\s*(最大|最長|最小|最短)?\s*(約)?\s*(\d+(?:\.\d+)?)\s*(日|週間|か月|ヶ月|月|時間)/u)
+  const reverseDuration = forwardDuration ? null
+    : source.match(/(最大|最長|最小|最短)?\s*(約)?\s*(\d+(?:\.\d+)?)\s*(日|週間|か月|ヶ月|月|時間)\s*[／/]\s*(\d+)\s*(本|個|回|枚|台)/u)
+  const duration = forwardDuration ? { amount: forwardDuration[1], amountUnit: forwardDuration[2],
+    bound: forwardDuration[3], approximate: forwardDuration[4], duration: forwardDuration[5], durationUnit: forwardDuration[6] }
+    : reverseDuration ? { amount: reverseDuration[5], amountUnit: reverseDuration[6],
+      bound: reverseDuration[1], approximate: reverseDuration[2], duration: reverseDuration[3], durationUnit: reverseDuration[4] }
+      : null
   if (duration) {
-    const durationUnit = ['月', 'ヶ月'].includes(duration[5]) ? 'か月' : duration[5]
-    const value = { amount: Number(duration[1]), amount_unit: duration[2], approximate: Boolean(duration[3]),
-      duration: Number(duration[4]), duration_unit: durationUnit }
-    add('duration', 'usage_duration', value,
-      `${duration[1]}${duration[2]}${duration[3] ? '約' : ''}${duration[4]}${value.duration_unit}`)
+    const durationUnit = ['月', 'ヶ月'].includes(duration.durationUnit) ? 'か月' : duration.durationUnit
+    const value = { amount: Number(duration.amount), amount_unit: duration.amountUnit,
+      approximate: Boolean(duration.approximate), duration: Number(duration.duration), duration_unit: durationUnit,
+      conditions: durationConditions(source),
+      bound: /(?:最大|最長)/u.test(duration.bound || '') ? 'maximum'
+        : /(?:最小|最短)/u.test(duration.bound || '') ? 'minimum' : null,
+      estimate: /目安/u.test(source) }
+    add('duration', 'usage_duration', value, durationDisplay(value))
   }
 
   const quantity = duration ? null : source.match(/(\d+)\s*(個|本|枚|台|袋|セット|ヶ(?!月))\s*(入り|入)?/u)
@@ -189,7 +219,12 @@ function prepareThreePicksV2TypedProductEvidence({ productSetItemId, productName
   const selectableFacts = factCandidates.flatMap(candidate => candidate.facts.map(fact => ({
     ...fact,
     source_candidate_id: candidate.id,
-  })))
+  }))).filter(fact => Array.from(fact.display_text).length <= MAX_FACT_BADGE_LENGTH)
+  if (selectableFacts.length === 0) {
+    throw Object.assign(new TypeError('At least one display-safe typed fact candidate is required'), {
+      code: 'TYPED_FACT_CANDIDATE_MISSING',
+    })
+  }
   return {
     ...prepared,
     identity_candidates: identityCandidates,
