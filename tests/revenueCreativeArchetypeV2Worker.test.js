@@ -15,7 +15,9 @@ describe('Creative Archetype v2 worker routing', () => {
     await expect(handler({ payload: { creative_archetype_request_id: request.id } })).resolves.toMatchObject({ planId: uuid(2) })
     expect(v1.plan).not.toHaveBeenCalled()
     expect(v2.plan).toHaveBeenCalledWith(request.inputSnapshot)
+    expect(store.persistThreePicksV2Success).toHaveBeenCalledOnce()
     expect(store.persistThreePicksV2Success).toHaveBeenCalledWith(request, result)
+    expect(store.persistThreePicksFailure).not.toHaveBeenCalled()
   })
 
   it('preserves allowlisted schema-v5 lineage diagnostics for future bounded repair', async () => {

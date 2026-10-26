@@ -330,6 +330,21 @@
   letter-spacing: .08em;
 }
 
+.revenue-copy-mode {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(30, 112, 82, .09);
+  color: #1e7052;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.revenue-copy-mode.is-ai_repaired { background: rgba(171, 116, 20, .12); color: #80570f; }
+.revenue-copy-mode.is-canonical_fallback { background: rgba(45, 73, 105, .12); color: #2d4969; }
+
 .revenue-three-picks-lineage,
 .revenue-composition-status {
   display: flex;

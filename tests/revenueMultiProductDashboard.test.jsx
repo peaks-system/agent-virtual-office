@@ -97,8 +97,17 @@ describe('Multi-product Shorts Dashboard', () => {
     const campaign = { id: 'campaign-v2', name: 'Creative Archetype v2', status: 'active', lineageKind: 'product_set', origins: [], iterations: [{
       id: 'iteration-v2', iterationNumber: 1, status: 'draft', product: null, productSet, publication: null,
       productionPlans: [], archetypePlans: [{ requestId: 'request-v2', archetype: 'three_picks_v2', revisionNumber: 1,
-        status: 'succeeded', planId: 'plan-v2', schemaVersion: 'multi-product-shorts-plan-v4', output: { hook: { display_text: '3つを紹介', tts: '車内快適グッズ三選' }, product_presentations: presentations,
-          cta: { display_text: '詳細を見る', tts: '気になる商品は概要欄へ' } }, productCards: [], audioArtifacts: Array.from({ length: 15 }, (_, index) => ({
+        status: 'succeeded', planId: 'plan-v2', schemaVersion: 'multi-product-shorts-plan-v5', output: { hook: { display_text: '3つを紹介', tts: '車内快適グッズ三選' }, product_presentations: presentations,
+          cta: { display_text: '詳細を見る', tts: '気になる商品は概要欄へ' }, soft_copy_fields: [
+            { field: 'hook', generation_mode: 'ai_generated', repair_count: 0 },
+            { field: 'products[0].short_appeal', generation_mode: 'ai_generated', repair_count: 0 },
+            { field: 'products[0].tts', generation_mode: 'ai_repaired', repair_count: 1 },
+            { field: 'products[1].short_appeal', generation_mode: 'canonical_fallback', repair_count: 1 },
+            { field: 'products[1].tts', generation_mode: 'canonical_fallback', repair_count: 1 },
+            { field: 'products[2].short_appeal', generation_mode: 'ai_generated', repair_count: 0 },
+            { field: 'products[2].tts', generation_mode: 'ai_generated', repair_count: 0 },
+            { field: 'cta', generation_mode: 'ai_generated', repair_count: 0 },
+          ] }, productCards: [], audioArtifacts: Array.from({ length: 15 }, (_, index) => ({
             id: `audio-${index + 1}`, creativeArchetypePlanId: 'plan-v2', sceneId: index < 3 ? 'hook' : `product-${Math.ceil((index - 2) / 4)}`,
             segmentId: index < 3 ? `hook-${index + 1}` : `product-${index - 2}`, segmentOrder: index + 1,
             inputText: `ナレーションsegment ${index + 1}`, status: 'planned',
@@ -125,6 +134,9 @@ describe('Multi-product Shorts Dashboard', () => {
     expect(markup).toContain('ナレーション3')
     expect(markup).toContain('CTA TTS')
     expect(markup).toContain('気になる商品は概要欄へ')
+    expect(markup).toContain('AI生成')
+    expect(markup).toContain('自動修正済み')
+    expect(markup).toContain('安全文へ置換')
     expect(markup).toMatch(/<button[^>]*>この原稿で音声を生成<\/button>/)
     expect(markup).not.toContain('v2 rendererはFoundation状態です')
     expect(markup).not.toContain('product-card-v3')

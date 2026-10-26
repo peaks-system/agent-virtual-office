@@ -1,7 +1,7 @@
 ---
 status: frozen
-version: 1.0
-date: 2026-10-25
+version: 1.1
+date: 2026-10-26
 classification: architecture-change
 ---
 
@@ -42,11 +42,23 @@ After validating the planner selection and soft copy, the server resolves `ident
 
 Validation requires selected IDs to exist in the exact input snapshot. Canonical display strings must equal the compiler output. Soft copy requires explicit evidence candidate IDs and may paraphrase only supported concepts; new numbers, models, materials, interfaces, specifications, or functions are rejected. A quantitative duration claim must match the typed value, units, approximation, bound, estimate, and every material condition. Omitting a material condition or adding an absent approximation is rejected. Hook and CTA cannot introduce product hard facts, and CTA must name the description destination.
 
+## Progressive fallback and human review
+
+Every new schema-v5 request completes its eight soft-copy fields through a bounded three-level process inside the same worker job and Revision:
+
+1. Level 1 validates the creative Planner v4 output.
+2. Level 2 sends only rejected field paths to one grounded repair request. Successful fields are immutable, and each rejected field receives at most one repair attempt.
+3. Level 3 replaces any still-invalid field with deterministic canonical safe copy derived only from the selected identity, typed fact, material qualifiers, and source candidate lineage. Hook and CTA use fixed generic templates with no product facts.
+
+Unknown or mismatched identity IDs, fact IDs, products, or presentation order remain hard failures and never enter repair. Soft-copy safety rules are identical at Levels 1 and 2; repair reduces writing freedom, not validation strength. Level 3 is accepted only when its value exactly equals the deterministic formatter output. A repair provider or response failure also resolves through Level 3, so no repair loop is possible.
+
+The completed Plan stores one `soft_copy_fields[]` record for Hook, each product `short_appeal` and `tts`, and CTA. Records use `ai_generated`, `ai_repaired`, or `canonical_fallback`, include `repair_count`, and retain product, identity, fact, and evidence IDs where applicable. The normal pre-TTS review shows these modes as `AI生成`, `自動修正済み`, or `安全文へ置換`. This metadata also provides stable field identity for a future human partial-edit workflow; editing is not included here.
+
 ## Persistence and compatibility
 
-Typed evidence and identity candidates are stored inside the existing request `input_snapshot` JSONB. Planner selection, formatted output, and lineage metadata are stored inside the existing plan `output_json` JSONB. No migration or RPC/API contract change is required.
+Typed evidence and identity candidates are stored inside the existing request `input_snapshot` JSONB. Planner selection, formatted output, field generation modes, and lineage metadata are stored inside the existing plan `output_json` JSONB. No migration or RPC/API contract change is required.
 
-Existing v3/v4 validators remain unchanged for historical and in-flight requests. Stored render manifests remain authoritative. No bounded repair is included in this version; safe validation diagnostics retain field path, candidate IDs, and reason for a future bounded soft-copy repair phase.
+Existing v3/v4 validators remain unchanged for historical and in-flight requests. Revisions 1–16 are not retried, rewritten, backfilled, or revalidated, and stored render manifests remain authoritative. A single user request still creates exactly one Revision; internal repair and fallback never enqueue another request.
 
 ## Acceptance criteria
 
@@ -56,12 +68,14 @@ Existing v3/v4 validators remain unchanged for historical and in-flight requests
 - Canonical identity candidates exclude merchant, SEO duplicate, and model-only output; missing identity fails closed.
 - Planner Structured Outputs contain IDs and soft copy, never free `display_name` or `fact_badge`.
 - Unknown identity/fact IDs fail with safe diagnostics.
+- Level 1 success makes no repair call; invalid soft fields receive at most one Level 2 call and otherwise use deterministic Level 3 copy.
+- Successful fields remain byte-for-byte unchanged, and field generation mode plus lineage is persisted for human review.
 - The formatter emits the current renderer-facing plan shape.
 - v4 and earlier requests remain on their existing paths; manifest-v3/layout-v2 and real FFmpeg rendering remain compatible.
 
 ## Non-goals
 
-No bounded repair, DB/RPC/migration change, ElevenLabs change, Final Composer redesign, Publication/Analytics change, Three Picks v1 change, I2V change, Live generation, DB write, commit, push, or merge.
+No interactive field editing, repeated repair loop, DB/RPC/migration change, ElevenLabs change, Final Composer redesign, Publication/Analytics change, Three Picks v1 change, I2V change, Live generation, DB write, commit, push, or merge.
 
 ## Future consideration
 

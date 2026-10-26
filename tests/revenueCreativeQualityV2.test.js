@@ -10,6 +10,7 @@ import {
   PROMPT_VERSION,
   SCHEMA_VERSION,
   THREE_PICKS_V2_JSON_SCHEMA,
+  completeThreePicksV5Plan,
   formatThreePicksV5Plan,
   validateThreePicksV5PlannerOutput,
 } from '../scripts/revenue-lab/multi-product-shorts-v2-schema-v5.cjs'
@@ -78,6 +79,47 @@ function conditionalDurationFixture({ approximate = false } = {}) {
 }
 
 describe('Three Picks v2 hard fact / soft copy architecture', () => {
+  it('builds bounded deterministic fallback for a non-duration typed fact', () => {
+    const { products, plan } = v5Fixture()
+    const product = products[0]
+    const fact = { fact_id: 'summary-1:quantity:count', source_candidate_id: 'summary-1',
+      type: 'quantity', key: 'count', canonical_value: { value: 2, unit: null }, display_text: '×2' }
+    product.fact_candidates[0].text = '付属品×2'
+    product.fact_candidates[0].source_anchor = '付属品×2'
+    product.fact_candidates[0].facts = [fact]
+    product.selectable_facts = [fact]
+    plan.product_presentations[0].fact_id = fact.fact_id
+    plan.product_presentations[0].short_appeal = '自動で使える付属品'
+    plan.product_presentations[0].tts = '自動機能を搭載した付属品です。'
+    const completed = completeThreePicksV5Plan(plan, { products })
+    expect(completed.product_presentations[0]).toMatchObject({
+      short_appeal: '付属数量は2です', tts: '車載ダストボックスは、付属数量は2です。',
+    })
+    expect(completed.soft_copy_fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'products[0].short_appeal', generation_mode: 'canonical_fallback' }),
+      expect.objectContaining({ field: 'products[0].tts', generation_mode: 'canonical_fallback' }),
+    ]))
+  })
+
+  it('keeps duration approximation, estimate, and usage conditions in canonical fallback', () => {
+    const { products, plan } = conditionalDurationFixture({ approximate: true })
+    const item = plan.product_presentations[2]
+    const fact = products[2].selectable_facts.find(candidate => candidate.fact_id === item.fact_id)
+    fact.canonical_value.estimate = true
+    fact.display_text = '1日2hで約2週間目安'
+    const sourceFact = products[2].fact_candidates.flatMap(candidate => candidate.facts)
+      .find(candidate => candidate.fact_id === item.fact_id)
+    sourceFact.canonical_value.estimate = true
+    sourceFact.display_text = fact.display_text
+    item.short_appeal = '2週間使える'
+    item.tts = 'ボトル1本を2週間使えます。'
+    const completed = completeThreePicksV5Plan(plan, { products })
+    expect(completed.product_presentations[2]).toMatchObject({
+      short_appeal: '1日2時間使用で1本約2週間目安',
+      tts: '車載アロマディフューザーは、1日2時間の使用で1本あたり約2週間が目安です。',
+    })
+  })
+
   it.each([
     ['LED evidence', '暗闇でも安心のLEDライト付き', { type: 'feature', key: 'led', canonical_value: true, display_text: 'LED搭載' }],
     ['N56 magnet grade', 'N56ネオジム磁石を採用', { type: 'magnet_grade', key: 'magnet_grade', canonical_value: 'N56', display_text: 'N56磁石' }],

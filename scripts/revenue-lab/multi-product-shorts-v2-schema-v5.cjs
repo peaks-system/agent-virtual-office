@@ -15,6 +15,9 @@ Material conditions and qualifiers attached to quantitative facts must not be om
 Do not invent numbers, models, grades, materials, quantities, interfaces, functions, or other hard specifications. Soft copy may paraphrase or omit concepts from the selected evidence but may not add a new product claim. Never use image text as evidence.
 Hook display and narration must express the shared theme, contain no product hard fact, and remain at most 14 characters. CTA must explicitly send viewers to the description, normally 気になる商品は概要欄へ. Do not output coordinates, durations, effects, providers, rankings, prices, reviews, or URLs.`
 
+const REPAIR_SYSTEM_PROMPT = `Repair only the rejected Three Picks soft-copy fields supplied by the server.
+Return exactly one replacement for every listed field and do not rewrite any successful field. Stay close to the selected verified evidence, canonical identity, and typed fact. Preserve every material condition and qualifier. Never add numbers, functions, models, materials, specifications, grades, interfaces, or stronger claims. Use the exact field keys and evidence candidate IDs supplied by the server.`
+
 const evidenceIdsSchema = { type: 'array', minItems: 1, maxItems: 3,
   items: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,160}$' } }
 const THREE_PICKS_V2_JSON_SCHEMA = { type: 'object', additionalProperties: false,
@@ -191,8 +194,10 @@ function durationFactMatchesClaim(claim, fact) {
   })
 }
 
+const DURATION_CLAIM_PATTERN = /\d+(?:\.\d+)?\s*(?:本|個|回|枚|台)[^。]{0,24}\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間)|\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間)[^。]{0,24}\d+(?:\.\d+)?\s*(?:本|個|回|枚|台)/u
+
 function durationClaimsGrounded(claim, candidates) {
-  const durationClaim = /\d+(?:\.\d+)?\s*(?:本|個|回|枚|台)[^。]{0,24}\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間)|\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間)[^。]{0,24}\d+(?:\.\d+)?\s*(?:本|個|回|枚|台)/u.test(claim)
+  const durationClaim = DURATION_CLAIM_PATTERN.test(claim)
   if (!durationClaim) return true
   const durationFacts = candidates.flatMap(candidate => candidate.facts || []).filter(fact => fact.type === 'duration')
   return durationFacts.some(fact => durationFactMatchesClaim(claim, fact))
@@ -212,24 +217,16 @@ function softCopyIsGrounded(value, candidates) {
   if (/(?:種類|選択肢)/u.test(evidence)) evidenceConcepts.add('choose')
   const direct = candidates.some(candidate => normalized(candidate.text).includes(normalized(claim))
     || normalized(claim).includes(normalized(candidate.text)))
-  return direct || (claimConcepts.size > 0 && [...claimConcepts].every(concept => evidenceConcepts.has(concept)))
+  return direct || (DURATION_CLAIM_PATTERN.test(claim) && claimConcepts.size === 0)
+    || (claimConcepts.size > 0 && [...claimConcepts].every(concept => evidenceConcepts.has(concept)))
 }
 
-function validateThreePicksV5PlannerOutput(output, input) {
+function validateThreePicksV5HardContract(output, input) {
   if (!output || output.archetype !== ARCHETYPE || !Array.isArray(output.product_presentations)
     || output.product_presentations.length !== 3) fail('THREE_PICKS_V2_INVALID_OUTPUT', '$.product_presentations')
   const products = Array.isArray(input?.products) ? input.products : []
   if (products.length !== 3) fail('THREE_PICKS_V2_INVALID_INPUT', '$input.products')
   bounded(output.theme, 1, 48, '$.theme')
-  bounded(output.hook?.display_text, 1, LIMITS.hookDisplay, '$.hook.display_text')
-  const hookTts = bounded(output.hook?.tts, 1, LIMITS.hookTts, '$.hook.tts')
-  if (HOOK_HARD_FACT_PATTERN.test(`${output.hook.display_text} ${hookTts}`)) fail('THREE_PICKS_V2_HOOK_HARD_FACT', '$.hook')
-  if (narrationSegments('hook', hookTts).length !== 1) fail('THREE_PICKS_V2_HOOK_SEGMENT_COUNT', '$.hook.tts', hookTts)
-  const ctaDisplay = bounded(output.cta?.display_text, 1, LIMITS.ctaDisplay, '$.cta.display_text')
-  const ctaTts = bounded(output.cta?.tts, 1, LIMITS.ctaTts, '$.cta.tts')
-  if (HOOK_HARD_FACT_PATTERN.test(`${ctaDisplay} ${ctaTts}`)) fail('THREE_PICKS_V2_CTA_HARD_FACT', '$.cta')
-  if (!ctaDisplay.includes('概要欄') || !ctaTts.includes('概要欄')) fail('THREE_PICKS_V2_CTA_DESTINATION_REQUIRED', '$.cta', `${ctaDisplay} / ${ctaTts}`)
-
   const byId = new Map(products.map(product => [product.product_set_item_id, product]))
   const seen = new Set()
   output.product_presentations.forEach((item, index) => {
@@ -240,22 +237,225 @@ function validateThreePicksV5PlannerOutput(output, input) {
     const identity = (product.identity_candidates || []).find(candidate => candidate.identity_id === item.identity_id)
     if (!identity) fail('THREE_PICKS_V2_IDENTITY_CANDIDATE_UNKNOWN', `${path}.identity_id`, item.identity_id)
     if (!selectedFact(product, item.fact_id)) fail('THREE_PICKS_V2_FACT_UNKNOWN', `${path}.fact_id`, item.fact_id)
-    for (const [field, idsField, minimum, maximum] of [
-      ['short_appeal', 'short_appeal_evidence_ids', 8, LIMITS.shortAppeal],
-      ['tts', 'tts_evidence_ids', 12, LIMITS.productTts],
-    ]) {
-      const ids = item[idsField]
-      const value = bounded(item[field], minimum, maximum, `${path}.${field}`, ids)
-      const selected = selectedCandidates(product, ids, `${path}.${idsField}`)
-      if (!softCopyIsGrounded(value, selected)) fail('THREE_PICKS_V2_UNGROUNDED_CLAIM', `${path}.${field}`, value, ids)
-    }
     seen.add(item.product_set_item_id)
   })
+  return { products, byId }
+}
+
+function validateHook(output) {
+  bounded(output.hook?.display_text, 1, LIMITS.hookDisplay, '$.hook.display_text')
+  const hookTts = bounded(output.hook?.tts, 1, LIMITS.hookTts, '$.hook.tts')
+  if (HOOK_HARD_FACT_PATTERN.test(`${output.hook.display_text} ${hookTts}`)) fail('THREE_PICKS_V2_HOOK_HARD_FACT', '$.hook')
+  if (narrationSegments('hook', hookTts).length !== 1) fail('THREE_PICKS_V2_HOOK_SEGMENT_COUNT', '$.hook.tts', hookTts)
+}
+
+function validateCta(output) {
+  const ctaDisplay = bounded(output.cta?.display_text, 1, LIMITS.ctaDisplay, '$.cta.display_text')
+  const ctaTts = bounded(output.cta?.tts, 1, LIMITS.ctaTts, '$.cta.tts')
+  if (HOOK_HARD_FACT_PATTERN.test(`${ctaDisplay} ${ctaTts}`)) fail('THREE_PICKS_V2_CTA_HARD_FACT', '$.cta')
+  if (!ctaDisplay.includes('概要欄') || !ctaTts.includes('概要欄')) fail('THREE_PICKS_V2_CTA_DESTINATION_REQUIRED', '$.cta', `${ctaDisplay} / ${ctaTts}`)
+}
+
+function validateProductSoftField(item, product, index, field) {
+  const path = `$.product_presentations[${index}]`
+  const idsField = field === 'short_appeal' ? 'short_appeal_evidence_ids' : 'tts_evidence_ids'
+  const minimum = field === 'short_appeal' ? 8 : 12
+  const maximum = field === 'short_appeal' ? LIMITS.shortAppeal : LIMITS.productTts
+  const ids = item[idsField]
+  const value = bounded(item[field], minimum, maximum, `${path}.${field}`, ids)
+  const selected = selectedCandidates(product, ids, `${path}.${idsField}`)
+  if (!softCopyIsGrounded(value, selected)) fail('THREE_PICKS_V2_UNGROUNDED_CLAIM', `${path}.${field}`, value, ids)
+}
+
+function softFieldDefinitions(output, input) {
+  const products = input.products
+  return [
+    { field: 'hook', validate: () => validateHook(output), rejectedValue: output.hook },
+    ...output.product_presentations.flatMap((item, index) => {
+      const product = products.find(candidate => candidate.product_set_item_id === item.product_set_item_id)
+      return ['short_appeal', 'tts'].map(name => ({ field: `products[${item.presentation_order - 1}].${name}`,
+        validate: () => validateProductSoftField(item, product, index, name), rejectedValue: item[name],
+        evidenceCandidateIds: item[name === 'short_appeal' ? 'short_appeal_evidence_ids' : 'tts_evidence_ids'],
+        product, item, name, index }))
+    }),
+    { field: 'cta', validate: () => validateCta(output), rejectedValue: output.cta },
+  ]
+}
+
+function collectSoftCopyFailures(output, input) {
+  validateThreePicksV5HardContract(output, input)
+  const failures = []
+  for (const definition of softFieldDefinitions(output, input)) {
+    try { definition.validate() }
+    catch (error) {
+      if (!(error instanceof ThreePicksV5ValidationError)) throw error
+      failures.push({ ...definition, error })
+    }
+  }
+  return failures
+}
+
+function validateThreePicksV5PlannerOutput(output, input) {
+  const failures = collectSoftCopyFailures(output, input)
+  if (failures.length) throw failures[0].error
   return output
 }
 
-function formatThreePicksV5Plan(output, input) {
-  validateThreePicksV5PlannerOutput(output, input)
+function durationSafeCopy(value, narration = false) {
+  const daily = (value.conditions || []).find(condition => condition.type === 'usage_per_day')
+  const count = (value.conditions || []).find(condition => condition.type === 'usage_count')
+  const environment = (value.conditions || []).find(condition => condition.type === 'usage_environment')
+  const prefix = daily ? `1日${daily.value}時間${narration ? 'の' : ''}使用で`
+    : count ? `${count.value}回使用で` : environment ? `${environment.value}で` : ''
+  const bound = value.bound === 'maximum' ? '最大' : value.bound === 'minimum' ? '最小' : ''
+  const approximate = value.approximate ? '約' : ''
+  const estimate = value.estimate ? '目安' : ''
+  const base = `${value.amount}${value.amount_unit}${bound}${approximate}${value.duration}${value.duration_unit}${estimate}`
+  return narration ? value.estimate
+    ? `${prefix}${value.amount}${value.amount_unit}あたり${bound}${approximate}${value.duration}${value.duration_unit}が目安です`
+    : `${prefix}${value.amount}${value.amount_unit}を${bound}${approximate}${value.duration}${value.duration_unit}使えます`
+    : `${prefix}${base}`
+}
+
+function canonicalProductCopy(product, item, field) {
+  const identity = product.identity_candidates.find(candidate => candidate.identity_id === item.identity_id)
+  const resolved = selectedFact(product, item.fact_id)
+  const fact = resolved.fact
+  let shortAppeal
+  let narration
+  if (fact.type === 'duration') {
+    shortAppeal = durationSafeCopy(fact.canonical_value)
+    narration = durationSafeCopy(fact.canonical_value, true)
+  } else if (fact.key === 'led') {
+    shortAppeal = 'LEDを搭載した仕様です'; narration = 'LEDを搭載しています'
+  } else if (fact.key === 'magnetic_fixation') {
+    shortAppeal = 'マグネットで固定できます'; narration = 'マグネットで固定できます'
+  } else if (['quantity', 'count'].includes(fact.type)) {
+    const quantity = fact.canonical_value || {}
+    shortAppeal = quantity.unit ? `${quantity.value}${quantity.unit}入りの商品です` : `付属数量は${quantity.value}です`
+    narration = shortAppeal
+  } else if (fact.type === 'material') {
+    shortAppeal = `${fact.display_text}を使用しています`; narration = shortAppeal
+  } else if (['model', 'grade', 'magnet_grade'].includes(fact.type)) {
+    shortAppeal = `${fact.display_text}を採用しています`; narration = shortAppeal
+  } else if (fact.type === 'connection') {
+    shortAppeal = `${fact.display_text}に対応しています`; narration = shortAppeal
+  } else {
+    shortAppeal = `${fact.display_text}の特徴があります`; narration = `${fact.display_text}の特徴があります`
+  }
+  const value = field === 'short_appeal' ? shortAppeal : `${identity.display_name}は、${narration}。`
+  bounded(value, field === 'short_appeal' ? 8 : 12,
+    field === 'short_appeal' ? LIMITS.shortAppeal : LIMITS.productTts, `canonical.${field}`)
+  return { value, evidence_candidate_ids: [fact.source_candidate_id || resolved.candidate.id] }
+}
+
+function canonicalReplacement(definition) {
+  if (definition.field === 'hook') return { display_text: '車内が快適になる3アイテム', tts: '車内が快適になる3アイテム' }
+  if (definition.field === 'cta') return { display_text: '気になる商品は概要欄へ', tts: '気になる商品は概要欄へ' }
+  return canonicalProductCopy(definition.product, definition.item, definition.name)
+}
+
+function repairInput(output, input, failures) {
+  return { archetype: ARCHETYPE, repair_level: 'grounded', successful_fields_immutable: true,
+    failures: failures.map(definition => {
+      const base = { field: definition.field, field_path: definition.error.field_path,
+        rejected_value: definition.rejectedValue, validation_reason: definition.error.reason,
+        selected_evidence_candidate_ids: definition.evidenceCandidateIds || [],
+        length_constraint: definition.name === 'short_appeal' ? { minimum: 8, maximum: LIMITS.shortAppeal }
+          : definition.name === 'tts' ? { minimum: 12, maximum: LIMITS.productTts }
+            : definition.field === 'hook' ? { maximum: LIMITS.hookTts } : { maximum: LIMITS.ctaTts } }
+      if (!definition.product) return base
+      const identity = definition.product.identity_candidates.find(candidate => candidate.identity_id === definition.item.identity_id)
+      const fact = selectedFact(definition.product, definition.item.fact_id)?.fact
+      const evidenceById = new Map(definition.product.fact_candidates.map(candidate => [candidate.id, candidate]))
+      return { ...base, canonical_identity: identity.display_name, selected_identity_id: definition.item.identity_id,
+        selected_fact_id: definition.item.fact_id, selected_typed_fact: fact,
+        selected_evidence: (definition.evidenceCandidateIds || []).map(id => ({ id, text: evidenceById.get(id)?.text })).filter(item => item.text) }
+    }) }
+}
+
+function repairResponseSchema(failures) {
+  const variants = failures.map(definition => definition.field === 'hook' || definition.field === 'cta'
+    ? { type: 'object', additionalProperties: false, required: ['field', 'display_text', 'tts'], properties: {
+      field: { type: 'string', const: definition.field }, display_text: { type: 'string' }, tts: { type: 'string' },
+    } }
+    : { type: 'object', additionalProperties: false, required: ['field', 'value', 'evidence_candidate_ids'], properties: {
+      field: { type: 'string', const: definition.field }, value: { type: 'string' }, evidence_candidate_ids: evidenceIdsSchema,
+    } })
+  return { type: 'object', additionalProperties: false, required: ['repairs'], properties: {
+    repairs: { type: 'array', minItems: failures.length, maxItems: failures.length, items: { anyOf: variants } },
+  } }
+}
+
+function applyReplacement(output, definition, replacement) {
+  if (definition.field === 'hook') output.hook = { display_text: replacement.display_text, tts: replacement.tts }
+  else if (definition.field === 'cta') output.cta = { display_text: replacement.display_text, tts: replacement.tts }
+  else {
+    const item = output.product_presentations[definition.index]
+    item[definition.name] = replacement.value
+    item[definition.name === 'short_appeal' ? 'short_appeal_evidence_ids' : 'tts_evidence_ids'] = [...replacement.evidence_candidate_ids]
+  }
+}
+
+function completeThreePicksV5Plan(output, input, repairOutput = null) {
+  validateThreePicksV5HardContract(output, input)
+  const draft = JSON.parse(JSON.stringify(output))
+  const initialFailures = collectSoftCopyFailures(draft, input)
+  const failedByField = new Map(initialFailures.map(definition => [definition.field, definition]))
+  const repairByField = new Map()
+  if (Array.isArray(repairOutput?.repairs)) for (const repair of repairOutput.repairs) {
+    if (failedByField.has(repair?.field) && !repairByField.has(repair.field)) repairByField.set(repair.field, repair)
+  }
+  const modes = []
+  for (const definition of softFieldDefinitions(draft, input)) {
+    const initialFailure = failedByField.get(definition.field)
+    if (!initialFailure) {
+      modes.push({ field: definition.field, generation_mode: 'ai_generated', repair_count: 0,
+        ...(definition.item ? { product_set_item_id: definition.item.product_set_item_id,
+          identity_id: definition.item.identity_id, fact_id: definition.item.fact_id,
+          evidence_candidate_ids: [...definition.evidenceCandidateIds] } : {}) })
+      continue
+    }
+    const replacement = repairByField.get(definition.field)
+    let repaired = false
+    if (replacement) {
+      try {
+        applyReplacement(draft, definition, replacement)
+        const current = softFieldDefinitions(draft, input).find(item => item.field === definition.field)
+        current.validate(); repaired = true
+      } catch (error) {
+        if (!(error instanceof ThreePicksV5ValidationError) && !(error instanceof TypeError)) throw error
+      }
+    }
+    if (!repaired) {
+      const current = softFieldDefinitions(draft, input).find(item => item.field === definition.field)
+      applyReplacement(draft, current, canonicalReplacement(current))
+    }
+    const current = softFieldDefinitions(draft, input).find(item => item.field === definition.field)
+    modes.push({ field: definition.field, generation_mode: repaired ? 'ai_repaired' : 'canonical_fallback', repair_count: 1,
+      ...(current.item ? { product_set_item_id: current.item.product_set_item_id,
+        identity_id: current.item.identity_id, fact_id: current.item.fact_id,
+        evidence_candidate_ids: [...current.evidenceCandidateIds] } : {}) })
+  }
+  for (const mode of modes) {
+    const current = softFieldDefinitions(draft, input).find(item => item.field === mode.field)
+    if (mode.generation_mode !== 'canonical_fallback') current.validate()
+    else {
+      const expected = canonicalReplacement(current)
+      if (current.field === 'hook' || current.field === 'cta') {
+        if (JSON.stringify(current.rejectedValue) !== JSON.stringify(expected)) fail('THREE_PICKS_V2_FORMAT_MISMATCH', `$.${current.field}`)
+      } else if (current.rejectedValue !== expected.value
+        || JSON.stringify(current.evidenceCandidateIds) !== JSON.stringify(expected.evidence_candidate_ids)) {
+        fail('THREE_PICKS_V2_FORMAT_MISMATCH', `$.product_presentations[${current.index}].${current.name}`)
+      }
+    }
+  }
+  return formatThreePicksV5Plan(draft, input, { skipPlannerValidation: true, softCopyFields: modes })
+}
+
+function formatThreePicksV5Plan(output, input, { skipPlannerValidation = false, softCopyFields = null } = {}) {
+  if (!skipPlannerValidation) validateThreePicksV5PlannerOutput(output, input)
+  else validateThreePicksV5HardContract(output, input)
   const byId = new Map(input.products.map(product => [product.product_set_item_id, product]))
   const productPresentations = output.product_presentations.map(item => {
     const product = byId.get(item.product_set_item_id)
@@ -283,6 +483,7 @@ function formatThreePicksV5Plan(output, input) {
   })
   const formatted = { archetype: ARCHETYPE, theme: output.theme, hook: { ...output.hook },
     product_presentations: productPresentations, cta: { ...output.cta },
+    ...(softCopyFields ? { soft_copy_fields: softCopyFields } : {}),
     contract: { prompt_version: PROMPT_VERSION, schema_version: SCHEMA_VERSION,
       manifest_version: MANIFEST_VERSION, layout_id: LAYOUT_ID } }
   validateFormattedThreePicksV5Output(formatted, input)
@@ -305,7 +506,7 @@ function validateFormattedThreePicksV5Output(plan, input) {
 }
 
 module.exports = { ARCHETYPE, DEFAULT_MODEL, LAYOUT_ID, LEGACY_LAYOUT_ID, LEGACY_MANIFEST_VERSION,
-  LIMITS, MANIFEST_VERSION, PROMPT_VERSION, SAFE_REASONS, SCHEMA_VERSION, SYSTEM_PROMPT, TEMPLATE_ID,
-  THREE_PICKS_V2_JSON_SCHEMA, ThreePicksV5ValidationError, formatThreePicksV5Plan, narrationSegments, plannerInput,
-  responseSchemaForInput,
+  LIMITS, MANIFEST_VERSION, PROMPT_VERSION, REPAIR_SYSTEM_PROMPT, SAFE_REASONS, SCHEMA_VERSION, SYSTEM_PROMPT, TEMPLATE_ID,
+  THREE_PICKS_V2_JSON_SCHEMA, ThreePicksV5ValidationError, collectSoftCopyFailures, completeThreePicksV5Plan,
+  formatThreePicksV5Plan, narrationSegments, plannerInput, repairInput, repairResponseSchema, responseSchemaForInput,
   planNarrationSegments, validateFormattedThreePicksV5Output, validateThreePicksV5PlannerOutput }

@@ -140,13 +140,20 @@ describe('Creative Archetype v2 store', () => {
     const products = [1, 2, 3].map(index => ({ product_set_item_id: uuid(10 + index), presentation_order: index,
       display_name: `商品${index}`, short_appeal: '短い訴求', fact_badge: `事実${index}`,
       verified_fact_ref: 'summary', tts: `商品${index}の確認済みポイントです。` }))
+    const softCopyFields = [{ field: 'hook', generation_mode: 'ai_generated', repair_count: 0 },
+      { field: 'products[2].short_appeal', generation_mode: 'canonical_fallback', repair_count: 1,
+        product_set_item_id: uuid(13), identity_id: 'identity-3', fact_id: 'fact-3',
+        evidence_candidate_ids: ['summary-3'] }]
     const saved = await store.persistThreePicksV2Success({ id: uuid(60), projectId: uuid(1), campaignId: uuid(2),
       iterationId: uuid(3), productSetId: uuid(4), revisionNumber: 1, schemaVersion: 'multi-product-shorts-plan-v3' }, {
       productionPlan: { archetype: 'three_picks_v2', theme: '3選', hook: { display_text: 'Hook', tts: '三つを紹介します。' },
-        product_presentations: products, cta: { display_text: '詳細を見る', tts: '詳細を確認してください。' } },
+        product_presentations: products, cta: { display_text: '詳細を見る', tts: '詳細を確認してください。' },
+        soft_copy_fields: softCopyFields },
       resolvedModel: 'gpt-test', responseId: 'resp-1', usage: {},
     })
     expect(saved).toMatchObject({ planId: uuid(70), audioStatus: 'planned' })
+    const planCall = calls.find(call => call.url.includes('/creative_archetype_plans'))
+    expect(planCall.body.output_json.soft_copy_fields).toEqual(softCopyFields)
     const artifactCall = calls.find(call => call.url.includes('/creative_audio_artifacts'))
     expect(artifactCall.body.length).toBeGreaterThanOrEqual(5)
     expect(artifactCall.body.every(item => item.status === 'planned' && item.provider == null && item.audio_sha256 == null)).toBe(true)

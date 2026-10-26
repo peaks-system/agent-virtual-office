@@ -745,15 +745,19 @@ export function ThreePicksGenerationFeedback({ feedback }) {
 
 function ThreePicksScriptReview({ output }) {
   if (!output) return null
+  const modeByField = new Map((output.soft_copy_fields || []).map(item => [item.field, item.generation_mode]))
+  const modeLabel = field => ({ ai_generated: 'AI生成', ai_repaired: '自動修正済み',
+    canonical_fallback: '安全文へ置換' })[modeByField.get(field)] || null
+  const badge = field => modeLabel(field) && <small className={`revenue-copy-mode is-${modeByField.get(field)}`}>{modeLabel(field)}</small>
   const products = [...(output.product_presentations || [])].sort((a, b) => a.presentation_order - b.presentation_order)
   return <section className="revenue-script-review" aria-label="音声生成前の文章確認">
     <h4>音声生成前の文章確認</h4>
-    <p><strong>Hook TTS:</strong> {output.hook?.tts}</p>
-    <div className="revenue-three-picks-cards">{products.map(item => <article key={item.product_set_item_id}>
-      <span>PICK {item.presentation_order}</span><strong>{item.display_name}</strong><p>{item.short_appeal}</p>
-      <small className="revenue-fact-badge">{item.fact_badge}</small><p><strong>TTS:</strong> {item.tts}</p>
+    <p><strong>Hook TTS:</strong> {output.hook?.tts} {badge('hook')}</p>
+    <div className="revenue-three-picks-cards">{products.map((item, index) => <article key={item.product_set_item_id}>
+      <span>PICK {item.presentation_order}</span><strong>{item.display_name}</strong><p><strong>訴求:</strong> {item.short_appeal} {badge(`products[${index}].short_appeal`)}</p>
+      <small className="revenue-fact-badge">{item.fact_badge}</small><p><strong>TTS:</strong> {item.tts} {badge(`products[${index}].tts`)}</p>
     </article>)}</div>
-    <p><strong>CTA TTS:</strong> {output.cta?.tts}</p>
+    <p><strong>CTA TTS:</strong> {output.cta?.tts} {badge('cta')}</p>
   </section>
 }
 
