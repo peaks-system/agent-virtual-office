@@ -174,9 +174,10 @@ function durationUnitPattern(unit) {
 
 function durationFactMatchesClaim(claim, fact) {
   const value = fact.canonical_value || {}
-  const amount = new RegExp(`${value.amount}\\s*${durationUnitPattern(value.amount_unit)}`, 'iu')
   const duration = new RegExp(`${value.duration}\\s*${durationUnitPattern(value.duration_unit)}`, 'iu')
-  if (!amount.test(claim) || !duration.test(claim)) return false
+  if (!duration.test(claim)) return false
+  const claimedAmounts = [...claim.matchAll(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${durationUnitPattern(value.amount_unit)}`, 'giu'))]
+  if (claimedAmounts.some(match => Number(match[1]) !== Number(value.amount))) return false
   const approximate = /(?:約|およそ)/u.test(claim)
   if (approximate !== Boolean(value.approximate)) return false
   const estimate = /目安/u.test(claim)
@@ -194,10 +195,10 @@ function durationFactMatchesClaim(claim, fact) {
   })
 }
 
-const DURATION_CLAIM_PATTERN = /\d+(?:\.\d+)?\s*(?:本|個|回|枚|台)[^。]{0,24}\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間)|\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間)[^。]{0,24}\d+(?:\.\d+)?\s*(?:本|個|回|枚|台)/u
+const DURATION_VALUE_PATTERN = /\d+(?:\.\d+)?\s*(?:日|週間|か月|ヶ月|月|時間|h)/iu
 
 function durationClaimsGrounded(claim, candidates) {
-  const durationClaim = DURATION_CLAIM_PATTERN.test(claim)
+  const durationClaim = DURATION_VALUE_PATTERN.test(claim)
   if (!durationClaim) return true
   const durationFacts = candidates.flatMap(candidate => candidate.facts || []).filter(fact => fact.type === 'duration')
   return durationFacts.some(fact => durationFactMatchesClaim(claim, fact))
@@ -217,7 +218,7 @@ function softCopyIsGrounded(value, candidates) {
   if (/(?:種類|選択肢)/u.test(evidence)) evidenceConcepts.add('choose')
   const direct = candidates.some(candidate => normalized(candidate.text).includes(normalized(claim))
     || normalized(claim).includes(normalized(candidate.text)))
-  return direct || (DURATION_CLAIM_PATTERN.test(claim) && claimConcepts.size === 0)
+  return direct || (DURATION_VALUE_PATTERN.test(claim) && claimConcepts.size === 0)
     || (claimConcepts.size > 0 && [...claimConcepts].every(concept => evidenceConcepts.has(concept)))
 }
 

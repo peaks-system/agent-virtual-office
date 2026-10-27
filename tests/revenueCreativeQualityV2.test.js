@@ -227,6 +227,41 @@ describe('Three Picks v2 hard fact / soft copy architecture', () => {
   })
 
   it.each([
+    ['1日2時間で2週間使える', true],
+    ['1日2時間の使用で1本2週間', true],
+    ['1日2時間で約2週間使える', false],
+    ['1日2時間でおよそ2週間使える', false],
+    ['1日2時間で2週間が目安', false],
+    ['1日2時間で最大2週間使える', false],
+    ['約2週間使える商品です', false],
+    ['1日2時間で3週間使える', false],
+  ])('validates duration copy from its typed fact: %s', (shortAppeal, valid) => {
+    const { products, plan } = conditionalDurationFixture()
+    plan.product_presentations[2].short_appeal = shortAppeal
+    const validation = () => validateThreePicksV5PlannerOutput(plan, { products })
+    if (valid) expect(validation).not.toThrow()
+    else expect(validation).toThrowError(expect.objectContaining({ code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM' }))
+  })
+
+  it('rejects the ungrounded short duration form even when another constraint also applies', () => {
+    const { products, plan } = conditionalDurationFixture()
+    plan.product_presentations[2].short_appeal = '約2週間使える'
+    expect(() => validateThreePicksV5PlannerOutput(plan, { products })).toThrow()
+  })
+
+  it('routes an invented Level 2 approximation to canonical fallback', () => {
+    const { products, plan } = conditionalDurationFixture()
+    plan.product_presentations[2].short_appeal = 'ボトル1本で2週間使える'
+    const completed = completeThreePicksV5Plan(plan, { products }, { repairs: [{
+      field: 'products[2].short_appeal', value: '1日2時間で約2週間使える', evidence_candidate_ids: ['summary-1'],
+    }] })
+    expect(completed.product_presentations[2].short_appeal).toBe('1日2時間使用で1本2週間')
+    expect(completed.soft_copy_fields).toContainEqual(expect.objectContaining({
+      field: 'products[2].short_appeal', generation_mode: 'canonical_fallback', repair_count: 1,
+    }))
+  })
+
+  it.each([
     ['付属品×2', { value: 2, unit: null }, '×2'],
     ['交換品2個', { value: 2, unit: '個' }, '2個'],
     ['ボトル2本', { value: 2, unit: '本' }, '2本'],
