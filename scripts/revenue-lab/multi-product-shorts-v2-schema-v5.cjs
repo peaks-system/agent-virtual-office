@@ -172,13 +172,16 @@ function durationUnitPattern(unit) {
   return unit.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 }
 
+const DURATION_APPROXIMATION_MARKER_PATTERN = /(?:約|およそ|ほど|くらい|ぐらい|程度)/u
+const hasDurationApproximationMarker = value => DURATION_APPROXIMATION_MARKER_PATTERN.test(value)
+
 function durationFactMatchesClaim(claim, fact) {
   const value = fact.canonical_value || {}
   const duration = new RegExp(`${value.duration}\\s*${durationUnitPattern(value.duration_unit)}`, 'iu')
   if (!duration.test(claim)) return false
   const claimedAmounts = [...claim.matchAll(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${durationUnitPattern(value.amount_unit)}`, 'giu'))]
   if (claimedAmounts.some(match => Number(match[1]) !== Number(value.amount))) return false
-  const approximate = /(?:約|およそ)/u.test(claim)
+  const approximate = hasDurationApproximationMarker(claim)
   if (approximate !== Boolean(value.approximate)) return false
   const estimate = /目安/u.test(claim)
   if (estimate !== Boolean(value.estimate)) return false

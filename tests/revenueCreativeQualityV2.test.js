@@ -262,6 +262,36 @@ describe('Three Picks v2 hard fact / soft copy architecture', () => {
   })
 
   it.each([
+    ['1日2時間利用で2週間使えます', true],
+    ['1日2時間の使用で2週間持続します', true],
+    ['1日2時間利用で約2週間使えます', false],
+    ['1日2時間利用でおよそ2週間使えます', false],
+    ['1日2時間利用で2週間ほど使えます', false],
+    ['1日2時間利用で2週間くらい使えます', false],
+    ['1日2時間利用で2週間ぐらい使えます', false],
+    ['1日2時間利用で2週間程度使えます', false],
+  ])('validates duration approximation markers in product TTS: %s', (tts, valid) => {
+    const { products, plan } = conditionalDurationFixture()
+    plan.product_presentations[2].tts = tts
+    const validation = () => validateThreePicksV5PlannerOutput(plan, { products })
+    if (valid) expect(validation).not.toThrow()
+    else expect(validation).toThrowError(expect.objectContaining({ code: 'THREE_PICKS_V2_UNGROUNDED_CLAIM' }))
+  })
+
+  it.each([
+    '1日2時間利用で約2週間使えます',
+    '1日2時間利用でおよそ2週間使えます',
+    '1日2時間利用で2週間ほど使えます',
+    '1日2時間利用で2週間くらい使えます',
+    '1日2時間利用で2週間ぐらい使えます',
+    '1日2時間利用で2週間程度使えます',
+  ])('accepts grounded approximation marker for an approximate duration fact: %s', tts => {
+    const { products, plan } = conditionalDurationFixture({ approximate: true })
+    plan.product_presentations[2].tts = tts
+    expect(() => validateThreePicksV5PlannerOutput(plan, { products })).not.toThrow()
+  })
+
+  it.each([
     ['付属品×2', { value: 2, unit: null }, '×2'],
     ['交換品2個', { value: 2, unit: '個' }, '2個'],
     ['ボトル2本', { value: 2, unit: '本' }, '2本'],
