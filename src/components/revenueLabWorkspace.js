@@ -173,6 +173,25 @@ export function deriveWorkspace(state = {}, requestedCampaignId = null) {
   }
 }
 
+export function deriveAttentionItems(state = {}) {
+  return (state.campaigns || []).filter(campaign => campaign?.status === 'active').flatMap(campaign => {
+    const workspace = deriveWorkspace(state, campaign.id)
+    const { latestRevision: revision, primaryAction, composition, publication, planFeedback } = workspace
+    if (workspace.legacy) return []
+    let status = '制作準備'
+    let cta = '制作を確認'
+    let area = 'production'
+    if (planFeedback?.kind === 'error') status = '人間確認が必要'
+    else if (composition && !publication) { status = '公開待ち'; cta = '公開・分析へ'; area = 'publication' }
+    else if (primaryAction.id === 'preview') { status = '動画確認'; cta = '動画を確認'; area = 'publication' }
+    else if (publication && primaryAction.id === 'analytics') { status = '公開後実績を確認'; cta = '分析を確認'; area = 'publication' }
+    else if (revision?.planId && primaryAction.id === 'generate-audio') status = '原稿確認'
+    else if (primaryAction.id === 'complete') return []
+    return [{ campaignId: campaign.id, campaignName: campaign.name, revisionNumber: revision?.revisionNumber || null,
+      status, detail: primaryAction.reason || planFeedback?.detail || primaryAction.label, cta, area }]
+  })
+}
+
 const transient = status => ['queued', 'running', 'rendering', 'generating', 'submitting', 'polling', 'authorizing'].includes(status)
 
 export function shouldPollRevenueLab(state = {}) {

@@ -112,7 +112,7 @@ describe('Revenue Lab dashboard', () => {
     const query = { id: 'q', label: 'Theme', queryText: 'query', buyerIntent: null, commerceFit: null, enabled: true }
     const markup = renderToStaticMarkup(<RevenueLabView state={{ config: { configured: true, missing: [] }, queries: [query], opportunities: [], latestJob: null }} {...handlers} />)
     expect(markup).toContain('ランキング対象外')
-    expect(markup).toMatch(/disabled=""[^>]*>Discovery実行/)
+    expect(markup).toMatch(/disabled=""[^>]*>今日の新着を更新/)
   })
 
   it('separates daily discovery from observed tracking without mixing rankings', () => {
@@ -127,8 +127,8 @@ describe('Revenue Lab dashboard', () => {
     const markup = renderToStaticMarkup(<RevenueLabView state={{
       config: { configured: true, missing: [] }, queries: [], opportunities: [], trackingOpportunities: [tracking], latestJob: null,
     }} {...handlers} />)
-    expect(markup).toContain('本日の発掘TOP3')
-    expect(markup).toContain('継続観測・急伸TOP3')
+    expect(markup).toContain('今日の新着')
+    expect(markup).toContain('継続上昇')
     expect(markup).toContain('youtube-tracking-v1')
     expect(markup).toContain('1.500倍（+50.00%）')
     expect(markup).toContain('実測')
