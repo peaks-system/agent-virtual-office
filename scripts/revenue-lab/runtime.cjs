@@ -5,6 +5,7 @@ const { createLocalWorker } = require('./worker.cjs')
 const { createSupabaseStore } = require('./supabase-store.cjs')
 const { createYouTubeClient } = require('./youtube-client.cjs')
 const { createOpenAIAnalysisClient } = require('./openai-client.cjs')
+const { createCommerceTranslationClient } = require('./commerce-translation-client.cjs')
 const { createCreativeProductionClient } = require('./creative-production-client.cjs')
 const { createPolloVideoGenerationProvider } = require('./providers/pollo-video-generation-provider.cjs')
 const { createPolloWanVideoGenerationProvider } = require('./providers/pollo-wan-video-generation-provider.cjs')
@@ -48,6 +49,7 @@ function createRevenueRuntime({
   })
   const runtimeYouTube = youtube || createYouTubeClient({ apiKey: env.YOUTUBE_API_KEY })
   const analyst = env.OPENAI_API_KEY ? createOpenAIAnalysisClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_OPENAI_MODEL || undefined }) : null
+  const commerceTranslator = env.OPENAI_API_KEY ? createCommerceTranslationClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_COMMERCE_TRANSLATION_MODEL || undefined }) : null
   const creativeProducer = env.OPENAI_API_KEY ? createCreativeProductionClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_CREATIVE_PRODUCTION_MODEL || undefined }) : null
   const multiProductShortsPlanner = env.OPENAI_API_KEY ? createMultiProductShortsClient({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_MULTI_PRODUCT_MODEL || undefined }) : null
   const multiProductShortsV2Planner = env.OPENAI_API_KEY ? createMultiProductShortsV2Client({ apiKey: env.OPENAI_API_KEY, model: env.REVENUE_LAB_MULTI_PRODUCT_V2_MODEL || undefined }) : null
@@ -82,7 +84,7 @@ function createRevenueRuntime({
     ? createRakutenProductProvider({ applicationId: env.RAKUTEN_APPLICATION_ID, accessKey: env.RAKUTEN_ACCESS_KEY, affiliateId: env.RAKUTEN_AFFILIATE_ID })
     : null)
   const handlers = createJobHandlers({
-    store: runtimeStore, youtube: runtimeYouTube, analyst, creativeProducer,
+    store: runtimeStore, youtube: runtimeYouTube, analyst, commerceTranslator, creativeProducer,
     multiProductShortsPlanner, multiProductShortsV2Planner, finalCompositionProvider,
     finalCompositionV2Provider, compositionBlobStore, creativeAudioBlobStore,
     textToSpeechProvider: runtimeTextToSpeechProvider, audioDurationProbe,

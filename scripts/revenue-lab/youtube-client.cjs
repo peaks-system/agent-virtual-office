@@ -158,7 +158,23 @@ function createYouTubeClient({ apiKey = process.env.YOUTUBE_API_KEY, fetchImpl =
     return { videos, missingVideoIds: uniqueIds.filter(id => !found.has(id)) }
   }
 
-  return { collect, track }
+  async function enrichDescription(youtubeVideoId, capturedAt) {
+    if (typeof youtubeVideoId !== 'string' || !/^[A-Za-z0-9_-]{6,32}$/.test(youtubeVideoId)) throw new TypeError('youtubeVideoId is invalid')
+    const capturedTime = Date.parse(capturedAt)
+    if (!Number.isFinite(capturedTime)) throw new TypeError('capturedAt must be an ISO date')
+    const items = await request('videos', { part: 'snippet', id: youtubeVideoId }, 'description enrichment')
+    const item = items.find(value => value?.id === youtubeVideoId)
+    if (!item) return { youtubeVideoId, content: '', providerEtag: null, availabilityStatus: 'unavailable', capturedAt: new Date(capturedTime).toISOString() }
+    return {
+      youtubeVideoId,
+      content: String(item.snippet?.description || '').slice(0, 5000),
+      providerEtag: typeof item.etag === 'string' ? item.etag.slice(0, 500) : null,
+      availabilityStatus: 'available',
+      capturedAt: new Date(capturedTime).toISOString(),
+    }
+  }
+
+  return { collect, enrichDescription, track }
 }
 
 module.exports = { API_ROOT, YouTubeProviderError, count, createYouTubeClient, validateCollection }

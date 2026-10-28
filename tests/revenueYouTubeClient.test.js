@@ -91,4 +91,26 @@ describe('Revenue Lab YouTube client', () => {
     expect(tracked.missingVideoIds).toEqual(['missing'])
     expect(tracked.videos).toHaveLength(50)
   })
+
+  it('fetches one description with videos.list only and preserves the provider etag', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async input => {
+      const url = new URL(input); calls.push(url)
+      return response({ items: [{ id: 'video123', etag: 'etag-v1', snippet: { description: 'ダイソー収納\nhttps://example.com/do-not-open' } }] })
+    })
+    const client = createYouTubeClient({ apiKey: 'test-key', fetchImpl })
+    const result = await client.enrichDescription('video123', '2026-10-11T00:00:00Z')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].pathname).toMatch(/\/videos$/)
+    expect(calls[0].searchParams.get('part')).toBe('snippet')
+    expect(calls[0].searchParams.get('id')).toBe('video123')
+    expect(result).toMatchObject({ content: 'ダイソー収納\nhttps://example.com/do-not-open', providerEtag: 'etag-v1', availabilityStatus: 'available' })
+  })
+
+  it('records unavailable videos without search fallback', async () => {
+    const fetchImpl = vi.fn(async () => response({ items: [] }))
+    const client = createYouTubeClient({ apiKey: 'test-key', fetchImpl })
+    await expect(client.enrichDescription('video123', '2026-10-11T00:00:00Z')).resolves.toMatchObject({ content: '', availabilityStatus: 'unavailable' })
+    expect(fetchImpl).toHaveBeenCalledOnce()
+  })
 })

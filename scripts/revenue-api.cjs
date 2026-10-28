@@ -4,12 +4,17 @@ const { permitted } = require('./staff-api.cjs')
 const { createSupabaseStore } = require('./revenue-lab/supabase-store.cjs')
 const { validHumanScore } = require('./revenue-lab/scoring.cjs')
 const { DEFAULT_MODEL } = require('./revenue-lab/analysis-schema.cjs')
+const { DEFAULT_MODEL: DEFAULT_COMMERCE_MODEL, DESCRIPTION_PROMPT_VERSION } = require('./revenue-lab/commerce-translation-schema.cjs')
 const { DEFAULT_MODEL: DEFAULT_CREATIVE_MODEL, PROMPT_VERSION: CREATIVE_PROMPT_VERSION, SCHEMA_VERSION: CREATIVE_SCHEMA_VERSION } = require('./revenue-lab/creative-production-schema-v2.cjs')
 const { DEFAULT_MODEL: DEFAULT_POLLO_MODEL, DEFAULT_RESOLUTION: DEFAULT_POLLO_RESOLUTION, PROVIDER_ID: POLLO_PROVIDER_ID, PROVIDER_VERSION: POLLO_PROVIDER_VERSION, validatedModel: validatedPolloModel } = require('./revenue-lab/providers/pollo-video-generation-provider.cjs')
 const { ADAPTER_VERSION: WAN_ADAPTER_VERSION, MANIFEST: WAN_MANIFEST, MODEL: WAN_MODEL,
   PROVIDER_ID: WAN_PROVIDER_ID, PROVIDER_VERSION: WAN_PROVIDER_VERSION } = require('./revenue-lab/providers/pollo-wan-video-generation-provider.cjs')
 const { createSupabaseProductAssetBlobStore } = require('./revenue-lab/product-asset-blob-store.cjs')
 const { createProductAssetRevisionService, ProductAssetRevisionError } = require('./revenue-lab/product-asset-revision-service.cjs')
+const { occurrences } = require('./revenue-lab/commerce-term-policy.cjs')
+const { WindowsDpapiYouTubeAnalyticsCredentialStore } = require('./revenue-lab/youtube-analytics-credential-store.cjs')
+const { REQUIRED_SCOPES, YouTubeAnalyticsError, createYouTubeAnalyticsClient } = require('./revenue-lab/youtube-analytics-client.cjs')
+const { createYouTubeAnalyticsService } = require('./revenue-lab/youtube-analytics-service.cjs')
 const { DEFAULT_MODEL: DEFAULT_THREE_PICKS_MODEL, PROMPT_VERSION: THREE_PICKS_PROMPT_VERSION,
   SCHEMA_VERSION: THREE_PICKS_SCHEMA_VERSION } = require('./revenue-lab/multi-product-shorts-schema.cjs')
 const { COMPOSITION_VERSION } = require('./revenue-lab/multi-product-shorts-composition.cjs')
@@ -42,6 +47,11 @@ function configurationStatus(env = process.env) {
   return { configured: missing.length === 0, missing, analysis: {
     configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
     requestedModel: env.REVENUE_LAB_OPENAI_MODEL || DEFAULT_MODEL,
+  }, commerceTranslation: {
+    configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
+    requestedModel: env.REVENUE_LAB_COMMERCE_TRANSLATION_MODEL || DEFAULT_COMMERCE_MODEL,
+    promptVersion: 'commerce-translator-v1', descriptionPromptVersion: DESCRIPTION_PROMPT_VERSION,
+    schemaVersion: 'commerce-translation-v1', enrichmentModes: ['metadata_only', 'description'],
   }, creativeProduction: {
     configured: Boolean(env.OPENAI_API_KEY), missing: env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY'],
     requestedModel: env.REVENUE_LAB_CREATIVE_PRODUCTION_MODEL || DEFAULT_CREATIVE_MODEL,
@@ -96,6 +106,11 @@ function configurationStatus(env = process.env) {
     configured: Boolean(env.RAKUTEN_APPLICATION_ID && env.RAKUTEN_ACCESS_KEY),
     missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'].filter(key => !env[key]),
     provider: 'rakuten-ichiba', providerApiVersion: '20260701', affiliateConfigured: Boolean(env.RAKUTEN_AFFILIATE_ID),
+  }, youtubeAnalytics: {
+    configured: Boolean(env.YOUTUBE_ANALYTICS_CLIENT_ID && env.YOUTUBE_ANALYTICS_CLIENT_SECRET),
+    missing: ['YOUTUBE_ANALYTICS_CLIENT_ID', 'YOUTUBE_ANALYTICS_CLIENT_SECRET'].filter(key => !env[key]),
+    scopes: REQUIRED_SCOPES,
+    credentialStore: 'windows-dpapi',
   } }
 }
 
@@ -138,6 +153,12 @@ function manualCampaignInput(input) {
   const priceAmount = input.priceAmount == null || input.priceAmount === '' ? null : Number(input.priceAmount)
   if (priceAmount != null && (!Number.isFinite(priceAmount) || priceAmount < 0)) throw new TypeError('Invalid priceAmount')
   const publication = publicationInput(input)
+  let translationOrigin = null
+  if (input.translationOrigin != null) {
+    const origin = input.translationOrigin
+    if (!origin || typeof origin !== 'object' || !UUID.test(origin.translationId || '') || !UUID.test(origin.keywordId || '') || (origin.feedbackId != null && !UUID.test(origin.feedbackId))) throw new TypeError('Invalid translationOrigin')
+    translationOrigin = { translationId: origin.translationId, keywordId: origin.keywordId, feedbackId: origin.feedbackId || null }
+  }
   return {
     idempotencyKey,
     campaignName: boundedText(input.campaignName, 'campaignName', 120),
@@ -155,6 +176,7 @@ function manualCampaignInput(input) {
     hookText: boundedText(input.hookText, 'hookText', 500),
     contentOutline: boundedText(input.contentOutline, 'contentOutline', 5000),
     scriptText: boundedText(input.scriptText, 'scriptText', 20000, { optional: true }),
+    translationOrigin,
     ...publication,
   }
 }
@@ -207,6 +229,45 @@ function directProductInput(input) {
   }
 }
 
+function commerceFeedbackInput(input) {
+  const action = boundedText(input.action, 'action', 20)
+  if (!['approve', 'override', 'reject'].includes(action) || !UUID.test(input.keywordId || '')) throw new TypeError('Invalid Commerce Translation feedback')
+  const overrideKeyword = boundedText(input.overrideKeyword, 'overrideKeyword', 128, { optional: true })
+  if ((action === 'override') !== Boolean(overrideKeyword)) throw new TypeError('Invalid overrideKeyword')
+  if (overrideKeyword && (occurrences(overrideKeyword).length || /https?:\/\/|(?:^|\s)[¥$€£]\s*\d|\b(?:sku|asin|jan)\b/i.test(overrideKeyword))) throw new TypeError('Invalid overrideKeyword')
+  return { keywordId: input.keywordId, action, overrideKeyword, notes: boundedText(input.notes, 'notes', 1000, { optional: true }) }
+}
+
+function campaignCreativeInput(input) {
+  return {
+    appealHypothesis: boundedText(input.appealHypothesis, 'appealHypothesis', 1000),
+    hookText: boundedText(input.hookText, 'hookText', 500),
+    contentOutline: boundedText(input.contentOutline, 'contentOutline', 5000),
+    scriptText: boundedText(input.scriptText, 'scriptText', 20000, { optional: true }),
+  }
+}
+
+function campaignVoidInput(input) {
+  const reason = boundedText(input.reason, 'reason', 20)
+  if (!['duplicate', 'mistake', 'test', 'other'].includes(reason)) throw new TypeError('Invalid reason')
+  const note = boundedText(input.note, 'note', 1000, { optional: true })
+  if (reason === 'other' && !note) throw new TypeError('Other reason requires note')
+  return { reason, note }
+}
+
+function analyticsDateRangeInput(input) {
+  const startDate = boundedText(input.startDate, 'startDate', 10)
+  const endDate = boundedText(input.endDate, 'endDate', 10)
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/
+  if (!datePattern.test(startDate) || !datePattern.test(endDate)) throw new TypeError('Invalid Analytics date range')
+  const start = Date.parse(`${startDate}T00:00:00Z`)
+  const end = Date.parse(`${endDate}T00:00:00Z`)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || (end - start) / 86_400_000 > 366) {
+    throw new TypeError('Invalid Analytics date range')
+  }
+  return { startDate, endDate }
+}
+
 function threePicksCampaignInput(input) {
   const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
   if (!UUID.test(idempotencyKey) || !Array.isArray(input.items) || input.items.length !== 3) throw new TypeError('Invalid Three Picks input')
@@ -243,17 +304,34 @@ function createRevenueApi({
   authorize = () => true,
   permit = permitted,
   store,
+  analyticsService,
   assetRevisionService,
   env = process.env,
   today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tokyo' }),
 } = {}) {
   let storage = store || null
+  let analytics = analyticsService || null
   let assetRevisions = assetRevisionService || null
   let compositionBlobs = null
   const config = configurationStatus(env)
   const getStore = () => {
     if (!storage) storage = createSupabaseStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY })
     return storage
+  }
+  const getAnalytics = () => {
+    if (!analytics) {
+      const credentialStore = new WindowsDpapiYouTubeAnalyticsCredentialStore({
+        filePath: env.YOUTUBE_ANALYTICS_CREDENTIAL_STORE_PATH || undefined,
+        env,
+        repositoryRoot: process.cwd(),
+      })
+      const client = createYouTubeAnalyticsClient({
+        clientId: env.YOUTUBE_ANALYTICS_CLIENT_ID,
+        clientSecret: env.YOUTUBE_ANALYTICS_CLIENT_SECRET,
+      })
+      analytics = createYouTubeAnalyticsService({ store: getStore(), credentialStore, client })
+    }
+    return analytics
   }
   const getAssetRevisionService = () => {
     if (!assetRevisions) {
@@ -326,10 +404,18 @@ function createRevenueApi({
     const pathname = new URL(req.url, 'http://local').pathname.replace(/^\/api\/revenue(?=\/|$)/, '') || '/'
     try {
       if (req.method === 'GET' && pathname === '/dashboard') {
-        if (!config.configured) return reply(res, 200, { data: { config, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], latestJob: null, latestRun: null, latestTrackingRun: null } })
+        if (!config.configured) return reply(res, 200, { data: { config, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], commerceTranslations: [], productSearches: [], campaigns: [], youtubeAnalyticsConnection: null, youtubeAnalyticsFlow: { status: 'idle', errorCode: null }, latestJob: null, latestRun: null, latestTrackingRun: null } })
         const limitValue = Number(new URL(req.url, 'http://local').searchParams.get('limit') || 3)
         const limit = Number.isInteger(limitValue) ? Math.max(1, Math.min(limitValue, 3)) : 3
-        return reply(res, 200, { data: { config, ...(await getStore().dashboard(limit)) } })
+        const dashboard = await getStore().dashboard(limit)
+        const analyticsStatus = config.youtubeAnalytics.configured
+          ? await getAnalytics().connectionStatus()
+          : { flow: { status: 'idle', errorCode: null } }
+        return reply(res, 200, { data: { config, ...dashboard, youtubeAnalyticsFlow: analyticsStatus.flow } })
+      }
+      if (req.method === 'GET' && pathname === '/youtube-analytics/status') {
+        if (!config.youtubeAnalytics.configured) return reply(res, 200, { data: { config: config.youtubeAnalytics, flow: { status: 'idle', errorCode: null }, connection: null } })
+        return reply(res, 200, { data: { config: config.youtubeAnalytics, ...(await getAnalytics().connectionStatus()) } })
       }
       if (req.method === 'GET' && pathname === '/queries') {
         if (!config.configured) return reply(res, 200, { data: { config, records: [] } })
@@ -368,6 +454,30 @@ function createRevenueApi({
         const result = await getStore().enqueueAnalysisCandidates(limit, { model: config.analysis.requestedModel })
         return reply(res, result.records.some(record => record.created) ? 201 : 200, { data: result })
       }
+      const translationJobMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/commerce-translations\/jobs$/i)
+      if (req.method === 'POST' && translationJobMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(translationJobMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'analysis idが正しくありません。')
+        if (!config.commerceTranslation.configured) return fail(res, 503, 'OPENAI_NOT_CONFIGURED', 'Commerce Translationの環境変数を設定してください。', { missing: config.commerceTranslation.missing })
+        await body(req)
+        const result = await getStore().enqueueCommerceTranslation(translationJobMatch[1], { model: config.commerceTranslation.requestedModel })
+        return reply(res, result.created ? 201 : 200, { data: result })
+      }
+      const translationFeedbackMatch = pathname.match(/^\/commerce-translations\/([0-9a-f-]{36})\/feedback$/i)
+      if (req.method === 'POST' && translationFeedbackMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(translationFeedbackMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'translation idが正しくありません。')
+        return reply(res, 201, { data: await getStore().createCommerceTranslationFeedback(translationFeedbackMatch[1], commerceFeedbackInput(await body(req))) })
+      }
+      const enrichmentJobMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/source-enrichment\/jobs$/i)
+      if (req.method === 'POST' && enrichmentJobMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(enrichmentJobMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'analysis idが正しくありません。')
+        if (!config.configured || !config.commerceTranslation.configured) return fail(res, 503, 'SOURCE_ENRICHMENT_NOT_CONFIGURED', 'YouTube description enrichmentの環境変数を設定してください。')
+        await body(req)
+        const result = await getStore().enqueueYouTubeDescriptionEnrichment(enrichmentJobMatch[1], today(), { model: config.commerceTranslation.requestedModel })
+        return reply(res, result.created ? 201 : 200, { data: result })
+      }
       const productSearchMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/product-search\/jobs$/i)
       if (req.method === 'POST' && productSearchMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
@@ -402,6 +512,7 @@ function createRevenueApi({
         const result = await getStore().createThreePicksV2Campaign(threePicksV2CampaignInput(await body(req)))
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
+      const publicationMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/publications$/i)
       const creativeProductionMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/production-plans$/i)
       const videoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/video-generations$/i)
       const imageVideoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/image-video-generations$/i)
@@ -545,10 +656,11 @@ function createRevenueApi({
         const input = await body(req)
         const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
         if (!UUID.test(idempotencyKey)) return fail(res, 400, 'VALIDATION_ERROR', 'idempotency keyが正しくありません。')
-        const result = await getStore().enqueueCreativeProduction(creativeProductionMatch[1], { idempotencyKey, model: config.creativeProduction.requestedModel })
+        const result = await getStore().enqueueCreativeProduction(creativeProductionMatch[1], {
+          idempotencyKey, model: config.creativeProduction.requestedModel,
+        })
         return reply(res, result?.created === false ? 200 : 201, { data: result })
       }
-      const publicationMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/publications$/i)
       if (req.method === 'POST' && publicationMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
         if (!config.configured) return fail(res, 503, 'REVENUE_NOT_CONFIGURED', 'Revenue Labの環境変数を設定してください。', { missing: config.missing })
@@ -556,6 +668,47 @@ function createRevenueApi({
         const input = publicationInput(await body(req))
         if (!input.youtubeVideoId) return fail(res, 400, 'VALIDATION_ERROR', 'YouTube Video IDを入力してください。')
         return reply(res, 201, { data: await getStore().registerCampaignPublication(publicationMatch[1], input) })
+      }
+      const draftIterationMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/draft$/i)
+      if (req.method === 'PUT' && draftIterationMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(draftIterationMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'iteration idが正しくありません。')
+        return reply(res, 200, { data: await getStore().updateDraftCampaignIteration(draftIterationMatch[1], campaignCreativeInput(await body(req))) })
+      }
+      const nextIterationMatch = pathname.match(/^\/campaigns\/([0-9a-f-]{36})\/iterations$/i)
+      if (req.method === 'POST' && nextIterationMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(nextIterationMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'campaign idが正しくありません。')
+        const input = await body(req)
+        if (!UUID.test(input.sourceIterationId || '')) return fail(res, 400, 'VALIDATION_ERROR', 'source iteration idが正しくありません。')
+        return reply(res, 201, { data: await getStore().createCampaignIteration(nextIterationMatch[1], input.sourceIterationId, campaignCreativeInput(input)) })
+      }
+      const campaignVoidMatch = pathname.match(/^\/campaigns\/([0-9a-f-]{36})\/void$/i)
+      if (req.method === 'POST' && campaignVoidMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(campaignVoidMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'campaign idが正しくありません。')
+        return reply(res, 200, { data: await getStore().voidCampaign(campaignVoidMatch[1], campaignVoidInput(await body(req))) })
+      }
+      const campaignDeleteMatch = pathname.match(/^\/campaigns\/([0-9a-f-]{36})$/i)
+      if (req.method === 'DELETE' && campaignDeleteMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(campaignDeleteMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'campaign idが正しくありません。')
+        return reply(res, 200, { data: await getStore().hardDeleteDraftCampaign(campaignDeleteMatch[1]) })
+      }
+      if (req.method === 'POST' && pathname === '/youtube-analytics/oauth/start') {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!config.configured) return fail(res, 503, 'REVENUE_NOT_CONFIGURED', 'Revenue Labの環境変数を設定してください。', { missing: config.missing })
+        if (!config.youtubeAnalytics.configured) return fail(res, 503, 'YOUTUBE_ANALYTICS_NOT_CONFIGURED', 'YouTube Analytics OAuthの環境変数を設定してください。', { missing: config.youtubeAnalytics.missing })
+        await body(req)
+        return reply(res, 202, { data: await getAnalytics().startAuthorization() })
+      }
+      const analyticsRunMatch = pathname.match(/^\/campaign-publications\/([0-9a-f-]{36})\/youtube-analytics\/runs$/i)
+      if (req.method === 'POST' && analyticsRunMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        if (!UUID.test(analyticsRunMatch[1])) return fail(res, 400, 'VALIDATION_ERROR', 'publication idが正しくありません。')
+        if (!config.youtubeAnalytics.configured) return fail(res, 503, 'YOUTUBE_ANALYTICS_NOT_CONFIGURED', 'YouTube Analytics OAuthの環境変数を設定してください。', { missing: config.youtubeAnalytics.missing })
+        const range = analyticsDateRangeInput(await body(req))
+        return reply(res, 201, { data: await getAnalytics().collect(analyticsRunMatch[1], range) })
       }
       const reviewMatch = pathname.match(/^\/analyses\/([0-9a-f-]{36})\/reviews$/i)
       if (req.method === 'POST' && reviewMatch) {
@@ -579,8 +732,8 @@ function createRevenueApi({
         if (input.notes != null && (typeof input.notes !== 'string' || input.notes.length > 1000)) return fail(res, 400, 'VALIDATION_ERROR', 'メモは1000文字以内です。')
         return reply(res, 201, { data: await getStore().createProductDecision(productDecisionMatch[1], input.analysisId, input) })
       }
-      if (!['GET', 'PUT', 'POST'].includes(req.method)) {
-        res.setHeader('Allow', 'GET, PUT, POST')
+      if (!['GET', 'PUT', 'POST', 'DELETE'].includes(req.method)) {
+        res.setHeader('Allow', 'GET, PUT, POST, DELETE')
         return fail(res, 405, 'METHOD_NOT_ALLOWED', 'この操作には対応していません。')
       }
       return fail(res, 404, 'NOT_FOUND', 'Revenue Labの操作が見つかりません。')
@@ -602,13 +755,23 @@ function createRevenueApi({
         const status = error?.code === 'UNSUPPORTED_MEDIA_TYPE' ? 415 : error?.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400
         return fail(res, status, 'VALIDATION_ERROR', '入力内容を確認してください。')
       }
-      if (/^(?:THREE_PICKS_|COMPOSITION_)/.test(error?.code || '')) {
+      if (error instanceof YouTubeAnalyticsError || /^YOUTUBE_|^OAUTH_|^GOOGLE_|^REFRESH_|^REAUTH_|^CHANNEL_|^VIDEO_|^CREDENTIAL_|^SYSTEM_BROWSER_/.test(error?.code || '')) {
+        const code = error?.code || 'YOUTUBE_ANALYTICS_ERROR'
+        const status = code === 'REAUTH_REQUIRED' || code === 'YOUTUBE_ANALYTICS_NOT_CONNECTED' ? 409
+          : code === 'GOOGLE_RATE_LIMIT' ? 429 : code === 'VIDEO_NOT_FOUND_OR_DENIED' ? 404 : 502
+        return fail(res, status, code, 'YouTube Analyticsの処理を完了できませんでした。接続状態と対象動画を確認してください。')
+      }
+      if (/^(?:COMMERCE_|SOURCE_ENRICHMENT_)/.test(error?.code || '')) {
         const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
-        return fail(res, status, error.code, 'Three PicksまたはFinal Compositionの処理状態を確認してください。')
+        return fail(res, status, error.code, 'Commerce Translationの状態または検索語を確認してください。')
       }
       if (/^CREATIVE_PRODUCTION_/.test(error?.code || '')) {
         const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
         return fail(res, status, error.code, 'Creative Productionの対象lineageまたは入力状態を確認してください。')
+      }
+      if (/^(?:THREE_PICKS_|COMPOSITION_)/.test(error?.code || '')) {
+        const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
+        return fail(res, status, error.code, 'Three Picks制作案または動画合成の入力・状態を確認してください。')
       }
       if (/^CREATIVE_AUDIO_/.test(error?.code || '')) {
         const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
@@ -624,14 +787,16 @@ function createRevenueApi({
       }
       if (/^CAMPAIGN_/.test(error?.code || '')) {
         const status = error.status === 404 ? 404 : error.status === 409 ? 409 : 400
-        return fail(res, status, error.code, 'Campaignの状態または入力内容を確認してください。')
+        return fail(res, status, error.code, status === 409 ? '公開・計測済みの履歴は変更または削除できません。新しいIterationまたは無効化を利用してください。' : 'Campaignの状態または入力内容を確認してください。')
       }
       console.error('[revenue-lab] API request failed', { method: req.method, pathname, code: error?.code || 'REVENUE_API_ERROR' })
       return fail(res, 502, 'REVENUE_SERVICE_ERROR', 'Revenue Labの処理を完了できませんでした。接続設定を確認してください。')
     }
   }
 
-  return { handler, close() {} }
+  return { handler, close() { analytics?.close?.() } }
 }
 
-module.exports = { UUID, configurationStatus, createRevenueApi, DIRECT_PRODUCT_PLACEHOLDERS, directProductInput, errorBody, manualCampaignInput, publicationInput, threePicksCampaignInput, threePicksV2CampaignInput }
+module.exports = { UUID, analyticsDateRangeInput, commerceFeedbackInput, configurationStatus, createRevenueApi,
+  DIRECT_PRODUCT_PLACEHOLDERS, directProductInput, errorBody, manualCampaignInput, publicationInput,
+  threePicksCampaignInput, threePicksV2CampaignInput }

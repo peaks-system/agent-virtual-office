@@ -6,6 +6,7 @@ const { createLocalWorker } = require('./revenue-lab/worker.cjs')
 const { createSupabaseStore } = require('./revenue-lab/supabase-store.cjs')
 const { createYouTubeClient } = require('./revenue-lab/youtube-client.cjs')
 const { createOpenAIAnalysisClient } = require('./revenue-lab/openai-client.cjs')
+const { createCommerceTranslationClient } = require('./revenue-lab/commerce-translation-client.cjs')
 const { createCreativeProductionClient } = require('./revenue-lab/creative-production-client.cjs')
 const { createPolloVideoGenerationProvider } = require('./revenue-lab/providers/pollo-video-generation-provider.cjs')
 const { createPolloWanVideoGenerationProvider } = require('./revenue-lab/providers/pollo-wan-video-generation-provider.cjs')
@@ -26,6 +27,7 @@ async function main() {
   const store = createSupabaseStore()
   const youtube = createYouTubeClient()
   const analyst = process.env.OPENAI_API_KEY ? createOpenAIAnalysisClient() : null
+  const commerceTranslator = process.env.OPENAI_API_KEY ? createCommerceTranslationClient({ model: process.env.REVENUE_LAB_COMMERCE_TRANSLATION_MODEL || undefined }) : null
   const creativeProducer = process.env.OPENAI_API_KEY ? createCreativeProductionClient({ model: process.env.REVENUE_LAB_CREATIVE_PRODUCTION_MODEL || undefined }) : null
   const multiProductShortsPlanner = process.env.OPENAI_API_KEY ? createMultiProductShortsClient({ model: process.env.REVENUE_LAB_MULTI_PRODUCT_MODEL || undefined }) : null
   const multiProductShortsV2Planner = process.env.OPENAI_API_KEY ? createMultiProductShortsV2Client({ model: process.env.REVENUE_LAB_MULTI_PRODUCT_V2_MODEL || undefined }) : null
@@ -56,7 +58,7 @@ async function main() {
     ? createAudioDurationProbe({ ffprobePath: process.env.REVENUE_LAB_FFPROBE_PATH }) : null
   const productProvider = process.env.RAKUTEN_APPLICATION_ID && process.env.RAKUTEN_ACCESS_KEY ? createRakutenProductProvider() : null
   const handlers = createJobHandlers({
-    store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
+    store, youtube, analyst, commerceTranslator, creativeProducer, multiProductShortsPlanner,
     multiProductShortsV2Planner, finalCompositionProvider, finalCompositionV2Provider,
     compositionBlobStore, creativeAudioBlobStore, videoGenerationProvider, imageToVideoProvider,
     textToSpeechProvider, audioDurationProbe,

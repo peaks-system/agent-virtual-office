@@ -65,7 +65,7 @@ function safeThreePicksProviderDiagnostics(error) {
     reason: diagnostics.reason }
 }
 
-function createJobHandlers({ store, youtube, analyst, creativeProducer, multiProductShortsPlanner,
+function createJobHandlers({ store, youtube, analyst, commerceTranslator, creativeProducer, multiProductShortsPlanner,
   multiProductShortsV2Planner,
   finalCompositionProvider, finalCompositionV2Provider, compositionBlobStore, videoGenerationProvider,
   imageToVideoProvider, productAssetBlobStore, creativeAudioBlobStore, textToSpeechProvider,
@@ -274,6 +274,42 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
       try { await store.persistProductSearchFailure(runId, error) }
       catch { console.error('[revenue-lab] Product search failure state could not be persisted', { runId }) }
       throw error instanceof RevenueJobError ? error : new RevenueJobError(error?.code || 'PRODUCT_SEARCH_FAILED', 'Product candidate search failed')
+    }
+  }
+
+  async function translateCommerce(job) {
+    const requestId = job?.payload?.translation_request_id
+    if (!requestId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'translation_request_id is required')
+    if (!commerceTranslator) throw new RevenueJobError('OPENAI_NOT_CONFIGURED', 'Commerce Translation is not configured')
+    const request = await store.getCommerceTranslationRequest(requestId)
+    if (!request) throw new RevenueJobError('COMMERCE_TRANSLATION_REQUEST_NOT_FOUND', 'Commerce Translation request was not found')
+    await store.markCommerceTranslationRunning(requestId)
+    try {
+      const result = await commerceTranslator.translate(request.inputSnapshot)
+      await store.persistCommerceTranslationSuccess(requestId, result)
+      return { translationRequestId: requestId, searchReadiness: result.translation.search_readiness }
+    } catch (error) {
+      try { await store.persistCommerceTranslationFailure(requestId, error) }
+      catch { console.error('[revenue-lab] Commerce Translation failure state could not be persisted', { requestId }) }
+      throw error instanceof RevenueJobError ? error : new RevenueJobError(error?.code || 'COMMERCE_TRANSLATION_FAILED', 'Commerce Translation failed')
+    }
+  }
+
+  async function enrichYouTubeDescription(job) {
+    const requestId = job?.payload?.source_enrichment_request_id
+    if (!requestId) throw new RevenueJobError('INVALID_JOB_PAYLOAD', 'source_enrichment_request_id is required')
+    const request = await store.getSourceEnrichmentRequest(requestId)
+    if (!request) throw new RevenueJobError('SOURCE_ENRICHMENT_REQUEST_NOT_FOUND', 'Source enrichment request was not found')
+    if (!request.youtubeVideoId) throw new RevenueJobError('SOURCE_VIDEO_NOT_FOUND', 'Source video was not found')
+    await store.markSourceEnrichmentRunning(requestId)
+    try {
+      const result = await youtube.enrichDescription(request.youtubeVideoId, clock().toISOString())
+      const saved = await store.persistSourceEnrichmentSuccess(request, result)
+      return { sourceEnrichmentRequestId: requestId, ...saved }
+    } catch (error) {
+      try { await store.persistSourceEnrichmentFailure(requestId, error) }
+      catch { console.error('[revenue-lab] Source enrichment failure state could not be persisted', { requestId }) }
+      throw error instanceof RevenueJobError ? error : new RevenueJobError(error?.code || 'SOURCE_ENRICHMENT_FAILED', 'YouTube description enrichment failed')
     }
   }
 
@@ -619,6 +655,8 @@ function createJobHandlers({ store, youtube, analyst, creativeProducer, multiPro
     ['youtube.collect', collectYouTube],
     ['youtube.track', trackYouTube],
     ['opportunity.analyze', analyzeOpportunity],
+    ['commerce.translate', translateCommerce],
+    ['source.enrich.youtube_description', enrichYouTubeDescription],
     ['creative.production.plan', createProductionPlan],
     ['creative.archetype.plan', createThreePicksPlan],
     ['creative.compose.final', composeFinalShort],

@@ -12,6 +12,99 @@ function response(body, status = 200) {
 }
 
 describe('Revenue Lab Supabase store snapshots', () => {
+  it('freezes metadata-only Commerce Translation input and delegates cache identity to its fingerprint RPC', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null
+      calls.push({ url, body })
+      if (url.includes('/ai_opportunity_analyses?')) return response([{ id: 'analysis-1', analysis_request_id: 'request-1', output_json: { product_or_theme_name: 'ダイソー便利品', similar_product_categories: ['収納'], product_search_keywords: ['100均 収納'] } }])
+      if (url.includes('/ai_analysis_requests?')) return response([{ id: 'request-1', project_id: 'project-1', source_item_id: 'item-1', input_snapshot: { video: { title: 'ダイソー 収納' }, source_queries: [{ query_text: '100均 便利' }] } }])
+      if (url.includes('/rpc/enqueue_commerce_translation')) return response({ id: 'translation-request-1', created: true, cached: false })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await store.enqueueCommerceTranslation('analysis-1', { model: 'gpt-test' })
+    const rpcCall = calls.find(call => call.url.includes('/rpc/enqueue_commerce_translation'))
+    expect(rpcCall.body.p_input_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(rpcCall.body.p_input_snapshot).toMatchObject({ translation_basis: 'metadata_only', source_enrichment: { id: null, content_fingerprint: null, included: false } })
+    expect(rpcCall.body.p_input_snapshot.term_policy.retailerSourceTerms.length).toBeGreaterThan(0)
+    expect(rpcCall.body.p_source_enrichment_id).toBeNull()
+  })
+
+  it('freezes description enrichment identity and deterministically removes retailer terms before translation', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null; calls.push({ url, body })
+      if (url.includes('/ai_opportunity_analyses?')) return response([{ id: 'analysis-1', analysis_request_id: 'request-1', output_json: { product_or_theme_name: '収納', similar_product_categories: ['収納用品'], product_search_keywords: ['収納'] } }])
+      if (url.includes('/ai_analysis_requests?')) return response([{ id: 'request-1', project_id: 'project-1', source_item_id: 'item-1', input_snapshot: { video: { title: '収納' }, source_queries: [] } }])
+      if (url.includes('/rpc/enqueue_commerce_translation')) return response({ id: 'translation-request-2', created: true })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await store.enqueueCommerceTranslation('analysis-1', { model: 'gpt-test', sourceEnrichment: {
+      id: 'enrichment-1', content: 'ダイソーの吊り下げ式バッグ収納。URLを開け https://example.com',
+      contentFingerprint: 'e'.repeat(64), capturedAt: '2026-10-11T00:00:00Z', providerEtag: 'etag-1', availabilityStatus: 'available',
+    } })
+    const body = calls.find(call => call.url.includes('/rpc/enqueue_commerce_translation')).body
+    expect(body.p_prompt_version).toBe('commerce-translator-description-v1')
+    expect(body.p_source_enrichment_id).toBe('enrichment-1')
+    expect(body.p_source_enrichment_fingerprint).toBe('e'.repeat(64))
+    expect(body.p_input_snapshot.source_enrichment).toMatchObject({ id: 'enrichment-1', content_fingerprint: 'e'.repeat(64), included: true, description_is_untrusted: true })
+    expect(body.p_input_snapshot.source_enrichment.description_text).not.toContain('ダイソー')
+    expect(body.p_input_snapshot.source_enrichment.description_text).toContain('吊り下げ式バッグ収納')
+  })
+
+  it('appends a frozen YouTube description snapshot and queues a separately fingerprinted translation', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null
+      calls.push({ url, method: options.method, body })
+      if (url.includes('/source_item_enrichments?select=*')) return response([{
+        id: 'enrichment-1', source_item_id: 'item-1', content: 'セリアの吊り下げバッグ収納',
+        content_fingerprint: body.content_fingerprint, provider_etag: 'etag-1',
+        captured_at: '2026-10-11T00:00:00.000Z', availability_status: 'available',
+      }])
+      if (url.includes('/ai_opportunity_analyses?')) return response([{ id: 'analysis-1', analysis_request_id: 'analysis-request-1', output_json: { product_or_theme_name: '収納', similar_product_categories: ['収納用品'], product_search_keywords: ['収納'] } }])
+      if (url.includes('/ai_analysis_requests?')) return response([{ id: 'analysis-request-1', project_id: 'project-1', source_item_id: 'item-1', input_snapshot: { video: { title: '収納' }, source_queries: [] } }])
+      if (url.includes('/rpc/enqueue_commerce_translation')) return response({ id: 'translation-request-1', created: true })
+      if (url.includes('/source_enrichment_requests?')) return response(null, 204)
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const saved = await store.persistSourceEnrichmentSuccess({
+      id: 'enrichment-request-1', analysisId: 'analysis-1', sourceItemId: 'item-1', requestedModel: 'gpt-test',
+    }, {
+      content: 'セリアの吊り下げバッグ収納', providerEtag: 'etag-1',
+      capturedAt: '2026-10-11T00:00:00.000Z', availabilityStatus: 'available',
+    })
+
+    expect(saved).toEqual({ enrichmentId: 'enrichment-1', translationRequestId: 'translation-request-1', availabilityStatus: 'available' })
+    const snapshot = calls.find(call => call.url.includes('/source_item_enrichments?select=*')).body
+    expect(snapshot).toMatchObject({
+      source_item_id: 'item-1', source_enrichment_request_id: 'enrichment-request-1',
+      provider: 'youtube', enrichment_kind: 'video_description', provider_etag: 'etag-1',
+      captured_at: '2026-10-11T00:00:00.000Z', availability_status: 'available',
+    })
+    expect(snapshot.content_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    const translation = calls.find(call => call.url.includes('/rpc/enqueue_commerce_translation')).body
+    expect(translation.p_source_enrichment_id).toBe('enrichment-1')
+    expect(translation.p_source_enrichment_fingerprint).toBe(snapshot.content_fingerprint)
+    expect(translation.p_input_snapshot.translation_basis).toBe('metadata_plus_youtube_description')
+    expect(translation.p_input_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    const completion = calls.find(call => call.url.includes('/source_enrichment_requests?')).body
+    expect(completion).toMatchObject({ status: 'succeeded', enrichment_id: 'enrichment-1', translation_request_id: 'translation-request-1', availability_status: 'available' })
+  })
+
+  it('does not fall back to Analyst keywords for provider search', async () => {
+    const fetchImpl = vi.fn(async url => {
+      if (url.includes('/ai_opportunity_analyses?')) return response([{ id: 'analysis-1', output_json: { product_search_keywords: ['100均 収納'] } }])
+      if (url.includes('/commerce_translation_requests?')) return response([])
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await expect(store.enqueueProductSearch('analysis-1', '2026-10-11')).rejects.toMatchObject({ code: 'COMMERCE_TRANSLATION_REQUIRED' })
+  })
+
   it('keeps tracking relation IDs on opportunities instead of query records', () => {
     expect(opportunityFromRow({ source_item_id: 'item-1', tracking_run_id: 'tracking-run-1' })).toMatchObject({
       sourceItemId: 'item-1', trackingRunId: 'tracking-run-1',
@@ -124,14 +217,21 @@ describe('Revenue Lab Supabase store snapshots', () => {
       if (url.includes('/ai_opportunity_analyses?')) return response([{
         id: 'analysis-1', analysis_request_id: 'request-1', output_json: { recommendation: 'hold' },
       }])
+      if (url.includes('/commerce_translation_requests?')) return response([])
       if (url.includes('/product_search_runs?')) return response([])
       if (url.includes('/campaigns?')) return response([{ id: 'campaign-1', project_id: 'project-1', source_item_id: 'video-item', primary_analysis_id: 'analysis-1', name: 'Campaign', objective: 'Test', status: 'active', analysis_snapshot: { analysis_id: 'analysis-1' }, created_at: '2026-10-10T00:00:00Z' }])
       if (url.includes('/campaign_origins?')) return response([{ id: 'origin-1', campaign_id: 'campaign-1', context_kind: 'discovery', opportunity_id: 'opportunity-1', tracking_opportunity_id: null, source_query_id: 'query-1', rank_position: 1, score_version: 'youtube-v1', origin_snapshot: { opportunity_score: 69.75 } }])
       if (url.includes('/campaign_iterations?')) return response([{ id: 'iteration-1', campaign_id: 'campaign-1', iteration_number: 1, curated_product_id: 'product-1', source_analysis_id: 'analysis-1', status: 'published', appeal_hypothesis: 'appeal', hook_text: 'hook', content_outline: { text: 'outline' }, script_text: null, treatment_fingerprint: 'b'.repeat(64), locked_at: '2026-10-10T00:00:00Z' }])
+      if (url.includes('/campaign_evidence_markers?')) return response([])
       if (url.includes('/curated_products?')) return response([{ id: 'product-1', source_kind: 'manual', discovery_channel: 'google_search', search_keyword: 'keyword', merchant: 'Shop', product_name: 'Product', product_url: 'https://example.com/product', affiliate_url: null, price_amount: 1000, currency: 'JPY', notes: null, human_verified_at: '2026-10-10T00:00:00Z' }])
-      if (url.includes('/campaign_publications?')) return response([{ id: 'publication-1', campaign_iteration_id: 'iteration-1', platform: 'youtube', youtube_video_id: 'video123', canonical_url: 'https://www.youtube.com/watch?v=video123', title: 'Published', published_at: '2026-10-10T00:00:00Z', status: 'published', initial_metadata: {}, created_at: '2026-10-10T00:00:00Z' }])
+      if (url.includes('/curated_product_translation_origins?')) return response([])
       if (url.includes('/product_assets?')) return response([])
-      if (url.includes('/creative_production_requests?')) return response([])
+      if (url.includes('/creative_production_requests?')) return response([{ id: 'production-request-1', campaign_iteration_id: 'iteration-1', revision_number: 1, status: 'succeeded', prompt_version: 'creative-production-planner-v1', schema_version: 'creative-production-plan-v1', requested_model: 'gpt-test', resolved_model: 'gpt-test', input_fingerprint: 'c'.repeat(64), generated_at: '2026-10-10T01:00:00Z' }])
+      if (url.includes('/creative_production_plans?')) return response([{ id: 'production-plan-1', production_request_id: 'production-request-1', output_json: { scenes: [{ scene_number: 1, visual_source_type: 'ai_generated_scene', ai_generation_prompt: '[背景・演出のみ。商品本体を描写しない] 朝の机' }] }, provider_export: {} }])
+      if (url.includes('/video_generation_scenes?')) return response([{ id: 'generation-1', run_id: 'generation-run-1', creative_production_plan_id: 'production-plan-1', creative_scene_number: 1, attempt_number: 1, provider: 'pollo', provider_version: 'platform-v1', requested_model: 'pollo-v2', provider_task_id: 'task-1', provider_task_status: 'succeeded', duration_seconds: 5, aspect_ratio: '9:16', resolution: '480p', status: 'succeeded', provider_cost_amount: '0.12', provider_cost_currency: 'USD', cost_provenance: 'actual', output_url: 'https://cdn.example/video.mp4', safe_error_code: null, created_at: '2026-10-10T01:01:00Z', completed_at: '2026-10-10T01:02:00Z' }])
+      if (url.includes('/campaign_publications?')) return response([{ id: 'publication-1', campaign_iteration_id: 'iteration-1', platform: 'youtube', youtube_video_id: 'video123', canonical_url: 'https://www.youtube.com/watch?v=video123', title: 'Published', published_at: '2026-10-10T00:00:00Z', status: 'published', initial_metadata: {}, created_at: '2026-10-10T00:00:00Z' }])
+      if (url.includes('/youtube_performance_snapshots?')) return response([{ id: 'performance-1', run_id: 'analytics-run-1', campaign_publication_id: 'publication-1', captured_at: '2026-10-10T02:00:00Z', requested_start_date: '2026-10-09', requested_end_date: '2026-10-10', data_through_date: '2026-10-09', query_version: 'youtube-analytics-v1', views: 42, estimated_minutes_watched: 21, average_view_duration: null, average_view_percentage: 50, subscribers_gained: 2, subscribers_lost: 0, likes: 5, comments: null, shares: 1 }])
+      if (url.includes('/youtube_analytics_connections?')) return response([{ id: 'connection-1', project_id: 'project-1', channel_id: 'UC1234567890123456789012', channel_title: 'Owner Channel', scopes: ['scope-a'], credential_ref: 'local-dpapi:11111111-1111-4111-8111-111111111111', connection_status: 'connected', connected_at: '2026-10-10T00:00:00Z', last_verified_at: '2026-10-10T00:00:00Z' }])
       throw new Error(`Unexpected request: ${url} ${options?.method}`)
     })
     const store = createSupabaseStore({
@@ -158,10 +258,13 @@ describe('Revenue Lab Supabase store snapshots', () => {
     })
     expect(dashboard.campaigns[0]).toMatchObject({
       id: 'campaign-1', analysisId: 'analysis-1', status: 'active',
+      hasEvidence: true, canHardDelete: false,
       origins: [{ contextKind: 'discovery', rankPosition: 1, scoreVersion: 'youtube-v1' }],
-      iterations: [{ id: 'iteration-1', sourceAnalysisId: 'analysis-1', product: { productName: 'Product', discoveryChannel: 'google_search' }, publication: { youtubeVideoId: 'video123', status: 'published' } }],
+      iterations: [{ id: 'iteration-1', sourceAnalysisId: 'analysis-1', product: { productName: 'Product', discoveryChannel: 'google_search' }, publication: { youtubeVideoId: 'video123', status: 'published', latestPerformance: { views: 42, comments: null, queryVersion: 'youtube-analytics-v1' } }, productionPlans: [{ planId: 'production-plan-1', videoGenerations: [{ id: 'generation-1', sceneNumber: 1, provider: 'pollo', model: 'pollo-v2', providerCost: 0.12, costProvenance: 'actual' }] }] }],
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(17)
+    expect(dashboard.youtubeAnalyticsConnection).toMatchObject({ channelTitle: 'Owner Channel', connectionStatus: 'connected' })
+    expect(dashboard.youtubeAnalyticsConnection).not.toHaveProperty('credentialRef')
+    expect(fetchImpl).toHaveBeenCalledTimes(24)
   })
 
   it('creates the manual product, Campaign, Iteration, and publication atomically with a deterministic fingerprint', async () => {
@@ -258,6 +361,8 @@ describe('Revenue Lab Supabase store snapshots', () => {
     const expected = { code: 'CAMPAIGN_REGISTRATION_ONLY', status: 409 }
     await expect(store.enqueueCreativeProduction(placeholder.id, { idempotencyKey: '22222222-2222-4222-8222-222222222222' })).rejects.toMatchObject(expected)
     await expect(store.registerCampaignPublication(placeholder.id, { youtubeVideoId: 'realVideo1' })).rejects.toMatchObject(expected)
+    await expect(store.updateDraftCampaignIteration(placeholder.id, { appealHypothesis: 'x', hookText: 'x', contentOutline: 'x' })).rejects.toMatchObject(expected)
+    await expect(store.createCampaignIteration('campaign-direct', placeholder.id, { appealHypothesis: 'x', hookText: 'x', contentOutline: 'x' })).rejects.toMatchObject(expected)
     expect(calls.some(call => call.url.includes('/rpc/'))).toBe(false)
   })
 
@@ -424,6 +529,55 @@ describe('Revenue Lab Supabase store snapshots', () => {
     expect(calls.find(call => call.url.includes('/video_generation_runs?id=eq.run-5')).body).toMatchObject({
       status: 'succeeded', safe_error_code: null,
     })
+  })
+
+  it('routes draft edits, successor Iterations, hard deletion, and voiding through guarded RPCs', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null; calls.push({ url, body })
+      if (url.includes('/campaign_iterations?')) return response([{ appeal_hypothesis: 'appeal', hook_text: 'hook', content_outline: { format: 'plain_text', text: 'outline' }, script_text: null }])
+      if (url.includes('update_draft_campaign_iteration')) return response({ iterationId: 'iteration-1', iterationStatus: 'draft' })
+      if (url.includes('create_campaign_iteration')) return response({ iterationId: 'iteration-2', iterationNumber: 2, iterationStatus: 'draft' })
+      if (url.includes('hard_delete_draft_campaign')) return response({ campaignId: 'campaign-1', deleted: true })
+      if (url.includes('void_campaign')) return response({ campaignId: 'campaign-2', status: 'voided', voidReason: 'duplicate' })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const creative = { appealHypothesis: 'new appeal', hookText: 'new hook', contentOutline: 'new outline', scriptText: 'new script' }
+    await store.updateDraftCampaignIteration('iteration-1', creative)
+    await store.createCampaignIteration('campaign-1', 'iteration-1', creative)
+    await store.hardDeleteDraftCampaign('campaign-1')
+    await store.voidCampaign('campaign-2', { reason: 'duplicate', note: 'double click' })
+    const rpcCalls = calls.filter(call => call.url.includes('/rpc/'))
+    expect(rpcCalls[0].body).toMatchObject({ p_iteration_id: 'iteration-1', p_creative: { appeal_hypothesis: 'new appeal', hook_text: 'new hook', content_outline: { format: 'plain_text', text: 'new outline' }, script_text: 'new script' } })
+    expect(rpcCalls[0].body.p_treatment_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(rpcCalls[1].body).toMatchObject({ p_campaign_id: 'campaign-1', p_source_iteration_id: 'iteration-1' })
+    expect(rpcCalls[2].body).toEqual({ p_campaign_id: 'campaign-1' })
+    expect(rpcCalls[3].body).toEqual({ p_campaign_id: 'campaign-2', p_reason: 'duplicate', p_note: 'double click' })
+  })
+
+  it('persists Analytics connection and manual run transitions only through service-role RPCs', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null
+      calls.push({ url, body })
+      if (url.includes('upsert_youtube_analytics_connection')) return response({ id: 'connection-1' })
+      if (url.includes('start_youtube_analytics_run')) return response({ runId: 'run-1', youtubeVideoId: 'video123' })
+      if (url.includes('finish_youtube_analytics_run')) return response({ id: 'snapshot-1', views: 42 })
+      return response(null, 204)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await store.upsertYouTubeAnalyticsConnection('project-1', { channelId: 'UC1234567890123456789012', channelTitle: 'Owner', scopes: ['scope-a'], credentialRef: 'local-dpapi:11111111-1111-4111-8111-111111111111' })
+    await store.startYouTubeAnalyticsRun('publication-1', 'connection-1', { startDate: '2026-10-01', endDate: '2026-10-09', queryVersion: 'youtube-analytics-v1', metrics: ['views'] })
+    await store.finishYouTubeAnalyticsRun('run-1', { views: 42, comments: null, raw_metrics: {} }, false)
+    await store.failYouTubeAnalyticsRun('run-2', 'REFRESH_TOKEN_REVOKED', true)
+    expect(calls.map(call => call.url)).toEqual(expect.arrayContaining([
+      expect.stringContaining('/rpc/upsert_youtube_analytics_connection'),
+      expect.stringContaining('/rpc/start_youtube_analytics_run'),
+      expect.stringContaining('/rpc/finish_youtube_analytics_run'),
+      expect.stringContaining('/rpc/fail_youtube_analytics_run'),
+    ]))
+    expect(calls[3].body).toEqual({ p_run_id: 'run-2', p_error_code: 'REFRESH_TOKEN_REVOKED', p_reauth_required: true })
   })
 
   it('restricts Discovery previous snapshots to discovery capture kind', async () => {

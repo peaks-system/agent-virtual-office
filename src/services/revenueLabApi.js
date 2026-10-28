@@ -61,6 +61,24 @@ export function enqueueProductSearch(analysisId) {
   })
 }
 
+export function enqueueCommerceTranslation(analysisId) {
+  return request(`/analyses/${encodeURIComponent(analysisId)}/commerce-translations/jobs`, {
+    method: 'POST', body: JSON.stringify({}),
+  })
+}
+
+export function createCommerceTranslationFeedback(translationId, keywordId, action, overrideKeyword = null, notes = null) {
+  return request(`/commerce-translations/${encodeURIComponent(translationId)}/feedback`, {
+    method: 'POST', body: JSON.stringify({ keywordId, action, overrideKeyword, notes }),
+  })
+}
+
+export function enqueueYouTubeDescriptionEnrichment(analysisId) {
+  return request(`/analyses/${encodeURIComponent(analysisId)}/source-enrichment/jobs`, {
+    method: 'POST', body: JSON.stringify({}),
+  })
+}
+
 export function createProductCandidateDecision(candidateId, analysisId, decision, notes = null) {
   return request(`/product-candidates/${encodeURIComponent(candidateId)}/decisions`, {
     method: 'POST', body: JSON.stringify({ analysisId, decision, notes }),
@@ -154,6 +172,38 @@ export function enqueueImageVideoGeneration(planId, sceneNumber, assetRevisionId
 export function registerCampaignPublication(iterationId, input) {
   return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/publications`, {
     method: 'POST', body: JSON.stringify(input),
+  })
+}
+
+export function updateDraftCampaignIteration(iterationId, input) {
+  return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/draft`, {
+    method: 'PUT', body: JSON.stringify(input),
+  })
+}
+
+export function createCampaignIteration(campaignId, sourceIterationId, input) {
+  return request(`/campaigns/${encodeURIComponent(campaignId)}/iterations`, {
+    method: 'POST', body: JSON.stringify({ sourceIterationId, ...input }),
+  })
+}
+
+export function hardDeleteDraftCampaign(campaignId) {
+  return request(`/campaigns/${encodeURIComponent(campaignId)}`, { method: 'DELETE' })
+}
+
+export function voidCampaign(campaignId, reason, note = null) {
+  return request(`/campaigns/${encodeURIComponent(campaignId)}/void`, {
+    method: 'POST', body: JSON.stringify({ reason, note }),
+  })
+}
+
+export function startYouTubeAnalyticsOAuth() {
+  return request('/youtube-analytics/oauth/start', { method: 'POST', body: JSON.stringify({}) })
+}
+
+export function collectYouTubeAnalytics(publicationId, startDate, endDate) {
+  return request(`/campaign-publications/${encodeURIComponent(publicationId)}/youtube-analytics/runs`, {
+    method: 'POST', body: JSON.stringify({ startDate, endDate }),
   })
 }
 

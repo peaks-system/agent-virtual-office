@@ -3,7 +3,8 @@ import http from 'node:http'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { configurationStatus, createRevenueApi, directProductInput, DIRECT_PRODUCT_PLACEHOLDERS, threePicksV2CampaignInput } = require('../scripts/revenue-api.cjs')
+const { analyticsDateRangeInput, configurationStatus, createRevenueApi, directProductInput,
+  DIRECT_PRODUCT_PLACEHOLDERS, threePicksV2CampaignInput } = require('../scripts/revenue-api.cjs')
 const uuid = '11111111-1111-4111-8111-111111111111'
 const idempotencyKey = '22222222-2222-4222-8222-222222222222'
 const servers = []
@@ -13,8 +14,8 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => new Promise(resolve => server.close(resolve))))
 })
 
-async function fixture({ authorize = () => true, env, store } = {}) {
-  const api = createRevenueApi({ authorize, permit: () => true, env: env || { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-only', YOUTUBE_API_KEY: 'test-only' }, store, today: () => '2026-10-08' })
+async function fixture({ authorize = () => true, analyticsService, env, store } = {}) {
+  const api = createRevenueApi({ authorize, permit: () => true, analyticsService, env: env || { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-only', YOUTUBE_API_KEY: 'test-only' }, store, today: () => '2026-10-08' })
   const server = http.createServer(api.handler)
   servers.push(server)
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -166,6 +167,12 @@ describe('Revenue Lab API', () => {
     expect((await response.json()).data.status).toBe('pending')
   })
 
+  it('reports server-only YouTube Analytics configuration names without values', () => {
+    const status = configurationStatus({ YOUTUBE_ANALYTICS_CLIENT_ID: 'desktop-client-id' }).youtubeAnalytics
+    expect(status).toMatchObject({ configured: false, missing: ['YOUTUBE_ANALYTICS_CLIENT_SECRET'], credentialStore: 'windows-dpapi' })
+    expect(JSON.stringify(status)).not.toContain('desktop-client-id')
+  })
+
   it('enqueues a manual Tracking job independently from Discovery', async () => {
     const store = { enqueueTracking: vi.fn(async () => ({ createdCount: 1 })) }
     const origin = await fixture({ store })
@@ -187,6 +194,35 @@ describe('Revenue Lab API', () => {
     expect(first.status).toBe(201)
     expect(store.enqueueAnalysisCandidates).toHaveBeenCalledWith(1, expect.objectContaining({ model: 'gpt-6-luna' }))
     expect((await fetch(`${origin}/api/revenue/analysis/jobs`, { method: 'POST', headers: jsonHeaders, body: '{"limit":7}' })).status).toBe(400)
+  })
+
+  it('enqueues Commerce Translation and records safe human keyword lineage', async () => {
+    const store = {
+      enqueueCommerceTranslation: vi.fn(async () => ({ id: uuid, created: true, cached: false })),
+      createCommerceTranslationFeedback: vi.fn(async (_id, input) => ({ id: 'feedback-1', ...input })),
+    }
+    const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test', YOUTUBE_API_KEY: 'test', OPENAI_API_KEY: 'secret' }
+    const origin = await fixture({ store, env })
+    const queued = await fetch(`${origin}/api/revenue/analyses/${uuid}/commerce-translations/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })
+    expect(queued.status).toBe(201)
+    expect(store.enqueueCommerceTranslation).toHaveBeenCalledWith(uuid, expect.objectContaining({ model: 'gpt-6-luna' }))
+    const keywordId = '33333333-3333-4333-8333-333333333333'
+    const approved = await fetch(`${origin}/api/revenue/commerce-translations/${uuid}/feedback`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ keywordId, action: 'override', overrideKeyword: '省スペース 卓上照明' }) })
+    expect(approved.status).toBe(201)
+    expect(store.createCommerceTranslationFeedback).toHaveBeenCalledWith(uuid, expect.objectContaining({ keywordId, action: 'override', overrideKeyword: '省スペース 卓上照明' }))
+    const blocked = await fetch(`${origin}/api/revenue/commerce-translations/${uuid}/feedback`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ keywordId, action: 'override', overrideKeyword: 'ダイソー ライト' }) })
+    expect(blocked.status).toBe(400)
+  })
+
+  it('enqueues description enrichment only through the authenticated server boundary', async () => {
+    const store = { enqueueYouTubeDescriptionEnrichment: vi.fn(async () => ({ id: 'enrichment-request-1', created: true, status: 'pending' })) }
+    const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test', YOUTUBE_API_KEY: 'test', OPENAI_API_KEY: 'secret' }
+    const denied = await fixture({ store, env, authorize: () => false })
+    expect((await fetch(`${denied}/api/revenue/analyses/${uuid}/source-enrichment/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })).status).toBe(401)
+    const origin = await fixture({ store, env })
+    const response = await fetch(`${origin}/api/revenue/analyses/${uuid}/source-enrichment/jobs`, { method: 'POST', headers: jsonHeaders, body: '{}' })
+    expect(response.status).toBe(201)
+    expect(store.enqueueYouTubeDescriptionEnrichment).toHaveBeenCalledWith(uuid, '2026-10-08', expect.objectContaining({ model: 'gpt-6-luna' }))
   })
 
   it('requires Rakuten server credentials and enqueues exactly one analysis product search', async () => {
@@ -222,6 +258,7 @@ describe('Revenue Lab API', () => {
       productUrl: 'https://example.com/product', affiliateUrl: '', priceAmount: 3980, currency: 'jpy', productNotes: '人間が商品ページを確認',
       appealHypothesis: '省スペースを訴求', hookText: '暗い机が変わる', contentOutline: '比較して紹介', scriptText: '',
       youtubeVideoId: 'video123', publicationTitle: '公開タイトル', publishedAt: '2026-10-10T01:00:00+09:00',
+      translationOrigin: { translationId: uuid, keywordId: uuid, feedbackId: null },
     }
     const denied = await fixture({ store, authorize: () => false })
     expect((await fetch(`${denied}/api/revenue/analyses/${uuid}/campaigns`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(input) })).status).toBe(401)
@@ -230,6 +267,7 @@ describe('Revenue Lab API', () => {
     expect(store.createManualCampaign).toHaveBeenCalledWith(uuid, expect.objectContaining({
       campaignName: '卓上ライト検証', productUrl: 'https://example.com/product', affiliateUrl: null,
       currency: 'JPY', youtubeVideoId: 'video123', publishedAt: '2026-10-09T16:00:00.000Z',
+      translationOrigin: { translationId: uuid, keywordId: uuid, feedbackId: null },
     }))
   })
 
@@ -292,6 +330,139 @@ describe('Revenue Lab API', () => {
     const response = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/publications`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ youtubeVideoId: 'realVideo1', publicationTitle: '公開済み', publishedAt: '2026-10-10T12:00:00+09:00' }) })
     expect(response.status).toBe(201)
     expect(store.registerCampaignPublication).toHaveBeenCalledWith(uuid, { youtubeVideoId: 'realVideo1', publicationTitle: '公開済み', publishedAt: '2026-10-10T03:00:00.000Z' })
+  })
+
+  it('validates and routes Campaign lifecycle operations without exposing immutable writes', async () => {
+    const store = {
+      updateDraftCampaignIteration: vi.fn(async () => ({ iterationId: uuid, iterationStatus: 'draft' })),
+      createCampaignIteration: vi.fn(async () => ({ iterationId: idempotencyKey, iterationNumber: 2, iterationStatus: 'draft' })),
+      hardDeleteDraftCampaign: vi.fn(async () => ({ campaignId: uuid, deleted: true })),
+      voidCampaign: vi.fn(async () => ({ campaignId: uuid, status: 'voided', voidReason: 'duplicate' })),
+    }
+    const origin = await fixture({ store })
+    const creative = { appealHypothesis: 'updated appeal', hookText: 'updated hook', contentOutline: 'updated outline', scriptText: '' }
+    expect((await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/draft`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ ...creative, hookText: '' }) })).status).toBe(400)
+    const edited = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/draft`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(creative) })
+    expect(edited.status).toBe(200)
+    expect(store.updateDraftCampaignIteration).toHaveBeenCalledWith(uuid, { ...creative, scriptText: null })
+    const created = await fetch(`${origin}/api/revenue/campaigns/${uuid}/iterations`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ sourceIterationId: idempotencyKey, ...creative }) })
+    expect(created.status).toBe(201)
+    expect(store.createCampaignIteration).toHaveBeenCalledWith(uuid, idempotencyKey, { ...creative, scriptText: null })
+    const invalidVoid = await fetch(`${origin}/api/revenue/campaigns/${uuid}/void`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ reason: 'other', note: '' }) })
+    expect(invalidVoid.status).toBe(400)
+    const voided = await fetch(`${origin}/api/revenue/campaigns/${uuid}/void`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ reason: 'duplicate', note: '二重登録' }) })
+    expect(voided.status).toBe(200)
+    expect(store.voidCampaign).toHaveBeenCalledWith(uuid, { reason: 'duplicate', note: '二重登録' })
+    const deleted = await fetch(`${origin}/api/revenue/campaigns/${uuid}`, { method: 'DELETE', headers: jsonHeaders })
+    expect(deleted.status).toBe(200)
+    expect(store.hardDeleteDraftCampaign).toHaveBeenCalledWith(uuid)
+  })
+
+  it('returns a sealed conflict when evidence makes a Campaign immutable', async () => {
+    const store = { hardDeleteDraftCampaign: vi.fn(async () => { throw Object.assign(new Error('private database detail'), { code: 'CAMPAIGN_OPERATION_CONFLICT', status: 409 }) }) }
+    const origin = await fixture({ store })
+    const response = await fetch(`${origin}/api/revenue/campaigns/${uuid}`, { method: 'DELETE', headers: jsonHeaders })
+    expect(response.status).toBe(409)
+    const text = await response.text()
+    expect(text).toContain('CAMPAIGN_OPERATION_CONFLICT')
+    expect(text).not.toContain('private database detail')
+  })
+
+  it('queues one immutable Creative Production revision with server-selected model', async () => {
+    const store = { enqueueCreativeProduction: vi.fn(async () => ({ requestId: uuid, revisionNumber: 1, created: true })) }
+    const env = {
+      SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-only', YOUTUBE_API_KEY: 'test-only',
+      OPENAI_API_KEY: 'secret', REVENUE_LAB_CREATIVE_PRODUCTION_MODEL: 'gpt-test',
+    }
+    const origin = await fixture({ store, env })
+    const response = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/production-plans`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey }),
+    })
+    expect(response.status).toBe(201)
+    expect(store.enqueueCreativeProduction).toHaveBeenCalledWith(uuid, { idempotencyKey, model: 'gpt-test' })
+    expect(JSON.stringify(await response.json())).not.toContain('secret')
+  })
+
+  it('requires OpenAI configuration and a UUID idempotency key for Creative Production', async () => {
+    const store = { enqueueCreativeProduction: vi.fn() }
+    const origin = await fixture({ store })
+    const missing = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/production-plans`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey }),
+    })
+    expect(missing.status).toBe(503)
+    const configured = await fixture({ store, env: { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-only', YOUTUBE_API_KEY: 'test-only', OPENAI_API_KEY: 'secret' } })
+    const invalid = await fetch(`${configured}/api/revenue/campaign-iterations/${uuid}/production-plans`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey: 'not-a-uuid' }),
+    })
+    expect(invalid.status).toBe(400)
+    expect(store.enqueueCreativeProduction).not.toHaveBeenCalled()
+  })
+
+  it('queues Pollo generation only through server-selected provider configuration', async () => {
+    const store = { enqueueVideoGeneration: vi.fn(async () => ({ runId: uuid, sceneGenerationId: idempotencyKey, created: true })) }
+    const env = {
+      SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-only', YOUTUBE_API_KEY: 'test-only',
+      POLLO_API_KEY: 'private-pollo-key', REVENUE_LAB_POLLO_MODEL: 'pollo-v2-5',
+    }
+    const origin = await fixture({ store, env })
+    const response = await fetch(`${origin}/api/revenue/creative-production-plans/${uuid}/scenes/2/video-generations`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey, regenerate: true }),
+    })
+    expect(response.status).toBe(201)
+    expect(store.enqueueVideoGeneration).toHaveBeenCalledWith(uuid, 2, {
+      idempotencyKey, regenerate: true, model: 'pollo-v2-5', provider: 'pollo', providerVersion: 'platform-v1', resolution: '480p',
+    })
+    const serialized = JSON.stringify(await response.json())
+    expect(serialized).not.toContain('private-pollo-key')
+    expect(serialized).not.toContain('x-api-key')
+  })
+
+  it('reports only the missing Pollo variable name and rejects malformed scene requests', async () => {
+    const store = { enqueueVideoGeneration: vi.fn() }
+    const origin = await fixture({ store })
+    const missing = await fetch(`${origin}/api/revenue/creative-production-plans/${uuid}/scenes/1/video-generations`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey }),
+    })
+    expect(missing.status).toBe(503)
+    expect(await missing.text()).toContain('POLLO_API_KEY')
+    const configured = await fixture({ store, env: { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-only', YOUTUBE_API_KEY: 'test-only', POLLO_API_KEY: 'private-pollo-key' } })
+    const invalid = await fetch(`${configured}/api/revenue/creative-production-plans/${uuid}/scenes/0/video-generations`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey: 'bad' }),
+    })
+    expect(invalid.status).toBe(400)
+    expect(store.enqueueVideoGeneration).not.toHaveBeenCalled()
+    const status = configurationStatus({ POLLO_API_KEY: 'private-pollo-key' })
+    expect(status.videoGeneration).toMatchObject({ configured: true, provider: 'pollo', providerVersion: 'platform-v1', requestedModel: 'pollo-v2', audioEnabled: false })
+    expect(JSON.stringify(status)).not.toContain('private-pollo-key')
+  })
+
+  it('starts Desktop OAuth and manually collects one publication date range', async () => {
+    const env = {
+      SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-only', YOUTUBE_API_KEY: 'test-only',
+      YOUTUBE_ANALYTICS_CLIENT_ID: 'desktop-id', YOUTUBE_ANALYTICS_CLIENT_SECRET: 'desktop-secret',
+    }
+    const analyticsService = {
+      startAuthorization: vi.fn(async () => ({ status: 'authorizing', errorCode: null })),
+      connectionStatus: vi.fn(async () => ({ flow: { status: 'idle', errorCode: null }, connection: null })),
+      collect: vi.fn(async () => ({ id: uuid, status: 'succeeded', views: 42 })), close: vi.fn(),
+    }
+    const store = { dashboard: vi.fn(async () => ({ queries: [], opportunities: [], trackingOpportunities: [], campaigns: [] })) }
+    const origin = await fixture({ env, store, analyticsService })
+    const start = await fetch(`${origin}/api/revenue/youtube-analytics/oauth/start`, { method: 'POST', headers: jsonHeaders, body: '{}' })
+    expect(start.status).toBe(202)
+    expect(await start.json()).toEqual({ data: { status: 'authorizing', errorCode: null } })
+    const collected = await fetch(`${origin}/api/revenue/campaign-publications/${uuid}/youtube-analytics/runs`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ startDate: '2026-10-01', endDate: '2026-10-09' }),
+    })
+    expect(collected.status).toBe(201)
+    expect(analyticsService.collect).toHaveBeenCalledWith(uuid, { startDate: '2026-10-01', endDate: '2026-10-09' })
+    expect(JSON.stringify(await collected.json())).not.toContain('desktop-secret')
+  })
+
+  it('rejects invalid Analytics date ranges before collection', () => {
+    expect(() => analyticsDateRangeInput({ startDate: '2026-10-10', endDate: '2026-10-09' })).toThrow(TypeError)
+    expect(() => analyticsDateRangeInput({ startDate: '2025-01-01', endDate: '2026-10-09' })).toThrow(TypeError)
+    expect(analyticsDateRangeInput({ startDate: '2026-10-01', endDate: '2026-10-09' })).toEqual({ startDate: '2026-10-01', endDate: '2026-10-09' })
   })
 
   it('returns the existing Campaign for an idempotent replay', async () => {
