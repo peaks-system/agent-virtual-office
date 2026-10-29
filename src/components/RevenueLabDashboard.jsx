@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { collectYouTubeAnalytics, createCampaignIteration, createDirectProductCampaign as createDirectProductCampaignRequest, createManualCampaign as createManualCampaignRequest, createProductAssetRevision, createProductCandidateDecision, createRevenueAnalysisReview, createThreePicksV2Campaign as createThreePicksCampaignRequest, enqueueCreativeAudioArtifactGeneration, enqueueCreativeAudioGeneration, enqueueCreativeProductionPlan, enqueueEnabledRevenueQueries, enqueueFinalComposition, enqueueFinalCompositionV2, enqueueImageVideoGeneration, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, enqueueThreePicksPlan, enqueueThreePicksV2Plan, enqueueVideoGeneration, hardDeleteDraftCampaign, loadFinalCompositionPreview, loadRevenueDashboard, registerCampaignPublication, startYouTubeAnalyticsOAuth, updateDraftCampaignIteration, updateRevenueQuery, voidCampaign } from '../services/revenueLabApi'
-import { buildWorkspaceUrl, campaignFromLocation, createLatestRequestSequence, deriveAttentionItems, deriveWorkspace, installRevenueRefreshLifecycle, planGenerationFeedback, shouldPollRevenueLab } from './revenueLabWorkspace'
+import { buildWorkspaceUrl, campaignFromLocation, createLatestRequestSequence, deriveAttentionItems, deriveWorkspace, installRevenueRefreshLifecycle, planGenerationFeedback, preferredOperatorCampaignId, shouldPollRevenueLab } from './revenueLabWorkspace'
 import './revenueLabDashboard.css'
 
 const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] }, creativeProduction: { configured: false, missing: ['OPENAI_API_KEY'] }, multiProductShorts: { configured: false, missing: ['OPENAI_API_KEY'] }, multiProductShortsV2: { configured: false, missing: ['OPENAI_API_KEY'], templateId: 'hero-carousel-v2' }, textToSpeech: { configured: false, missing: ['ELEVENLABS_API_KEY'] }, finalComposition: { configured: false, missing: ['REVENUE_LAB_FFMPEG_PATH'] }, finalCompositionV2: { configured: false, missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET', 'REVENUE_LAB_CREATIVE_AUDIO_BUCKET', 'REVENUE_LAB_COMPOSITION_BUCKET', 'REVENUE_LAB_FFMPEG_PATH', 'REVENUE_LAB_FFPROBE_PATH'] }, productAssetRevisions: { configured: false, missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET'] }, videoGeneration: { configured: false, missing: ['POLLO_API_KEY'], provider: 'pollo', requestedModel: 'pollo-v2' }, imageToVideo: { configured: false, missing: ['POLLO_API_KEY', 'REVENUE_LAB_PRODUCT_ASSET_BUCKET'], provider: 'pollo', requestedModel: 'wan-v2-2-flash' }, products: { configured: false, missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'] }, youtubeAnalytics: { configured: false, missing: ['YOUTUBE_ANALYTICS_CLIENT_ID', 'YOUTUBE_ANALYTICS_CLIENT_SECRET'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], youtubeAnalyticsConnection: null, youtubeAnalyticsFlow: { status: 'idle', errorCode: null }, latestJob: null, latestRun: null, latestTrackingRun: null }
@@ -280,14 +280,19 @@ function AnalysisPanel({ analysis, productSearch, productConfig, busy, onReview,
 }
 
 function OpportunityCard({ item, index, tracking = false, analysis, productSearch, productConfig, busy, onReview, onProductSearch, onProductDecision, onCreateCampaign }) {
+  const detailRef = useRef(null)
   const reviewUrl = videoReviewUrl(item)
   const velocity = velocityPresentation(item.velocityMode)
   const reasons = opportunityReasons(item)
+  const productName = analysis?.output?.product_or_theme_name || item.title
+  const openDetails = () => { if (detailRef.current) detailRef.current.open = true }
   return <article className="revenue-opportunity">
     <span className="revenue-rank">#{index + 1}</span>
     {item.thumbnailUrl && <img src={item.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />}
-    <div><p className="revenue-channel">{item.channelTitle || 'チャンネル不明'}</p><h3>{item.title}</h3>
-      <dl className="revenue-review-metrics">
+    <div><p className="revenue-channel">{item.merchant || item.channelTitle || 'merchant未確認'}</p><h3>{productName}</h3>
+      <div className="revenue-opportunity-summary"><strong>Opportunity {scoreLabel(item.opportunityScore)}</strong>{tracking && <span>継続上昇</span>}{analysis?.status === 'succeeded' && <span>分析済み</span>}</div>
+      <div className="revenue-opportunity-actions"><button type="button" onClick={openDetails}>商品登録</button><button type="button" onClick={openDetails}>Three Picksへ</button></div>
+      <details ref={detailRef} className="revenue-opportunity-detail"><summary>詳細を見る</summary><dl className="revenue-review-metrics">
         <div><dt>公開日時</dt><dd>{publishedLabel(item.publishedAt)}</dd></div>
         <div><dt>再生数</dt><dd>{metricCount(item.viewCount)}</dd></div>
         <div><dt>登録者数</dt><dd>{item.hiddenSubscriberCount ? '非公開' : metricCount(item.subscriberCount)}</dd></div>
@@ -306,7 +311,7 @@ function OpportunityCard({ item, index, tracking = false, analysis, productSearc
       </dl>}
       <div className="revenue-reasons"><strong>なぜ上位なのか</strong><ul>{reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></div>
       <p className="revenue-meta">母集団 {item.percentilePopulationSize}件 · {item.scoreVersion}</p>
-      <details className="revenue-score-details"><summary>詳細を見る</summary><dl>
+      <details className="revenue-score-details"><summary>内部評価</summary><dl>
         <div><dt>再生速度 percentile</dt><dd>{scoreLabel(item.velocityPercentile)}</dd></div>
         <div><dt>チャンネル倍率 percentile</dt><dd>{scoreLabel(item.channelRatioPercentile)}</dd></div>
         <div><dt>engagement percentile</dt><dd>{scoreLabel(item.engagementPercentile)}</dd></div>
@@ -317,7 +322,7 @@ function OpportunityCard({ item, index, tracking = false, analysis, productSearc
         <div><dt>Commerce Fit</dt><dd>{metricCount(item.commerceFit)}</dd></div>
       </dl></details>
       {reviewUrl && <a className="revenue-youtube-link" href={reviewUrl} target="_blank" rel="noopener noreferrer">YouTubeで見る</a>}
-      <AnalysisPanel analysis={analysis} productSearch={productSearch} productConfig={productConfig} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
+      <AnalysisPanel analysis={analysis} productSearch={productSearch} productConfig={productConfig} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} /></details>
     </div>
   </article>
 }
@@ -432,8 +437,8 @@ function DirectProductIntake({ busy, onCreate }) {
     ...previous, assets: previous.assets.map((asset, assetIndex) => assetIndex === index ? { ...asset, [name]: value } : asset),
   }))
   return <section id="direct-product-intake" className="revenue-direct-intake" aria-labelledby="direct-product-heading">
-    <div className="revenue-section-heading"><div><p className="revenue-kicker">STEP 1 · PRODUCT</p><h2 id="direct-product-heading">商品を登録</h2><p>商品情報と利用可能な素材を登録します。制作案はThree PicksでAIが作成します。</p></div><span>商品API不要</span></div>
-    <details open><summary>商品登録フォーム</summary><form onSubmit={async event => {
+    <h2 id="direct-product-heading" className="revenue-visually-hidden">商品を手動登録</h2>
+    <details className="revenue-manual-product"><summary>＋ 商品を手動登録</summary><form onSubmit={async event => {
       event.preventDefault()
       if (submittingRef.current) return
       submittingRef.current = true; setSubmitting(true)
@@ -445,7 +450,7 @@ function DirectProductIntake({ busy, onCreate }) {
       } catch {
         // Shared Dashboard alert presents the sealed API error.
       } finally { submittingRef.current = false; setSubmitting(false) }
-    }}>
+    }}><p>商品情報と利用可能な素材を登録します。制作案はThree PicksでAIが作成します。</p>
       <fieldset><legend>商品</legend>
         <label>商品名<input required maxLength={240} value={form.productName} onChange={event => update('productName', event.target.value)} /></label>
         <label>merchant<input required maxLength={80} value={form.merchant} onChange={event => update('merchant', event.target.value)} /></label>
@@ -956,39 +961,173 @@ function RevenueWorkspace({ state, requestedCampaignId, busy, onReload, onSelect
   </section>
 }
 
+function OperatorProductionWorkspace({ state, requestedCampaignId, busy, onGeneratePlan, onGenerateAudio, onCompose, onPreview, onOpenPublication }) {
+  const [actionError, setActionError] = useState('')
+  const [previewUrl, setPreviewUrl] = useState('')
+  const keyRef = useRef(newCampaignIdempotencyKey())
+  const campaignId = preferredOperatorCampaignId(state, requestedCampaignId)
+  const model = campaignId ? deriveWorkspace(state, campaignId) : { campaign: null, iteration: null, latestRevision: null, primaryAction: { id: 'none', label: '', disabled: true }, timing: { ready: false }, composition: null, planFeedback: null }
+  const { campaign, iteration, latestRevision: revision, primaryAction } = model
+  const runPrimary = async () => {
+    if (primaryAction.disabled) return
+    setActionError('')
+    try {
+      if (primaryAction.id === 'generate-plan') await onGeneratePlan(iteration.id, keyRef.current)
+      if (primaryAction.id === 'generate-audio') await onGenerateAudio(revision.planId, keyRef.current)
+      if (primaryAction.id === 'compose') await onCompose(revision.planId, keyRef.current)
+      if (primaryAction.id === 'preview') { const result = await onPreview(primaryAction.outputId); setPreviewUrl(result.previewUrl) }
+      keyRef.current = newCampaignIdempotencyKey()
+    } catch (failure) { setActionError(failure?.message || '操作を開始できませんでした。') }
+  }
+  const configReason = primaryAction.id === 'generate-plan' && !state.config.multiProductShortsV2?.configured ? '制作案生成の接続設定が必要です'
+    : primaryAction.id === 'generate-audio' && !state.config.textToSpeech?.configured ? 'ナレーション生成の接続設定が必要です'
+      : primaryAction.id === 'compose' && !state.config.finalCompositionV2?.configured ? 'MP4生成の接続設定が必要です' : ''
+  const actionDisabled = busy || primaryAction.disabled || Boolean(configReason)
+  const actionReason = primaryAction.reason || configReason
+  const audioReady = model.timing.ready
+  const videoOutput = model.composition?.output || null
+  return <section className="revenue-workspace revenue-operator-production" aria-label="Revenue Lab workspace">
+    <div className="revenue-section-heading"><div><p className="revenue-kicker">PRODUCTION</p><h2>制作</h2><p>{campaign?.name || 'おすすめ3選 Shorts v2'}</p></div></div>
+    {!campaign && <div className="revenue-state"><h3>制作対象がありません</h3><p>おすすめ3選 Shorts v2のCampaignを商品画面から作成してください。</p></div>}
+    {campaign && <>
+      <section className="revenue-production-artifact"><h3>原稿</h3>{revision?.output ? <ThreePicksScriptReview output={revision.output} /> : <p>原稿生成が必要です。</p>}{primaryAction.id === 'generate-plan' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}{model.planFeedback?.kind === 'error' && <ThreePicksGenerationFeedback feedback={model.planFeedback} />}</section>
+      <section className="revenue-production-artifact"><h3>音声</h3><p className={`revenue-artifact-status ${audioReady ? 'is-ready' : 'is-attention'}`}>{audioReady ? '✓ 音声完成' : '音声生成が必要'}</p>{primaryAction.id === 'generate-audio' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}</section>
+      <section className="revenue-production-artifact"><h3>動画</h3><p className={`revenue-artifact-status ${videoOutput ? 'is-ready' : 'is-attention'}`}>{videoOutput ? '✓ 動画完成' : '動画生成が必要'}</p>{videoOutput && <p>{videoOutput.durationSeconds == null ? '尺未取得' : `${videoOutput.durationSeconds}秒`}</p>}{primaryAction.id === 'compose' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}{videoOutput && <button type="button" onClick={runPrimary}>Previewを開く</button>}{actionReason && <p className="revenue-warning">{actionReason}</p>}</section>
+      {previewUrl && <video className="revenue-workspace-preview" controls preload="metadata" src={previewUrl}>完成動画を再生できません。</video>}
+      {videoOutput && <button className="corp-primary revenue-publish-next" type="button" onClick={onOpenPublication}>公開準備へ進む</button>}
+      {actionError && <p className="revenue-warning" role="alert">{actionError}</p>}
+    </>}
+  </section>
+}
+
 const OPERATIONS_AREAS = [
   ['today', '今日やること'], ['products', '商品'], ['production', '制作'], ['publication', '公開・分析'],
 ]
 
-function RevenueOperationsNav({ activeArea, onChange, busy, onReload }) {
+function RevenueOperationsNav({ activeArea, onChange, busy, onReload, auditOpen, onToggleAudit }) {
   return <header className="revenue-operations-header">
     <div><p className="revenue-kicker">REVENUE LAB</p><h2>通常運用</h2><p>AIが進め、人の確認や判断が必要な仕事だけをここに集めます。</p></div>
-    <button type="button" onClick={onReload} disabled={busy}>更新</button>
+    <div className="revenue-header-actions"><button type="button" onClick={onReload} disabled={busy}>更新</button><button type="button" aria-expanded={auditOpen} onClick={onToggleAudit}>設定・監査</button></div>
     <nav className="revenue-operations-nav" aria-label="Revenue Lab 通常運用">{OPERATIONS_AREAS.map(([id, label]) => <button key={id} type="button" className={activeArea === id ? 'is-active' : ''} aria-current={activeArea === id ? 'page' : undefined} onClick={() => onChange(id)}>{label}</button>)}</nav>
   </header>
 }
 
-function TodayOperations({ state, onOpenArea }) {
+function TodayOperations({ state, onOpenArea, onSelectCampaign }) {
   const items = deriveAttentionItems(state)
   return <section className="revenue-operations-area" aria-labelledby="revenue-today-heading">
     <div className="revenue-section-heading"><div><p className="revenue-kicker">HUMAN ATTENTION</p><h2 id="revenue-today-heading">今日やること</h2><p>確認や判断が必要な制作物だけを表示しています。</p></div><span>{items.length}件</span></div>
     {!items.length && <div className="revenue-state"><h3>今すぐ確認する項目はありません</h3><p>AIの処理が進むと、確認が必要な項目がここに届きます。</p></div>}
-    <div className="revenue-attention-list">{items.map(item => <article key={item.campaignId} className="revenue-attention-card">
-      <div><small>Campaign</small><h3>{item.campaignName}</h3><span>{item.revisionNumber ? `Revision ${item.revisionNumber}` : 'Revision準備中'}</span></div>
-      <div><strong>{item.status}</strong><p>{item.detail}</p></div>
-      <button className="corp-primary" type="button" onClick={() => onOpenArea(item.area)}>{item.cta}</button>
+    <div className="revenue-attention-list">{items.map(item => <article key={item.id} className="revenue-attention-card">
+      <div><strong>{item.status}</strong><h3>{item.campaignName}</h3></div>
+      <p>{item.detail}</p>
+      <button className="corp-primary" type="button" onClick={() => { onSelectCampaign(item.campaignId); onOpenArea(item.area) }}>{item.cta}</button>
     </article>)}</div>
   </section>
 }
 
-function RegisteredProducts({ campaigns = [] }) {
-  const products = campaigns.flatMap(campaign => (campaign.iterations || []).flatMap(iteration => {
-    if (iteration.product) return [{ id: iteration.product.id || `${campaign.id}:${iteration.id}`, name: iteration.product.productName, merchant: iteration.product.merchant, url: iteration.product.affiliateUrl || iteration.product.productUrl }]
-    return (iteration.productSet?.items || []).map(item => ({ id: item.id, name: item.productName, merchant: item.merchant, url: item.affiliateUrl || item.productUrl }))
+const PRODUCT_URL_TRACKING_PARAMS = new Set(['ref', 'tag', 'linkcode', 'creative', 'creativeasin', 'ascsubtag', 'camp', 'adid'])
+
+function normalizedProductUrl(value) {
+  if (!value) return null
+  try {
+    const parsed = new URL(value)
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '')
+    const path = parsed.pathname.replace(/\/+$/, '') || '/'
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (key.toLowerCase().startsWith('utm_') || PRODUCT_URL_TRACKING_PARAMS.has(key.toLowerCase())) parsed.searchParams.delete(key)
+    }
+    parsed.searchParams.sort()
+    const query = parsed.searchParams.toString()
+    return `${host}${path}${query ? `?${query}` : ''}`
+  } catch {
+    return String(value).trim().toLowerCase().replace(/[?#].*$/, '').replace(/\/+$/, '') || null
+  }
+}
+
+function normalizedProductText(value) {
+  return String(value || '').normalize('NFKC').trim().toLocaleLowerCase().replace(/[\s\u3000]+/g, ' ')
+}
+
+function hasRegisteredFacts(value) {
+  if (value == null) return false
+  if (typeof value !== 'object') return String(value).trim() !== ''
+  return Object.values(value).some(entry => entry != null && (typeof entry === 'object' ? hasRegisteredFacts(entry) : String(entry).trim() !== ''))
+}
+
+function registeredProductRecords(campaigns) {
+  return campaigns.flatMap(campaign => (campaign.iterations || []).flatMap(iteration => {
+    const timestampFallback = iteration.updatedAt || iteration.createdAt || campaign.updatedAt || campaign.createdAt || null
+    if (iteration.product) {
+      const product = iteration.product
+      return [{
+        recordId: product.id || `${campaign.id}:${iteration.id}`, canonicalId: product.canonicalProductId || product.id || null,
+        sourceId: product.sourceProductId || product.externalProductId || product.providerProductId || product.sku || null,
+        sourceNamespace: product.provider || product.sourceKind || product.discoveryChannel || product.merchant || 'product',
+        name: product.productName, merchant: product.merchant,
+        productUrl: product.productUrl, destinationUrl: product.affiliateUrl || product.productUrl,
+        assets: product.assets || [], facts: product.verifiedFacts || product.factsSnapshot,
+        updatedAt: product.updatedAt || product.createdAt || product.humanVerifiedAt || timestampFallback,
+        campaignName: campaign.name, iterationId: iteration.id,
+      }]
+    }
+    return (iteration.productSet?.items || []).map(item => {
+      const product = item.product || {}; const snapshot = item.productSnapshot || {}
+      return {
+        recordId: item.id || `${campaign.id}:${iteration.id}:${item.presentationOrder || 0}`,
+        canonicalId: item.canonicalProductId || item.curatedProductId || item.productId || product.canonicalProductId || product.id || snapshot.canonicalProductId || snapshot.curatedProductId || snapshot.id || null,
+        sourceId: item.sourceProductId || item.externalProductId || product.sourceProductId || product.externalProductId || product.providerProductId || snapshot.sourceProductId || snapshot.externalProductId || snapshot.providerProductId || snapshot.sku || null,
+        sourceNamespace: item.provider || product.provider || product.sourceKind || snapshot.provider || snapshot.sourceKind || product.merchant || snapshot.merchant || 'product',
+        name: item.productName || product.productName || snapshot.productName || snapshot.product_name,
+        merchant: item.merchant || product.merchant || snapshot.merchant,
+        productUrl: item.productUrl || product.productUrl || snapshot.productUrl || snapshot.product_url,
+        destinationUrl: item.destination?.url || item.affiliateUrl || product.affiliateUrl || product.productUrl || snapshot.affiliateUrl || snapshot.affiliate_url || snapshot.productUrl || snapshot.product_url,
+        assets: item.assetRevisions?.length ? item.assetRevisions : item.assetRevision ? [item.assetRevision] : product.assets || [],
+        facts: item.verifiedFact || item.verifiedFacts || product.verifiedFacts || snapshot.verifiedFacts || snapshot.verified_facts,
+        updatedAt: item.updatedAt || item.createdAt || iteration.productSet?.updatedAt || iteration.productSet?.createdAt || timestampFallback,
+        campaignName: campaign.name, iterationId: iteration.id,
+      }
+    })
   }))
+}
+
+function representativeIsBetter(candidate, current) {
+  const candidateRank = [Boolean(candidate.merchant), Boolean(candidate.destinationUrl), candidate.assets.length > 0, hasRegisteredFacts(candidate.facts)]
+  const currentRank = [Boolean(current.merchant), Boolean(current.destinationUrl), current.assets.length > 0, hasRegisteredFacts(current.facts)]
+  for (let index = 0; index < candidateRank.length; index += 1) if (candidateRank[index] !== currentRank[index]) return candidateRank[index]
+  return Date.parse(candidate.updatedAt || 0) > Date.parse(current.updatedAt || 0)
+}
+
+export function groupRegisteredProducts(campaigns = []) {
+  const groups = []; const aliases = new Map()
+  for (const record of registeredProductRecords(campaigns)) {
+    const strongAliases = []
+    if (record.canonicalId) strongAliases.push(`canonical:${record.canonicalId}`)
+    if (record.sourceId) strongAliases.push(`source:${normalizedProductText(record.sourceNamespace)}:${normalizedProductText(record.sourceId)}`)
+    const commerceUrl = normalizedProductUrl(record.productUrl || record.destinationUrl)
+    if (commerceUrl) strongAliases.push(`url:${commerceUrl}`)
+    const title = normalizedProductText(record.name); const merchant = normalizedProductText(record.merchant)
+    const recordAliases = strongAliases.length ? strongAliases : title && merchant ? [`title-merchant:${merchant}:${title}`] : [`record:${record.recordId}`]
+    let group = recordAliases.map(alias => aliases.get(alias)).find(Boolean)
+    if (!group) { group = { records: [], representative: record }; groups.push(group) }
+    group.records.push(record)
+    if (representativeIsBetter(record, group.representative)) group.representative = record
+    for (const alias of recordAliases) aliases.set(alias, group)
+  }
+  return groups.map(group => {
+    const representative = group.representative
+    return {
+      id: representative.canonicalId || representative.recordId, name: representative.name,
+      merchant: representative.merchant, url: representative.destinationUrl || representative.productUrl,
+      relatedRecordCount: group.records.length, records: group.records,
+    }
+  })
+}
+
+function RegisteredProducts({ campaigns = [] }) {
+  const products = groupRegisteredProducts(campaigns)
   return <section className="revenue-registered-products"><div className="revenue-section-heading"><div><p className="revenue-kicker">REGISTERED</p><h2>登録済み商品</h2></div><span>{products.length}件</span></div>
     {!products.length && <div className="revenue-state"><h3>登録済み商品はありません</h3><p>商品登録から制作対象を追加してください。</p></div>}
-    <div className="revenue-registered-grid">{products.map(product => <article key={product.id}><strong>{product.name || '商品名未設定'}</strong><small>{product.merchant || 'merchant未設定'}</small>{product.url && <a href={product.url} target="_blank" rel="noopener noreferrer">商品ページ</a>}</article>)}</div>
+    <div className="revenue-registered-grid">{products.map((product, index) => <article key={`${product.id}:${index}`}><strong>{product.name || '商品名未設定'}</strong><small>{product.merchant || 'merchant未設定'}</small><span className="revenue-related-record-count">関連レコード {product.relatedRecordCount}件</span>{product.url && <a href={product.url} target="_blank" rel="noopener noreferrer">商品ページ</a>}<details><summary>詳細を見る</summary><ul>{product.records.map(record => <li key={`${record.recordId}:${record.iterationId}`}><strong>{record.name || '商品名未設定'}</strong><small>Record ID: {record.recordId}</small><small>{record.merchant || 'merchant未設定'} · {record.assets.length ? 'Product Assetあり' : 'Product Assetなし'} · {hasRegisteredFacts(record.facts) ? 'verified factsあり' : 'verified factsなし'}</small>{record.destinationUrl && <a href={record.destinationUrl} target="_blank" rel="noopener noreferrer">関連商品ページ</a>}</li>)}</ul></details></article>)}</div>
   </section>
 }
 
@@ -1015,6 +1154,41 @@ function PublicationOperations({ state, requestedCampaignId, busy, onSelectCampa
     {previewUrl && <video className="revenue-workspace-preview" controls preload="metadata" src={previewUrl}>完成動画を再生できません。</video>}
     {!publication && iteration && composition && <section className="revenue-publication-registration"><h3>Publication登録</h3><PublicationRegistrationForm iterationId={iteration.id} busy={busy} onRegister={onRegisterPublication} /></section>}
     {publication && <><div className="revenue-publication"><span>{publication.publicationTitle || '公開タイトル未設定'}</span><a href={publication.canonicalUrl || `https://www.youtube.com/watch?v=${encodeURIComponent(publication.youtubeVideoId)}`} target="_blank" rel="noopener noreferrer">公開動画を開く</a></div><PublicationAnalyticsForm publication={publication} connection={state.youtubeAnalyticsConnection} busy={busy} onCollect={onCollectAnalytics} /><PerformanceSnapshot snapshot={publication.latestPerformance} /></>}
+    </>}
+  </section>
+}
+
+function OperatorPublicationOperations({ state, requestedCampaignId, busy, onPreview, onRegisterPublication, onCollectAnalytics, onOpenArea }) {
+  const [previewUrl, setPreviewUrl] = useState('')
+  const [showRegistration, setShowRegistration] = useState(false)
+  const campaignId = preferredOperatorCampaignId(state, requestedCampaignId)
+  const model = campaignId ? deriveWorkspace(state, campaignId) : { campaign: null, iteration: null, latestRevision: null, composition: null, publication: null }
+  const { campaign, iteration, latestRevision: revision, composition, publication } = model
+  const fields = revision?.output?.soft_copy_fields || []
+  const scriptConfirmed = fields.length > 0 && fields.every(field => field.reviewed === true || ['confirmed', 'reviewed'].includes(field.review_status))
+  const productItems = iteration?.product ? [iteration.product] : iteration?.productSet?.items || []
+  const linksReady = productItems.length > 0 && productItems.every(item => item.affiliateUrl || item.productUrl)
+  const openPreview = async () => { if (!composition?.output?.id) return; const result = await onPreview(composition.output.id); setPreviewUrl(result.previewUrl) }
+  const output = revision?.output || {}
+  const publicationTitle = publication?.publicationTitle || output.youtube_title || campaign?.name || '未設定'
+  const description = output.youtube_description || output.description || output.cta?.display_text || '未設定'
+  const disclosure = output.amazon_associate_disclosure || '未設定'
+  return <section className="revenue-operations-area" aria-labelledby="revenue-publication-heading">
+    <div className="revenue-section-heading"><div><p className="revenue-kicker">PUBLISH & LEARN</p><h2 id="revenue-publication-heading">公開・分析</h2><p>{campaign?.name || 'おすすめ3選 Shorts v2'}</p></div></div>
+    {!campaign && <div className="revenue-state"><h3>公開対象がありません</h3><p>制作から動画を完成させてください。</p></div>}
+    {campaign && <>
+      <div className="revenue-publication-readiness">
+        <article className={composition ? 'is-ready' : 'is-attention'}><span>{composition ? '✓' : '!'}</span><div><strong>{composition ? '動画完成' : '動画が未完成'}</strong>{!composition && <button type="button" onClick={() => onOpenArea('production')}>制作を確認</button>}</div></article>
+        <article className={scriptConfirmed ? 'is-ready' : 'is-attention'}><span>{scriptConfirmed ? '✓' : '!'}</span><div><strong>{scriptConfirmed ? '原稿確認済み' : '原稿確認が必要'}</strong>{!scriptConfirmed && <button type="button" onClick={() => onOpenArea('production')}>原稿を確認</button>}</div></article>
+        <article className={linksReady ? 'is-ready' : 'is-attention'}><span>{linksReady ? '✓' : '!'}</span><div><strong>{linksReady ? '商品リンク登録済み' : '商品リンク未登録'}</strong>{!linksReady && <button type="button" onClick={() => onOpenArea('products')}>商品リンクを登録</button>}</div></article>
+        <article className={publication ? 'is-ready' : ''}><span>{publication ? '✓' : '○'}</span><div><strong>{publication ? 'YouTube投稿済み' : 'YouTube未投稿'}</strong>{!publication && <a href="#revenue-publish-copy">投稿内容を確認</a>}</div></article>
+      </div>
+      <section id="revenue-publish-copy" className="revenue-publish-copy"><h3>投稿内容</h3><dl><div><dt>公開タイトル</dt><dd>{publicationTitle}</dd></div><div><dt>概要欄</dt><dd>{description}</dd></div><div><dt>Amazonアソシエイト開示文</dt><dd>{disclosure}</dd></div><div><dt>商品リンク</dt><dd>{productItems.length ? productItems.map(item => <span key={item.id || item.productName}>{item.productName || item.displayName || '商品'}: {item.affiliateUrl || item.productUrl || '未登録'}</span>) : '未登録'}</dd></div></dl></section>
+      {composition?.output && <section className="revenue-publish-video"><div><h3>動画Preview</h3><p>{composition.output.durationSeconds == null ? '尺未取得' : `${composition.output.durationSeconds}秒`}</p></div><button type="button" onClick={openPreview}>Previewを開く</button></section>}
+      {previewUrl && <video className="revenue-workspace-preview" controls preload="metadata" src={previewUrl}>完成動画を再生できません。</video>}
+      {!publication && iteration && composition && !showRegistration && <button className="revenue-publication-entry" type="button" onClick={() => setShowRegistration(true)}>YouTube投稿済み・Video IDを入力</button>}
+      {!publication && iteration && composition && showRegistration && <section className="revenue-publication-registration"><PublicationRegistrationForm iterationId={iteration.id} busy={busy} onRegister={onRegisterPublication} /></section>}
+      {publication && <><div className="revenue-publication"><span>{publication.publicationTitle || '公開タイトル未設定'}</span><a href={publication.canonicalUrl || `https://www.youtube.com/watch?v=${encodeURIComponent(publication.youtubeVideoId)}`} target="_blank" rel="noopener noreferrer">公開動画を開く</a></div><PublicationAnalyticsForm publication={publication} connection={state.youtubeAnalyticsConnection} busy={busy} onCollect={onCollectAnalytics} /><PerformanceSnapshot snapshot={publication.latestPerformance} /></>}
     </>}
   </section>
 }
@@ -1059,6 +1233,7 @@ function CampaignBoard({ campaigns = [], analyticsConnection, creativeProduction
 
 export function RevenueLabView({ state, error, busy, requestedCampaignId, initialArea = 'today', onSelectCampaign = () => {}, onReload, onRun, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onCreateDirectProduct, onCreateThreePicks, onGenerateThreePicks, onGenerateThreePicksV2, onGenerateAudio, onGenerateAudioArtifact, onCompose, onComposeV2, onPreview, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication, onUpdateIteration, onCreateIteration, onDeleteCampaign, onVoidCampaign, onConnectAnalytics, onCollectAnalytics, onSave }) {
   const [activeArea, setActiveArea] = useState(() => OPERATIONS_AREAS.some(([id]) => id === initialArea) ? initialArea : 'today')
+  const [auditOpen, setAuditOpen] = useState(false)
   if (!state) return <main className="revenue-shell" aria-busy="true"><div className="revenue-state"><h2>Revenue Lab</h2><p>収益機会を読み込んでいます…</p></div></main>
   const eligible = state.queries.filter(query => query.enabled && !queryNeedsScores(query))
   const enabledQueries = state.queries.filter(query => query.enabled)
@@ -1068,9 +1243,9 @@ export function RevenueLabView({ state, error, busy, requestedCampaignId, initia
   const analysisByItem = new Map((state.analyses || []).map(analysis => [analysis.sourceItemId, analysis]))
   const productSearchByAnalysis = new Map((state.productSearches || []).map(search => [search.analysisId, search]))
   return <main className="revenue-shell">
-    <RevenueOperationsNav activeArea={activeArea} onChange={setActiveArea} busy={busy} onReload={onReload} />
+    <RevenueOperationsNav activeArea={activeArea} onChange={setActiveArea} busy={busy} onReload={onReload} auditOpen={auditOpen} onToggleAudit={() => setAuditOpen(value => !value)} />
     {error && <div className="revenue-alert" role="alert">{error}</div>}
-    <div hidden={activeArea !== 'today'}><TodayOperations state={state} onOpenArea={setActiveArea} /></div>
+    <div hidden={activeArea !== 'today'}><TodayOperations state={state} onOpenArea={setActiveArea} onSelectCampaign={onSelectCampaign} /></div>
     <section hidden={activeArea !== 'products'} className="revenue-operations-area" aria-labelledby="revenue-products-heading">
       <section className="revenue-hero"><div><p className="revenue-kicker">PRODUCT OPERATIONS</p><h2 id="revenue-products-heading">商品</h2><p>新着、継続上昇、登録済み商品、Three Picks候補をまとめて確認します。</p></div><div className="revenue-actions"><button onClick={onTrack} disabled={busy}>継続上昇を更新</button><button className="corp-primary" onClick={() => onRun(eligible)} disabled={busy || eligible.length === 0}>今日の新着を更新</button></div></section>
       {!state.config.configured && <section className="revenue-state revenue-config"><h3>商品候補の取得準備が必要です</h3><p>接続の詳細は設定・監査で確認できます。</p></section>}
@@ -1081,9 +1256,9 @@ export function RevenueLabView({ state, error, busy, requestedCampaignId, initia
       <RegisteredProducts campaigns={state.campaigns || []} />
       <section><div className="revenue-section-heading"><div><p className="revenue-kicker">THREE PICKS</p><h2>Three Picks候補・選択</h2></div></div><ThreePicksIntake campaigns={state.campaigns || []} busy={busy} assetRevisionConfig={state.config.productAssetRevisions} onCreate={onCreateThreePicks} onCreateAssetRevision={onCreateAssetRevision} /></section>
     </section>
-    <div hidden={activeArea !== 'production'}><RevenueWorkspace state={state} requestedCampaignId={requestedCampaignId} busy={busy} onReload={onReload} onSelectCampaign={onSelectCampaign} onGeneratePlan={onGenerateThreePicksV2} onGenerateAudio={onGenerateAudio} onGenerateAudioArtifact={onGenerateAudioArtifact} onCompose={onComposeV2} onPreview={onPreview} onCollectAnalytics={onCollectAnalytics} /></div>
-    <div hidden={activeArea !== 'publication'}><PublicationOperations state={state} requestedCampaignId={requestedCampaignId} busy={busy} onSelectCampaign={onSelectCampaign} onPreview={onPreview} onRegisterPublication={onRegisterPublication} onCollectAnalytics={onCollectAnalytics} /></div>
-    <details className="revenue-advanced-tools"><summary>設定・監査</summary><div className="revenue-advanced-tools-body">
+    <div hidden={activeArea !== 'production'}><OperatorProductionWorkspace state={state} requestedCampaignId={requestedCampaignId} busy={busy} onGeneratePlan={onGenerateThreePicksV2} onGenerateAudio={onGenerateAudio} onCompose={onComposeV2} onPreview={onPreview} onOpenPublication={() => setActiveArea('publication')} /></div>
+    <div hidden={activeArea !== 'publication'}><OperatorPublicationOperations state={state} requestedCampaignId={requestedCampaignId} busy={busy} onPreview={onPreview} onRegisterPublication={onRegisterPublication} onCollectAnalytics={onCollectAnalytics} onOpenArea={setActiveArea} /></div>
+    <aside className="revenue-audit-drawer" hidden={!auditOpen} aria-label="設定・監査"><div className="revenue-advanced-tools-body">
     {!state.config.configured && <section className="revenue-state revenue-config"><h3>接続設定が必要です</h3><p>サーバー側の環境変数を設定してください。</p><code>{state.config.missing.join(', ')}</code></section>}
     <nav className="revenue-production-flow" aria-label="旧制作フロー"><strong>商品 → Three Picks制作 → MP4 → 公開・分析</strong></nav>
     <section className="revenue-research-summary" aria-labelledby="revenue-research-heading"><div className="revenue-section-heading"><div><p className="revenue-kicker">AUDIT</p><h2 id="revenue-research-heading">収集・スコア監査</h2></div></div><dl>
@@ -1104,7 +1279,7 @@ export function RevenueLabView({ state, error, busy, requestedCampaignId, initia
       <div className="revenue-query-grid">{state.queries.map(query => <QueryEditor key={query.id} query={query} busy={busy} onSave={onSave} />)}</div>
     </section>
     {state.latestJob && <p className="revenue-job" role="status">最新ジョブ: {state.latestJob.status} / 試行 {state.latestJob.attempts}{state.latestJob.errorCode ? ` / ${state.latestJob.errorCode}` : ''}</p>}
-    </div></details>
+    </div></aside>
   </main>
 }
 
