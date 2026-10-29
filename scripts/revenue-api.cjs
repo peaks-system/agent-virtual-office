@@ -413,6 +413,17 @@ function createRevenueApi({
           : { flow: { status: 'idle', errorCode: null } }
         return reply(res, 200, { data: { config, ...dashboard, youtubeAnalyticsFlow: analyticsStatus.flow } })
       }
+      if (req.method === 'GET' && pathname === '/discovery/results') {
+        const params = new URL(req.url, 'http://local').searchParams
+        const jobIds = (params.get('jobIds') || '').split(',').map(value => value.trim()).filter(Boolean)
+        if (!jobIds.length || jobIds.length > 3 || jobIds.some(id => !UUID.test(id))) {
+          return fail(res, 400, 'VALIDATION_ERROR', 'jobIdsが正しくありません。')
+        }
+        if (!config.configured) return reply(res, 200, { data: { status: 'idle', completedCount: 0, totalCount: jobIds.length, receivedCount: 0, scoredCount: 0, opportunities: [], errorCode: null } })
+        const limitValue = Number(params.get('limit') || 3)
+        const limit = Number.isInteger(limitValue) ? Math.max(1, Math.min(limitValue, 3)) : 3
+        return reply(res, 200, { data: await getStore().discoveryResults(jobIds, limit) })
+      }
       if (req.method === 'GET' && pathname === '/youtube-analytics/status') {
         if (!config.youtubeAnalytics.configured) return reply(res, 200, { data: { config: config.youtubeAnalytics, flow: { status: 'idle', errorCode: null }, connection: null } })
         return reply(res, 200, { data: { config: config.youtubeAnalytics, ...(await getAnalytics().connectionStatus()) } })

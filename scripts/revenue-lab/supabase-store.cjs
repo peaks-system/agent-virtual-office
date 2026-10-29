@@ -926,6 +926,36 @@ function createSupabaseStore({
     }
   }
 
+  async function discoveryResults(jobIds, limit = 3) {
+    const requestedJobIds = [...new Set((jobIds || []).filter(Boolean))].slice(0, 3)
+    const bounded = Math.max(1, Math.min(Number(limit) || 3, 3))
+    if (!requestedJobIds.length) return {
+      status: 'idle', completedCount: 0, totalCount: 0, receivedCount: 0, scoredCount: 0, opportunities: [], errorCode: null,
+    }
+    const jobs = await request(`jobs?id=in.(${encodeURIComponent(requestedJobIds.join(','))})&select=id,status,error_code`)
+    const runHistory = await request(`collection_runs?job_id=in.(${encodeURIComponent(requestedJobIds.join(','))})&select=id,job_id,status,received_count,scored_count,error_code,captured_at,completed_at&order=captured_at.desc`)
+    const latestRunByJob = new Map()
+    for (const run of runHistory || []) if (!latestRunByJob.has(run.job_id)) latestRunByJob.set(run.job_id, run)
+    const runs = [...latestRunByJob.values()]
+    const runIds = runs.filter(run => run.status === 'succeeded').map(run => run.id)
+    const opportunityRows = runIds.length ? await request(
+      `opportunities?collection_run_id=in.(${encodeURIComponent(runIds.join(','))})&select=*&order=opportunity_score_raw.desc,breakout_score_raw.desc,published_at.desc,youtube_video_id.asc&limit=${bounded}`,
+    ) : []
+    const opportunities = await enrichOpportunityReview((opportunityRows || []).map(opportunityFromRow))
+    const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled'])
+    const completedCount = (jobs || []).filter(job => terminalStatuses.has(job.status)).length
+    const totalCount = requestedJobIds.length
+    const failed = (jobs || []).find(job => job.status === 'failed') || (runs || []).find(run => run.status === 'failed')
+    const running = (jobs || []).length < totalCount || completedCount < totalCount || (!failed && runs.length < totalCount)
+    const status = failed ? 'failed' : running ? 'running' : opportunities.length ? 'succeeded' : 'empty'
+    return {
+      status, completedCount, totalCount,
+      receivedCount: (runs || []).reduce((sum, run) => sum + Number(run.received_count || 0), 0),
+      scoredCount: (runs || []).reduce((sum, run) => sum + Number(run.scored_count || 0), 0),
+      opportunities, errorCode: failed?.error_code || null,
+    }
+  }
+
   async function enqueueAnalysisCandidates(limit = 1, { model = DEFAULT_MODEL } = {}) {
     const bounded = Math.max(1, Math.min(Number(limit) || 1, 6))
     const data = await dashboard(3)
@@ -2522,7 +2552,7 @@ function createSupabaseStore({
     ? rpc('mark_tracking_targets_seen', { p_target_ids: targetIds, p_seen_at: seenAt }) : Promise.resolve(0)
 
   return {
-    claimNext, dashboard, deferJob, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
+    claimNext, dashboard, discoveryResults, deferJob, enqueueQuery, enqueueTracking, enqueueAnalysisCandidates, failRun, finishJob, getQuery,
     getAnalysisRequest, markAnalysisRunning, persistAnalysisSuccess, persistAnalysisFailure, createAnalysisReview,
     enqueueCommerceTranslation, getCommerceTranslationRequest, markCommerceTranslationRunning,
     persistCommerceTranslationSuccess, persistCommerceTranslationFailure, createCommerceTranslationFeedback,

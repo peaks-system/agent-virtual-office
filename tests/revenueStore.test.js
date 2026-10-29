@@ -12,6 +12,43 @@ function response(body, status = 200) {
 }
 
 describe('Revenue Lab Supabase store snapshots', () => {
+  it('aggregates current Discovery results by exact job ids instead of global query TOP3', async () => {
+    const fetchImpl = vi.fn(async url => {
+      if (url.includes('/jobs?')) return response([
+        { id: 'job-1', status: 'succeeded', error_code: null },
+        { id: 'job-2', status: 'succeeded', error_code: null },
+      ])
+      if (url.includes('/collection_runs?')) return response([
+        { id: 'run-1', job_id: 'job-1', source_query_id: 'query-1', status: 'succeeded', received_count: 10, scored_count: 10 },
+        { id: 'run-2', job_id: 'job-2', source_query_id: 'query-2', status: 'succeeded', received_count: 8, scored_count: 8 },
+      ])
+      if (url.includes('/opportunities?')) return response([
+        { id: 'opp-new', collection_run_id: 'run-2', source_query_id: 'query-2', source_item_id: 'item-new', youtube_video_id: 'new-video', title: '蕎麦の候補', opportunity_score: 90, opportunity_score_raw: 90, breakout_score: 80, breakout_score_raw: 80, views_velocity: 1, engagement_rate: 1, freshness: 1 },
+      ])
+      if (url.includes('/source_items?')) return response([])
+      if (url.includes('/source_item_snapshots?')) return response([])
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await expect(store.discoveryResults(['job-1', 'job-2'], 3)).resolves.toMatchObject({ status: 'succeeded', completedCount: 2, totalCount: 2, receivedCount: 18, opportunities: [{ title: '蕎麦の候補' }] })
+    expect(fetchImpl.mock.calls.some(([url]) => url.includes('job_id=in.'))).toBe(true)
+  })
+  it.each([
+    ['running', [{ id: 'job-1', status: 'succeeded' }, { id: 'job-2', status: 'running' }], [{ id: 'run-1', job_id: 'job-1', status: 'succeeded' }]],
+    ['empty', [{ id: 'job-1', status: 'succeeded' }], [{ id: 'run-1', job_id: 'job-1', status: 'succeeded', received_count: 0, scored_count: 0 }]],
+    ['failed', [{ id: 'job-1', status: 'failed', error_code: 'YOUTUBE_HTTP_ERROR' }], [{ id: 'run-1', job_id: 'job-1', status: 'failed', error_code: 'YOUTUBE_HTTP_ERROR' }]],
+  ])('reports %s for the active Discovery job set', async (expectedStatus, jobs, runs) => {
+    const fetchImpl = vi.fn(async url => {
+      if (url.includes('/jobs?')) return response(jobs)
+      if (url.includes('/collection_runs?')) return response(runs)
+      if (url.includes('/opportunities?')) return response([])
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const result = await store.discoveryResults(jobs.map(job => job.id), 3)
+    expect(result.status).toBe(expectedStatus)
+    if (expectedStatus === 'failed') expect(result.errorCode).toBe('YOUTUBE_HTTP_ERROR')
+  })
   it('freezes metadata-only Commerce Translation input and delegates cache identity to its fingerprint RPC', async () => {
     const calls = []
     const fetchImpl = vi.fn(async (url, options) => {

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { collectYouTubeAnalytics, createCampaignIteration, createDirectProductCampaign as createDirectProductCampaignRequest, createManualCampaign as createManualCampaignRequest, createProductAssetRevision, createProductCandidateDecision, createRevenueAnalysisReview, createThreePicksV2Campaign as createThreePicksCampaignRequest, enqueueCreativeAudioArtifactGeneration, enqueueCreativeAudioGeneration, enqueueCreativeProductionPlan, enqueueEnabledRevenueQueries, enqueueFinalComposition, enqueueFinalCompositionV2, enqueueImageVideoGeneration, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, enqueueThreePicksPlan, enqueueThreePicksV2Plan, enqueueVideoGeneration, hardDeleteDraftCampaign, loadFinalCompositionPreview, loadRevenueDashboard, registerCampaignPublication, startYouTubeAnalyticsOAuth, updateDraftCampaignIteration, updateRevenueQuery, voidCampaign } from '../services/revenueLabApi'
-import { buildWorkspaceUrl, campaignFromLocation, createLatestRequestSequence, deriveAttentionItems, deriveWorkspace, installRevenueRefreshLifecycle, planGenerationFeedback, preferredOperatorCampaignId, shouldPollRevenueLab } from './revenueLabWorkspace'
+import { collectYouTubeAnalytics, createCampaignIteration, createDirectProductCampaign as createDirectProductCampaignRequest, createManualCampaign as createManualCampaignRequest, createProductAssetRevision, createProductCandidateDecision, createRevenueAnalysisReview, createThreePicksV2Campaign as createThreePicksCampaignRequest, enqueueCreativeAudioArtifactGeneration, enqueueCreativeAudioGeneration, enqueueCreativeProductionPlan, enqueueEnabledRevenueQueries, enqueueFinalComposition, enqueueFinalCompositionV2, enqueueImageVideoGeneration, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, enqueueThreePicksPlan, enqueueThreePicksV2Plan, enqueueVideoGeneration, hardDeleteDraftCampaign, loadDiscoveryThemeResults, loadFinalCompositionPreview, loadRevenueDashboard, registerCampaignPublication, startYouTubeAnalyticsOAuth, updateDraftCampaignIteration, updateRevenueQuery, voidCampaign } from '../services/revenueLabApi'
+import { DISCOVERY_THEME_PRESETS, buildWorkspaceUrl, campaignFromLocation, createDiscoveryRunPlan, createLatestRequestSequence, deriveAttentionItems, deriveWorkspace, executeDiscoveryRun, installRevenueRefreshLifecycle, planGenerationFeedback, preferredOperatorCampaignId, readDiscoverySession, readDiscoveryTheme, resolveDiscoveryThemeSelection, shouldPollRevenueLab, writeDiscoverySession } from './revenueLabWorkspace'
 import './revenueLabDashboard.css'
 
 const EMPTY = { config: { configured: false, missing: [], analysis: { configured: false, missing: ['OPENAI_API_KEY'] }, creativeProduction: { configured: false, missing: ['OPENAI_API_KEY'] }, multiProductShorts: { configured: false, missing: ['OPENAI_API_KEY'] }, multiProductShortsV2: { configured: false, missing: ['OPENAI_API_KEY'], templateId: 'hero-carousel-v2' }, textToSpeech: { configured: false, missing: ['ELEVENLABS_API_KEY'] }, finalComposition: { configured: false, missing: ['REVENUE_LAB_FFMPEG_PATH'] }, finalCompositionV2: { configured: false, missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET', 'REVENUE_LAB_CREATIVE_AUDIO_BUCKET', 'REVENUE_LAB_COMPOSITION_BUCKET', 'REVENUE_LAB_FFMPEG_PATH', 'REVENUE_LAB_FFPROBE_PATH'] }, productAssetRevisions: { configured: false, missing: ['REVENUE_LAB_PRODUCT_ASSET_BUCKET'] }, videoGeneration: { configured: false, missing: ['POLLO_API_KEY'], provider: 'pollo', requestedModel: 'pollo-v2' }, imageToVideo: { configured: false, missing: ['POLLO_API_KEY', 'REVENUE_LAB_PRODUCT_ASSET_BUCKET'], provider: 'pollo', requestedModel: 'wan-v2-2-flash' }, products: { configured: false, missing: ['RAKUTEN_APPLICATION_ID', 'RAKUTEN_ACCESS_KEY'] }, youtubeAnalytics: { configured: false, missing: ['YOUTUBE_ANALYTICS_CLIENT_ID', 'YOUTUBE_ANALYTICS_CLIENT_SECRET'] } }, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], productSearches: [], campaigns: [], youtubeAnalyticsConnection: null, youtubeAnalyticsFlow: { status: 'idle', errorCode: null }, latestJob: null, latestRun: null, latestTrackingRun: null }
@@ -1025,6 +1025,45 @@ function TodayOperations({ state, onOpenArea, onSelectCampaign }) {
   </section>
 }
 
+function DiscoveryThemePanel({ queries, busy, initialTheme, discoverySession, discoveryResult, onRun, onThemeChange = () => {} }) {
+  const initialPreset = DISCOVERY_THEME_PRESETS.find(preset => preset.label === initialTheme)
+  const [presetId, setPresetId] = useState(initialPreset?.id || 'custom')
+  const [customTheme, setCustomTheme] = useState(initialPreset ? '' : initialTheme)
+  const [currentTheme, setCurrentTheme] = useState(initialTheme)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const customRef = useRef(null)
+  useEffect(() => { setCurrentTheme(initialTheme) }, [initialTheme])
+  const selectedTheme = resolveDiscoveryThemeSelection(presetId, customTheme)
+  const runPlan = createDiscoveryRunPlan(selectedTheme, queries)
+  const discoveryStatus = discoverySession?.status || discoveryResult?.status || 'idle'
+  const submit = async event => {
+    event.preventDefault()
+    if (!selectedTheme || !runPlan.updates.length || submitting || busy) return
+    setSubmitting(true); setError('')
+    try { await onRun(runPlan); setCurrentTheme(selectedTheme); onThemeChange(selectedTheme) }
+    catch (failure) { setError(failure?.message || 'Discoveryを開始できませんでした。') }
+    finally { setSubmitting(false) }
+  }
+  return <section className="revenue-theme-discovery" aria-labelledby="revenue-theme-heading">
+    <div><p className="revenue-kicker">DISCOVERY THEME</p><h2 id="revenue-theme-heading">今回のテーマ</h2><p>テーマから最大3つのYouTube検索語を組み立てます。</p></div>
+    <form onSubmit={submit}>
+      <label>プリセット<select value={presetId} onChange={event => setPresetId(event.target.value)}>{DISCOVERY_THEME_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}<option value="custom">自由入力</option></select></label>
+      <label>自由入力<input ref={customRef} maxLength={80} value={customTheme} placeholder="例：夏に食べたい蕎麦" onFocus={() => setPresetId('custom')} onChange={event => { setCustomTheme(event.target.value); setPresetId('custom') }} /></label>
+      <button className="corp-primary" type="submit" disabled={busy || submitting || discoveryStatus === 'running' || !selectedTheme || !runPlan.updates.length}>{submitting || discoveryStatus === 'running' ? '候補を探しています…' : 'このテーマで候補を探す'}</button>
+    </form>
+    <div className="revenue-discovery-query-preview" aria-label="Discovery query候補">{runPlan.queryTexts.map(query => <span key={query}>{query}</span>)}</div>
+    {!runPlan.updates.length && <p className="revenue-warning">Discovery設定のquery枠がありません。設定・監査で接続状態を確認してください。</p>}
+    {error && <p className="revenue-warning" role="alert">{error}</p>}
+    {discoveryStatus === 'running' && <p className="revenue-discovery-status is-running" role="status"><strong>{discoverySession?.theme || currentTheme}の候補を取得中...</strong>{discoveryResult?.totalCount > 0 && <span>{discoveryResult.completedCount || 0} / {discoveryResult.totalCount} 完了</span>}</p>}
+    {discoveryStatus === 'succeeded' && <p className="revenue-discovery-status is-succeeded" role="status"><strong>{discoveryResult?.receivedCount || 0}件の候補を取得しました</strong></p>}
+    {discoveryStatus === 'empty' && <p className="revenue-discovery-status is-empty" role="status"><strong>このテーマでは候補が見つかりませんでした</strong></p>}
+    {discoveryStatus === 'failed' && <p className="revenue-discovery-status is-failed" role="alert"><strong>候補の取得に失敗しました</strong></p>}
+    <div className="revenue-discovery-flow" aria-label="テーマから候補までの流れ"><strong>テーマ</strong><b>↓</b><strong>YouTube Discovery</strong><b>↓</b><strong>今日の候補</strong></div>
+    <div className="revenue-current-theme"><span>現在のテーマ:</span><strong>{currentTheme}</strong><button type="button" onClick={() => { const preset = DISCOVERY_THEME_PRESETS.find(item => item.label === currentTheme); setPresetId(preset?.id || 'custom'); if (!preset) setCustomTheme(currentTheme); customRef.current?.focus() }}>テーマを変更</button></div>
+  </section>
+}
+
 const PRODUCT_URL_TRACKING_PARAMS = new Set(['ref', 'tag', 'linkcode', 'creative', 'creativeasin', 'ascsubtag', 'camp', 'adid'])
 
 function normalizedProductUrl(value) {
@@ -1231,27 +1270,34 @@ function CampaignBoard({ campaigns = [], analyticsConnection, creativeProduction
   </section>
 }
 
-export function RevenueLabView({ state, error, busy, requestedCampaignId, initialArea = 'today', onSelectCampaign = () => {}, onReload, onRun, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onCreateDirectProduct, onCreateThreePicks, onGenerateThreePicks, onGenerateThreePicksV2, onGenerateAudio, onGenerateAudioArtifact, onCompose, onComposeV2, onPreview, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication, onUpdateIteration, onCreateIteration, onDeleteCampaign, onVoidCampaign, onConnectAnalytics, onCollectAnalytics, onSave }) {
+export function RevenueLabView({ state, error, busy, requestedCampaignId, initialArea = 'today', initialDiscoveryTheme, discoverySession, discoveryResult, onSelectCampaign = () => {}, onReload, onRun = async () => {}, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onCreateDirectProduct, onCreateThreePicks, onGenerateThreePicks, onGenerateThreePicksV2, onGenerateAudio, onGenerateAudioArtifact, onCompose, onComposeV2, onPreview, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication, onUpdateIteration, onCreateIteration, onDeleteCampaign, onVoidCampaign, onConnectAnalytics, onCollectAnalytics, onSave }) {
   const [activeArea, setActiveArea] = useState(() => OPERATIONS_AREAS.some(([id]) => id === initialArea) ? initialArea : 'today')
   const [auditOpen, setAuditOpen] = useState(false)
+  const [discoveryTheme, setDiscoveryTheme] = useState(() => discoverySession?.theme || initialDiscoveryTheme || readDiscoveryTheme())
   if (!state) return <main className="revenue-shell" aria-busy="true"><div className="revenue-state"><h2>Revenue Lab</h2><p>収益機会を読み込んでいます…</p></div></main>
-  const eligible = state.queries.filter(query => query.enabled && !queryNeedsScores(query))
   const enabledQueries = state.queries.filter(query => query.enabled)
   const lookbackDays = [...new Set(enabledQueries.map(query => query.lookbackDays).filter(Boolean))]
   const latestRun = state.latestRun
   const scoreVersion = state.opportunities[0]?.scoreVersion || 'youtube-v1'
   const analysisByItem = new Map((state.analyses || []).map(analysis => [analysis.sourceItemId, analysis]))
   const productSearchByAnalysis = new Map((state.productSearches || []).map(search => [search.analysisId, search]))
+  const currentDiscoveryTheme = discoverySession?.theme || discoveryTheme
+  const hasThemeRun = Boolean(discoverySession?.fingerprint && discoverySession?.startedAt)
+  const discoveryStatus = discoverySession?.status || discoveryResult?.status || 'idle'
+  const discoveryItems = hasThemeRun
+    ? (discoveryStatus === 'succeeded' ? discoveryResult?.opportunities || [] : [])
+    : state.opportunities || []
   return <main className="revenue-shell">
     <RevenueOperationsNav activeArea={activeArea} onChange={setActiveArea} busy={busy} onReload={onReload} auditOpen={auditOpen} onToggleAudit={() => setAuditOpen(value => !value)} />
     {error && <div className="revenue-alert" role="alert">{error}</div>}
     <div hidden={activeArea !== 'today'}><TodayOperations state={state} onOpenArea={setActiveArea} onSelectCampaign={onSelectCampaign} /></div>
     <section hidden={activeArea !== 'products'} className="revenue-operations-area" aria-labelledby="revenue-products-heading">
-      <section className="revenue-hero"><div><p className="revenue-kicker">PRODUCT OPERATIONS</p><h2 id="revenue-products-heading">商品</h2><p>新着、継続上昇、登録済み商品、Three Picks候補をまとめて確認します。</p></div><div className="revenue-actions"><button onClick={onTrack} disabled={busy}>継続上昇を更新</button><button className="corp-primary" onClick={() => onRun(eligible)} disabled={busy || eligible.length === 0}>今日の新着を更新</button></div></section>
+      <section className="revenue-hero"><div><p className="revenue-kicker">PRODUCT OPERATIONS</p><h2 id="revenue-products-heading">商品</h2><p>テーマから候補を探し、商品登録とThree Picks制作へつなげます。</p></div><div className="revenue-actions"><button onClick={onTrack} disabled={busy}>継続上昇を更新</button></div></section>
+      <DiscoveryThemePanel queries={state.queries || []} busy={busy} initialTheme={currentDiscoveryTheme} discoverySession={discoverySession} discoveryResult={discoveryResult} onRun={onRun} onThemeChange={setDiscoveryTheme} />
       {!state.config.configured && <section className="revenue-state revenue-config"><h3>商品候補の取得準備が必要です</h3><p>接続の詳細は設定・監査で確認できます。</p></section>}
-      <section className="revenue-analyst-intro"><div><p className="revenue-kicker">PRODUCT REVIEW</p><h2>商品分析</h2><p>候補の商品化仮説と次の行動を確認します。</p></div><button className="corp-primary" disabled={busy || !state.config.analysis?.configured || (!state.opportunities.length && !state.trackingOpportunities.length)} onClick={onAnalyze}>候補をAI分析</button></section>
+      <section className="revenue-analyst-intro"><div><p className="revenue-kicker">PRODUCT REVIEW</p><h2>商品分析</h2><p>候補の商品化仮説と次の行動を確認します。</p></div><button className="corp-primary" disabled={busy || !state.config.analysis?.configured || (!discoveryItems.length && !state.trackingOpportunities.length)} onClick={onAnalyze}>候補をAI分析</button></section>
       <DirectProductIntake busy={busy} onCreate={onCreateDirectProduct} />
-      <OpportunitySection title="今日の新着" description="本日の発掘から確認する候補です。" items={state.opportunities || []} configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
+      <OpportunitySection title="今日の候補" description={`現在のテーマ「${currentDiscoveryTheme}」から確認する候補です。`} items={discoveryItems} configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
       <OpportunitySection title="継続上昇" description="登録後も伸びている候補です。" items={state.trackingOpportunities || []} tracking configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
       <RegisteredProducts campaigns={state.campaigns || []} />
       <section><div className="revenue-section-heading"><div><p className="revenue-kicker">THREE PICKS</p><h2>Three Picks候補・選択</h2></div></div><ThreePicksIntake campaigns={state.campaigns || []} busy={busy} assetRevisionConfig={state.config.productAssetRevisions} onCreate={onCreateThreePicks} onCreateAssetRevision={onCreateAssetRevision} /></section>
@@ -1275,7 +1321,7 @@ export function RevenueLabView({ state, error, busy, requestedCampaignId, initia
       <div><dt>母集団</dt><dd>同じ検索テーマ・同じ収集runで取得とScore算出に成功した動画群です。</dd></div>
     </dl></details>
     <section className="revenue-settings">
-      <div className="revenue-section-heading"><div><p className="revenue-kicker">QUERY SETTINGS</p><h2>検索テーマ</h2></div><span>有効 {state.queries.filter(query => query.enabled).length} / 3</span></div>
+      <div className="revenue-section-heading"><div><p className="revenue-kicker">QUERY SETTINGS</p><h2>Discovery設定</h2></div><span>有効 {state.queries.filter(query => query.enabled).length} / 3</span></div>
       <div className="revenue-query-grid">{state.queries.map(query => <QueryEditor key={query.id} query={query} busy={busy} onSave={onSave} />)}</div>
     </section>
     {state.latestJob && <p className="revenue-job" role="status">最新ジョブ: {state.latestJob.status} / 試行 {state.latestJob.attempts}{state.latestJob.errorCode ? ` / ${state.latestJob.errorCode}` : ''}</p>}
@@ -1287,6 +1333,12 @@ export default function RevenueLabDashboard() {
   const [state, setState] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [discoverySession, setDiscoverySession] = useState(() => readDiscoverySession())
+  const [discoveryResult, setDiscoveryResult] = useState(() => ({
+    status: readDiscoverySession().status, completedCount: 0, totalCount: readDiscoverySession().jobIds.length,
+    receivedCount: 0, scoredCount: 0, opportunities: [], errorCode: null,
+  }))
+  const discoveryRunRef = useRef(null)
   const reloadSequenceRef = useRef(null)
   if (!reloadSequenceRef.current) reloadSequenceRef.current = createLatestRequestSequence()
   const [requestedCampaignId, setRequestedCampaignId] = useState(() => typeof window === 'undefined' ? null : campaignFromLocation(window.location))
@@ -1317,6 +1369,28 @@ export default function RevenueLabDashboard() {
     if (!state || typeof window === 'undefined') return undefined
     return installRevenueRefreshLifecycle({ windowRef: window, documentRef: document, refresh: reload, shouldPoll: () => shouldPollRevenueLab(state) })
   }, [reload, state])
+  const discoveryJobIdsKey = discoverySession.jobIds.join(',')
+  useEffect(() => {
+    if (!discoveryJobIdsKey) return undefined
+    let cancelled = false; let timer = null
+    const poll = async () => {
+      try {
+        const result = await loadDiscoveryThemeResults(discoverySession.jobIds)
+        if (cancelled) return
+        setDiscoveryResult(result)
+        const next = { ...discoverySession, status: result.status }
+        writeDiscoverySession(next); setDiscoverySession(next)
+        if (result.status === 'running') timer = setTimeout(poll, 2500)
+      } catch {
+        if (cancelled) return
+        const next = { ...discoverySession, status: 'failed' }
+        writeDiscoverySession(next); setDiscoverySession(next)
+        setDiscoveryResult(previous => ({ ...previous, status: 'failed' }))
+      }
+    }
+    poll()
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+  }, [discoveryJobIdsKey, discoverySession.fingerprint])
   const selectCampaign = campaignId => {
     if (typeof window !== 'undefined') window.history.pushState({}, '', buildWorkspaceUrl(window.location, 'revenue', campaignId))
     setRequestedCampaignId(campaignId)
@@ -1327,8 +1401,25 @@ export default function RevenueLabDashboard() {
     catch (failure) { setError(failure.message); throw failure }
     finally { setBusy(false) }
   }
+  const runDiscovery = plan => {
+    if (discoveryRunRef.current) return discoveryRunRef.current
+    const saveSession = next => {
+      writeDiscoverySession(next); setDiscoverySession(next)
+      if (next.status === 'running') setDiscoveryResult({ status: 'running', completedCount: 0, totalCount: next.jobIds.length || next.activeQueryIds.length, receivedCount: 0, scoredCount: 0, opportunities: [], errorCode: null })
+      if (next.status === 'failed') setDiscoveryResult(previous => ({ ...previous, status: 'failed' }))
+    }
+    const operation = perform(() => executeDiscoveryRun({
+      plan, enqueue: enqueueEnabledRevenueQueries,
+      refresh: async session => { const result = await loadDiscoveryThemeResults(session.jobIds); setDiscoveryResult(result); return result },
+      saveSession,
+    }))
+    discoveryRunRef.current = operation
+    const release = () => { if (discoveryRunRef.current === operation) discoveryRunRef.current = null }
+    operation.then(release, release)
+    return operation
+  }
   const review = (analysis, decision) => perform(() => createRevenueAnalysisReview(
     analysis.id, decision, decision === analysis.output?.recommendation ? 'agree' : 'disagree',
   )).catch(() => {})
-  return <RevenueLabView state={state} error={error} busy={busy} requestedCampaignId={requestedCampaignId} onSelectCampaign={selectCampaign} onReload={reload} onRun={queries => { perform(() => enqueueEnabledRevenueQueries(queries)).catch(() => {}) }} onTrack={() => { perform(enqueueRevenueTracking).catch(() => {}) }} onAnalyze={() => { perform(() => enqueueRevenueAnalysis(1)).catch(() => {}) }} onReview={review} onProductSearch={analysisId => { perform(() => enqueueProductSearch(analysisId)).catch(() => {}) }} onProductDecision={(candidateId, analysisId, decision) => { perform(() => createProductCandidateDecision(candidateId, analysisId, decision)).catch(() => {}) }} onCreateCampaign={(analysisId, input) => perform(() => createManualCampaignRequest(analysisId, input))} onCreateDirectProduct={input => perform(() => createDirectProductCampaignRequest(input))} onCreateThreePicks={input => perform(() => createThreePicksCampaignRequest(input))} onGenerateThreePicks={(iterationId, idempotencyKey) => perform(() => enqueueThreePicksPlan(iterationId, idempotencyKey))} onGenerateThreePicksV2={(iterationId, idempotencyKey) => perform(() => enqueueThreePicksV2Plan(iterationId, idempotencyKey))} onGenerateAudio={(planId, idempotencyKey) => perform(() => enqueueCreativeAudioGeneration(planId, idempotencyKey))} onGenerateAudioArtifact={(artifactId, idempotencyKey) => perform(() => enqueueCreativeAudioArtifactGeneration(artifactId, idempotencyKey))} onCompose={(planId, idempotencyKey) => perform(() => enqueueFinalComposition(planId, idempotencyKey))} onComposeV2={(planId, idempotencyKey) => perform(() => enqueueFinalCompositionV2(planId, idempotencyKey))} onPreview={outputId => loadFinalCompositionPreview(outputId)} onGenerateProduction={(iterationId, idempotencyKey) => perform(() => enqueueCreativeProductionPlan(iterationId, idempotencyKey))} onGenerateVideo={(planId, sceneNumber, idempotencyKey, regenerate) => perform(() => enqueueVideoGeneration(planId, sceneNumber, idempotencyKey, regenerate))} onCreateAssetRevision={(assetId, i2vAllowed, createNineSixteen) => perform(() => createProductAssetRevision(assetId, i2vAllowed, createNineSixteen))} onGenerateImageVideo={(planId, sceneNumber, revisionId, idempotencyKey, regenerate) => perform(() => enqueueImageVideoGeneration(planId, sceneNumber, revisionId, idempotencyKey, regenerate))} onRegisterPublication={(iterationId, input) => { perform(() => registerCampaignPublication(iterationId, input)).catch(() => {}) }} onUpdateIteration={(iterationId, input) => { perform(() => updateDraftCampaignIteration(iterationId, input)).catch(() => {}) }} onCreateIteration={(campaignId, sourceIterationId, input) => { perform(() => createCampaignIteration(campaignId, sourceIterationId, input)).catch(() => {}) }} onDeleteCampaign={campaignId => { perform(() => hardDeleteDraftCampaign(campaignId)).catch(() => {}) }} onVoidCampaign={(campaignId, reason, note) => { perform(() => voidCampaign(campaignId, reason, note)).catch(() => {}) }} onConnectAnalytics={() => { perform(startYouTubeAnalyticsOAuth).catch(() => {}) }} onCollectAnalytics={(publicationId, range) => { perform(() => collectYouTubeAnalytics(publicationId, range.startDate, range.endDate)).catch(() => {}) }} onSave={(id, values) => { perform(() => updateRevenueQuery(id, values)).catch(() => {}) }} />
+  return <RevenueLabView state={state} error={error} busy={busy} discoverySession={discoverySession} discoveryResult={discoveryResult} requestedCampaignId={requestedCampaignId} onSelectCampaign={selectCampaign} onReload={reload} onRun={runDiscovery} onTrack={() => { perform(enqueueRevenueTracking).catch(() => {}) }} onAnalyze={() => { perform(() => enqueueRevenueAnalysis(1)).catch(() => {}) }} onReview={review} onProductSearch={analysisId => { perform(() => enqueueProductSearch(analysisId)).catch(() => {}) }} onProductDecision={(candidateId, analysisId, decision) => { perform(() => createProductCandidateDecision(candidateId, analysisId, decision)).catch(() => {}) }} onCreateCampaign={(analysisId, input) => perform(() => createManualCampaignRequest(analysisId, input))} onCreateDirectProduct={input => perform(() => createDirectProductCampaignRequest(input))} onCreateThreePicks={input => perform(() => createThreePicksCampaignRequest(input))} onGenerateThreePicks={(iterationId, idempotencyKey) => perform(() => enqueueThreePicksPlan(iterationId, idempotencyKey))} onGenerateThreePicksV2={(iterationId, idempotencyKey) => perform(() => enqueueThreePicksV2Plan(iterationId, idempotencyKey))} onGenerateAudio={(planId, idempotencyKey) => perform(() => enqueueCreativeAudioGeneration(planId, idempotencyKey))} onGenerateAudioArtifact={(artifactId, idempotencyKey) => perform(() => enqueueCreativeAudioArtifactGeneration(artifactId, idempotencyKey))} onCompose={(planId, idempotencyKey) => perform(() => enqueueFinalComposition(planId, idempotencyKey))} onComposeV2={(planId, idempotencyKey) => perform(() => enqueueFinalCompositionV2(planId, idempotencyKey))} onPreview={outputId => loadFinalCompositionPreview(outputId)} onGenerateProduction={(iterationId, idempotencyKey) => perform(() => enqueueCreativeProductionPlan(iterationId, idempotencyKey))} onGenerateVideo={(planId, sceneNumber, idempotencyKey, regenerate) => perform(() => enqueueVideoGeneration(planId, sceneNumber, idempotencyKey, regenerate))} onCreateAssetRevision={(assetId, i2vAllowed, createNineSixteen) => perform(() => createProductAssetRevision(assetId, i2vAllowed, createNineSixteen))} onGenerateImageVideo={(planId, sceneNumber, revisionId, idempotencyKey, regenerate) => perform(() => enqueueImageVideoGeneration(planId, sceneNumber, revisionId, idempotencyKey, regenerate))} onRegisterPublication={(iterationId, input) => { perform(() => registerCampaignPublication(iterationId, input)).catch(() => {}) }} onUpdateIteration={(iterationId, input) => { perform(() => updateDraftCampaignIteration(iterationId, input)).catch(() => {}) }} onCreateIteration={(campaignId, sourceIterationId, input) => { perform(() => createCampaignIteration(campaignId, sourceIterationId, input)).catch(() => {}) }} onDeleteCampaign={campaignId => { perform(() => hardDeleteDraftCampaign(campaignId)).catch(() => {}) }} onVoidCampaign={(campaignId, reason, note) => { perform(() => voidCampaign(campaignId, reason, note)).catch(() => {}) }} onConnectAnalytics={() => { perform(startYouTubeAnalyticsOAuth).catch(() => {}) }} onCollectAnalytics={(publicationId, range) => { perform(() => collectYouTubeAnalytics(publicationId, range.startDate, range.endDate)).catch(() => {}) }} onSave={(id, values) => { perform(() => updateRevenueQuery(id, values)).catch(() => {}) }} />
 }

@@ -167,6 +167,17 @@ describe('Revenue Lab API', () => {
     expect((await response.json()).data.status).toBe('pending')
   })
 
+  it('returns only the active Discovery job set and rejects malformed job ids', async () => {
+    const store = { discoveryResults: vi.fn(async (jobIds, limit) => ({ status: 'succeeded', completedCount: 1, totalCount: 1, receivedCount: 18, opportunities: [{ id: 'current' }] })) }
+    const origin = await fixture({ store })
+    const invalid = await fetch(`${origin}/api/revenue/discovery/results?jobIds=bad`)
+    expect(invalid.status).toBe(400)
+    const response = await fetch(`${origin}/api/revenue/discovery/results?jobIds=${uuid}&limit=99`)
+    expect(response.status).toBe(200)
+    expect(store.discoveryResults).toHaveBeenCalledWith([uuid], 3)
+    expect((await response.json()).data).toMatchObject({ status: 'succeeded', receivedCount: 18, opportunities: [{ id: 'current' }] })
+  })
+
   it('reports server-only YouTube Analytics configuration names without values', () => {
     const status = configurationStatus({ YOUTUBE_ANALYTICS_CLIENT_ID: 'desktop-client-id' }).youtubeAnalytics
     expect(status).toMatchObject({ configured: false, missing: ['YOUTUBE_ANALYTICS_CLIENT_SECRET'], credentialStore: 'windows-dpapi' })

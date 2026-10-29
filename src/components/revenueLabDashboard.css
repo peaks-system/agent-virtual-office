@@ -653,3 +653,31 @@
   .revenue-header-actions { justify-content: flex-start; }
   .revenue-production-artifact { padding: 16px; }
 }
+
+.revenue-theme-discovery { display: grid; gap: 16px; padding: 22px; border: 1px solid rgba(30,112,82,.24); border-radius: 16px; background: linear-gradient(135deg,#f7fcf9,#fffdf7); }
+.revenue-theme-discovery h2, .revenue-theme-discovery p { margin: 3px 0; }
+.revenue-theme-discovery form { display: grid; grid-template-columns: minmax(220px,1fr) minmax(260px,1.4fr) auto; gap: 12px; align-items: end; }
+.revenue-theme-discovery label { display: grid; gap: 6px; color: #536b5f; font-size: 13px; font-weight: 750; }
+.revenue-theme-discovery select, .revenue-theme-discovery input { box-sizing: border-box; width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid rgba(83,113,94,.28); border-radius: 9px; background: #fff; font: inherit; }
+.revenue-theme-discovery form button { min-height: 42px; font-size: 14px; }
+.revenue-discovery-query-preview { display: flex; flex-wrap: wrap; gap: 8px; }
+.revenue-discovery-query-preview span { padding: 5px 9px; border-radius: 999px; background: rgba(30,112,82,.09); color: #315f4b; font-size: 12px; }
+.revenue-discovery-flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; color: #315f4b; }
+.revenue-discovery-flow strong { padding: 8px 12px; border-radius: 10px; background: #fff; box-shadow: 0 4px 14px rgba(26,65,50,.07); }
+.revenue-discovery-flow b { color: #749083; }
+.revenue-current-theme { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-top: 12px; border-top: 1px solid rgba(83,113,94,.16); }
+.revenue-current-theme span { color: #66796e; font-size: 13px; }
+.revenue-current-theme strong { font-size: 16px; }
+.revenue-current-theme button { margin-left: auto; border: 0; background: transparent; color: #1e7052; font-size: 14px; font-weight: 800; text-decoration: underline; }
+.revenue-discovery-status { display: flex; align-items: center; gap: 12px; margin: 0; padding: 12px 14px; border-radius: 10px; font-size: 15px; }
+.revenue-discovery-status span { color: #667085; font-size: 14px; }
+.revenue-discovery-status.is-running { background: #eef4ff; color: #244a86; }
+.revenue-discovery-status.is-succeeded { background: #edf8f2; color: #17663a; }
+.revenue-discovery-status.is-empty { background: #f5f6f8; color: #4f5661; }
+.revenue-discovery-status.is-failed { background: #fff0f0; color: #a12626; }
+
+@media (max-width: 760px) {
+  .revenue-theme-discovery form { grid-template-columns: 1fr; }
+  .revenue-theme-discovery form button { justify-self: start; }
+  .revenue-current-theme button { margin-left: 0; }
+}

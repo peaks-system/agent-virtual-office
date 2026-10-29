@@ -29,6 +29,8 @@ const directProductRollback = readFileSync('supabase/rollback/20261011130000_rev
 const creativeProductionMigration = readFileSync('supabase/migrations/20261011140000_revenue_lab_creative_production_v1.sql', 'utf8')
 const creativeProductionRollback = readFileSync('supabase/rollback/20261011140000_revenue_lab_creative_production_v1_down.sql', 'utf8')
 const videoGenerationMigration = readFileSync('supabase/migrations/20261011150000_revenue_lab_pollo_video_generation_v1.sql', 'utf8')
+const discoveryFingerprintMigration = readFileSync('supabase/migrations/20261029160000_revenue_lab_query_fingerprint_idempotency.sql', 'utf8')
+const discoveryFingerprintRollback = readFileSync('supabase/rollback/20261029160000_revenue_lab_query_fingerprint_idempotency_down.sql', 'utf8')
 const videoGenerationRollback = readFileSync('supabase/rollback/20261011150000_revenue_lab_pollo_video_generation_v1_down.sql', 'utf8')
 
 describe('Revenue Lab Supabase migration', () => {
@@ -300,6 +302,17 @@ describe('Revenue Lab Supabase migration', () => {
     expect(migration).toContain('lease_expires_at < now()')
     expect(migration).toContain('enqueue_youtube_job')
     expect(migration).toContain('distinct on (source_query_id)')
+  })
+
+  it('keys manual and scheduled Discovery by normalized query fingerprint without rewriting phase 1', () => {
+    expect(discoveryFingerprintMigration).toContain('create or replace function revenue_lab.youtube_query_fingerprint')
+    expect(discoveryFingerprintMigration).toContain('extensions.digest')
+    expect(discoveryFingerprintMigration).toContain("regexp_replace(btrim(p_query_text), '\\s+', ' ', 'g')")
+    expect(discoveryFingerprintMigration).toContain("'youtube-discovery:' || p_source_query_id::text || ':' || p_requested_day::text || ':'")
+    expect(discoveryFingerprintMigration).toContain('create or replace function revenue_lab.enqueue_youtube_job')
+    expect(discoveryFingerprintMigration).toContain('create or replace function revenue_lab.enqueue_daily_youtube_jobs')
+    expect(discoveryFingerprintMigration).toContain("'query_fingerprint'")
+    expect(discoveryFingerprintRollback).toContain("'youtube.collect:' || q.id::text || ':' || p_requested_day::text")
   })
 
   it('keeps browser roles out and includes reversible teardown', () => {

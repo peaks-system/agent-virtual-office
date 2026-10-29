@@ -1,5 +1,129 @@
 export const REVENUE_LAB_PATH = '/revenue-lab'
 
+const DISCOVERY_THEME_STORAGE_KEY = 'revenue-lab.discovery-theme.v1'
+export const DEFAULT_DISCOVERY_THEME = '買ってよかった食品'
+export const DISCOVERY_THEME_PRESETS = Object.freeze([
+  { id: 'food-favorites', label: '買ってよかった食品', category: 'food' },
+  { id: 'amazon-food', label: 'Amazon食品おすすめ', category: 'food' },
+  { id: 'gourmet-delivery', label: 'お取り寄せグルメ', category: 'food' },
+  { id: 'quick-food', label: '時短食品', category: 'food' },
+  { id: 'snacks', label: 'お菓子', category: 'food' },
+  { id: 'coffee', label: 'コーヒー', category: 'food' },
+  { id: 'noodles', label: '麺類', category: 'food' },
+  { id: 'soba', label: '蕎麦', category: 'food' },
+  { id: 'retort', label: 'レトルト', category: 'food' },
+  { id: 'otsumami', label: 'おつまみ', category: 'food' },
+])
+
+const normalizeTheme = value => Array.from(String(value || '').normalize('NFKC').trim().replace(/[\s\u3000]+/g, ' ')).slice(0, 80).join('')
+const normalizeDiscoveryQuery = value => String(value || '').normalize('NFKC').trim().replace(/[\s\u3000]+/g, ' ').toLocaleLowerCase('ja-JP')
+
+export function resolveDiscoveryThemeSelection(presetId, customTheme) {
+  if (presetId === 'custom') return normalizeTheme(customTheme)
+  return DISCOVERY_THEME_PRESETS.find(preset => preset.id === presetId)?.label || DEFAULT_DISCOVERY_THEME
+}
+
+export function buildDiscoveryQueries(value) {
+  const theme = normalizeTheme(value)
+  if (!theme) return []
+  const candidates = [
+    theme,
+    theme.includes('買ってよかった') ? `${theme} おすすめ` : `買ってよかった ${theme}`,
+    theme.endsWith('おすすめ') ? `Amazon ${theme}` : `${theme} おすすめ`,
+  ]
+  return [...new Set(candidates.map(normalizeTheme).filter(Boolean))].slice(0, 3)
+}
+
+export function createDiscoveryRunPlan(value, querySlots = []) {
+  const theme = normalizeTheme(value)
+  const queryTexts = buildDiscoveryQueries(theme)
+  const available = querySlots.filter(query => query?.id)
+  const slots = [...available.filter(query => query.enabled), ...available.filter(query => !query.enabled)].slice(0, queryTexts.length)
+  return {
+    theme, queryTexts,
+    updates: slots.map((query, index) => ({
+      id: query.id,
+      values: {
+        label: index === 0 ? theme : `${theme} ${index + 1}`,
+        queryText: queryTexts[index], enabled: true,
+        buyerIntent: query.buyerIntent ?? 80, commerceFit: query.commerceFit ?? 80,
+      },
+    })),
+  }
+}
+
+export function fingerprintDiscoveryQueries(values = []) {
+  const input = values.map(normalizeDiscoveryQuery).filter(Boolean).join('\n')
+  let hash = 0x811c9dc5
+  for (const character of input) {
+    hash ^= character.codePointAt(0)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return `fnv1a32-${hash.toString(16).padStart(8, '0')}`
+}
+
+const emptyDiscoverySession = theme => ({
+  theme: normalizeTheme(theme) || DEFAULT_DISCOVERY_THEME,
+  fingerprint: null, activeQueryStrings: [], activeQueryIds: [], jobIds: [], startedAt: null, status: 'idle',
+})
+
+export function readDiscoverySession(storageProvider = () => typeof window === 'undefined' ? null : window.localStorage) {
+  try {
+    const raw = storageProvider()?.getItem(DISCOVERY_THEME_STORAGE_KEY)
+    if (!raw) return emptyDiscoverySession(DEFAULT_DISCOVERY_THEME)
+    if (!String(raw).trim().startsWith('{')) return emptyDiscoverySession(raw)
+    const saved = JSON.parse(raw)
+    const theme = normalizeTheme(saved?.theme) || DEFAULT_DISCOVERY_THEME
+    const status = ['idle', 'running', 'succeeded', 'empty', 'failed'].includes(saved?.status) ? saved.status : 'idle'
+    return {
+      theme, status,
+      fingerprint: typeof saved?.fingerprint === 'string' ? saved.fingerprint : null,
+      activeQueryStrings: Array.isArray(saved?.activeQueryStrings) ? saved.activeQueryStrings.map(normalizeDiscoveryQuery).filter(Boolean).slice(0, 3) : [],
+      activeQueryIds: Array.isArray(saved?.activeQueryIds) ? saved.activeQueryIds.filter(value => typeof value === 'string').slice(0, 3) : [],
+      jobIds: Array.isArray(saved?.jobIds) ? saved.jobIds.filter(value => typeof value === 'string').slice(0, 3) : [],
+      startedAt: typeof saved?.startedAt === 'string' && Number.isFinite(Date.parse(saved.startedAt)) ? saved.startedAt : null,
+    }
+  } catch { return emptyDiscoverySession(DEFAULT_DISCOVERY_THEME) }
+}
+
+export function writeDiscoverySession(session, storageProvider = () => typeof window === 'undefined' ? null : window.localStorage) {
+  const value = { ...emptyDiscoverySession(session?.theme), ...session, theme: normalizeTheme(session?.theme) || DEFAULT_DISCOVERY_THEME }
+  try { storageProvider()?.setItem(DISCOVERY_THEME_STORAGE_KEY, JSON.stringify(value)); return true } catch { return false }
+}
+
+export function readDiscoveryTheme(storageProvider = () => typeof window === 'undefined' ? null : window.localStorage) {
+  return readDiscoverySession(storageProvider).theme
+}
+
+export function writeDiscoveryTheme(value, storageProvider = () => typeof window === 'undefined' ? null : window.localStorage) {
+  const theme = normalizeTheme(value)
+  if (!theme) return false
+  return writeDiscoverySession({ ...readDiscoverySession(storageProvider), theme }, storageProvider)
+}
+
+export async function executeDiscoveryRun({ plan, enqueue, refresh, saveSession = writeDiscoverySession, now = () => new Date().toISOString() }) {
+  const startedAt = now()
+  let session = {
+    theme: plan.theme, fingerprint: fingerprintDiscoveryQueries(plan.queryTexts),
+    activeQueryStrings: plan.queryTexts, activeQueryIds: plan.updates.map(update => update.id),
+    jobIds: [], startedAt, status: 'running',
+  }
+  saveSession(session)
+  try {
+    const jobs = await enqueue(plan)
+    session = { ...session, jobIds: jobs.map(job => job.id).filter(Boolean), status: 'running' }
+    saveSession(session)
+    const result = await refresh(session)
+    session = { ...session, status: result.status }
+    saveSession(session)
+    return { session, result }
+  } catch (error) {
+    session = { ...session, status: 'failed' }
+    saveSession(session)
+    throw error
+  }
+}
+
 const timestamp = value => {
   const parsed = Date.parse(value || '')
   return Number.isFinite(parsed) ? parsed : 0

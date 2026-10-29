@@ -20,6 +20,12 @@ export function loadRevenueDashboard() {
   return request('/dashboard?limit=3')
 }
 
+export function loadDiscoveryThemeResults(jobIds) {
+  const ids = [...new Set((jobIds || []).filter(Boolean))].slice(0, 3)
+  if (!ids.length) return Promise.resolve({ status: 'idle', completedCount: 0, totalCount: 0, receivedCount: 0, scoredCount: 0, opportunities: [], errorCode: null })
+  return request(`/discovery/results?jobIds=${encodeURIComponent(ids.join(','))}&limit=3`)
+}
+
 export function updateRevenueQuery(id, values) {
   return request(`/queries/${encodeURIComponent(id)}`, {
     method: 'PUT',
@@ -34,7 +40,11 @@ export function enqueueRevenueQuery(sourceQueryId) {
   })
 }
 
-export async function enqueueEnabledRevenueQueries(queries) {
+export async function enqueueEnabledRevenueQueries(input) {
+  const queries = Array.isArray(input) ? input : []
+  if (!Array.isArray(input) && Array.isArray(input?.updates)) {
+    for (const update of input.updates) queries.push(await updateRevenueQuery(update.id, update.values))
+  }
   const eligible = queries.filter(query => query.enabled && query.buyerIntent != null && query.commerceFit != null)
   const results = []
   for (const query of eligible) results.push(await enqueueRevenueQuery(query.id))

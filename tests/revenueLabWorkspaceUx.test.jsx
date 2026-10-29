@@ -3,7 +3,8 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { RevenueLabView, buildThreePicksCandidatePool, canCreateThreePicks, groupRegisteredProducts } from '../src/components/RevenueLabDashboard'
-import { deriveAttentionItems } from '../src/components/revenueLabWorkspace'
+import { DISCOVERY_THEME_PRESETS, buildDiscoveryQueries, createDiscoveryRunPlan, deriveAttentionItems, executeDiscoveryRun, fingerprintDiscoveryQueries, readDiscoverySession, readDiscoveryTheme, resolveDiscoveryThemeSelection, writeDiscoverySession, writeDiscoveryTheme } from '../src/components/revenueLabWorkspace'
+import { enqueueEnabledRevenueQueries } from '../src/services/revenueLabApi'
 
 const noop = vi.fn()
 const handlers = Object.fromEntries(['onReload','onRun','onTrack','onAnalyze','onReview','onTranslate','onEnrich','onTranslationFeedback','onProductSearch','onProductDecision','onCreateCampaign','onCreateDirectProduct','onCreateThreePicks','onGenerateThreePicks','onGenerateThreePicksV2','onGenerateAudio','onGenerateAudioArtifact','onCompose','onComposeV2','onPreview','onGenerateProduction','onGenerateVideo','onCreateAssetRevision','onGenerateImageVideo','onRegisterPublication','onUpdateIteration','onCreateIteration','onDeleteCampaign','onVoidCampaign','onConnectAnalytics','onCollectAnalytics','onSave'].map(name => [name, noop]))
@@ -11,11 +12,120 @@ const config = { configured: true, missing: [], analysis: { configured: false },
 const artifact = (sceneId, durationSeconds = 2) => ({ id: `${sceneId}-audio`, segmentId: `${sceneId}-1`, sceneId, status: 'ready', durationSeconds, creativeArchetypePlanId: 'plan-new' })
 const plan = (revisionNumber, overrides = {}) => ({ planId: revisionNumber === 2 ? 'plan-new' : 'plan-old', requestId: `request-${revisionNumber}`, revisionNumber, status: 'succeeded', promptVersion: `prompt-${revisionNumber}`, schemaVersion: `schema-${revisionNumber}`, generatedAt: `2026-10-19T0${revisionNumber}:00:00Z`, audioArtifacts: [], compositions: [], output: { hook: { display_text: `Hook ${revisionNumber}` }, product_presentations: [], cta: { display_text: 'CTA' } }, ...overrides })
 const active = (overrides = {}) => ({ id: 'campaign-active', name: 'Current Campaign', status: 'active', createdAt: '2026-10-19T00:00:00Z', iterations: [{ id: 'iteration-1', iterationNumber: 1, status: 'draft', registrationOnly: true, productSet: { archetype: 'three_picks_v2', items: [] }, archetypePlans: [plan(1), plan(2)] }], ...overrides })
-const state = campaigns => ({ config, queries: [], opportunities: [], trackingOpportunities: [], analyses: [], commerceTranslations: [], productSearches: [], campaigns, youtubeAnalyticsConnection: null, youtubeAnalyticsFlow: { status: 'idle' }, latestJob: null, latestRun: null })
+const discoveryQueries = [1, 2, 3].map(index => ({ id: `query-${index}`, label: `Theme ${index}`, queryText: `old query ${index}`, enabled: true, buyerIntent: index === 1 ? 90 : null, commerceFit: index === 1 ? 95 : null, maxResults: 25, lookbackDays: 7, regionCode: 'JP', relevanceLanguage: 'ja' }))
+const state = campaigns => ({ config, queries: discoveryQueries, opportunities: [], trackingOpportunities: [], analyses: [], commerceTranslations: [], productSearches: [], campaigns, youtubeAnalyticsConnection: null, youtubeAnalyticsFlow: { status: 'idle' }, latestJob: null, latestRun: null })
 const fullMarkup = (campaigns, initialArea = 'today') => renderToStaticMarkup(<RevenueLabView state={state(campaigns)} requestedCampaignId="campaign-active" initialArea={initialArea} {...handlers} />)
 const workspaceMarkup = (campaigns, initialArea = 'today') => fullMarkup(campaigns, initialArea).split('<aside class="revenue-audit-drawer"')[0]
 
 describe('Revenue Lab Workspace UX v2', () => {
+  it('shows preset and free-input theme controls before Discovery results', () => {
+    const html = workspaceMarkup([active()], 'products')
+    expect(html.indexOf('今回のテーマ')).toBeLessThan(html.indexOf('今日の候補'))
+    expect(html).toContain('このテーマで候補を探す')
+    expect(html).toContain('現在のテーマ:')
+    expect(html).toContain('テーマを変更')
+    expect(html).toContain('自由入力')
+    for (const preset of DISCOVERY_THEME_PRESETS) expect(html).toContain(preset.label)
+    expect(html).not.toContain('query ID')
+    expect(html).not.toContain('score-version')
+  })
+
+  it('resolves presets and free input independently from deterministic Discovery queries', () => {
+    expect(resolveDiscoveryThemeSelection('coffee', '')).toBe('コーヒー')
+    expect(resolveDiscoveryThemeSelection('custom', '  夏に食べたい蕎麦  ')).toBe('夏に食べたい蕎麦')
+    expect(buildDiscoveryQueries('夏に食べたい蕎麦')).toEqual([
+      '夏に食べたい蕎麦', '買ってよかった 夏に食べたい蕎麦', '夏に食べたい蕎麦 おすすめ',
+    ])
+    expect(buildDiscoveryQueries('食品 おすすめ')).toHaveLength(3)
+  })
+
+  it('builds a Discovery run from the current theme without deleting existing results', () => {
+    const existingResults = [{ id: 'opportunity-existing', title: '過去の候補' }]
+    const plan = createDiscoveryRunPlan('Amazonで買える高評価おつまみ', discoveryQueries)
+    expect(plan.theme).toBe('Amazonで買える高評価おつまみ')
+    expect(plan.updates).toHaveLength(3)
+    expect(plan.updates.map(update => update.id)).toEqual(['query-1', 'query-2', 'query-3'])
+    expect(plan.updates[0].values).toMatchObject({ queryText: 'Amazonで買える高評価おつまみ', enabled: true, buyerIntent: 90, commerceFit: 95 })
+    expect(plan.updates[1].values).toMatchObject({ buyerIntent: 80, commerceFit: 80 })
+    expect(existingResults).toEqual([{ id: 'opportunity-existing', title: '過去の候補' }])
+  })
+
+  it('updates existing query slots before enqueueing Discovery without a new API contract', async () => {
+    const fetchMock = vi.fn(async (url, options) => {
+      const body = JSON.parse(options.body)
+      if (options.method === 'PUT') return { ok: true, json: async () => ({ data: { id: url.split('/').pop(), ...body } }) }
+      return { ok: true, json: async () => ({ data: { id: `job-${body.sourceQueryId}`, status: 'queued' } }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      await enqueueEnabledRevenueQueries(createDiscoveryRunPlan('時短食品', discoveryQueries))
+      expect(fetchMock).toHaveBeenCalledTimes(6)
+      expect(fetchMock.mock.calls.slice(0, 3).every(([, options]) => options.method === 'PUT')).toBe(true)
+      expect(fetchMock.mock.calls.slice(3).every(([, options]) => options.method === 'POST')).toBe(true)
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('persists the selected theme for reload without using Campaign or DB state', () => {
+    const memory = new Map(); const storage = { getItem: key => memory.get(key) ?? null, setItem: (key, value) => memory.set(key, value) }
+    expect(readDiscoveryTheme(() => storage)).toBe('買ってよかった食品')
+    expect(writeDiscoveryTheme('お取り寄せグルメ', () => storage)).toBe(true)
+    expect(readDiscoveryTheme(() => storage)).toBe('お取り寄せグルメ')
+  })
+
+  it('persists active query identity and normalizes its deterministic fingerprint', () => {
+    const memory = new Map(); const storage = { getItem: key => memory.get(key) ?? null, setItem: (key, value) => memory.set(key, value) }
+    expect(fingerprintDiscoveryQueries(['  蕎麦  おすすめ ', '買ってよかった 蕎麦'])).toBe(fingerprintDiscoveryQueries(['蕎麦 おすすめ', '買ってよかった 蕎麦']))
+    expect(fingerprintDiscoveryQueries(['食品 おすすめ'])).not.toBe(fingerprintDiscoveryQueries(['蕎麦 おすすめ']))
+    const session = { theme: '蕎麦', fingerprint: fingerprintDiscoveryQueries(['蕎麦']), activeQueryStrings: ['蕎麦'], activeQueryIds: ['query-1'], jobIds: ['job-1'], startedAt: '2026-10-29T06:00:00.000Z', status: 'running' }
+    expect(writeDiscoverySession(session, () => storage)).toBe(true)
+    expect(readDiscoverySession(() => storage)).toMatchObject(session)
+    expect(readDiscoveryTheme(() => storage)).toBe('蕎麦')
+  })
+
+  it('keeps running until enqueue and refresh settle and rethrows failures', async () => {
+    let resolveEnqueue
+    const enqueue = vi.fn(() => new Promise(resolve => { resolveEnqueue = resolve }))
+    const saved = []
+    const plan = createDiscoveryRunPlan('蕎麦', discoveryQueries)
+    const pending = executeDiscoveryRun({ plan, enqueue, refresh: async () => ({ status: 'succeeded', completedCount: 3, totalCount: 3, receivedCount: 18, opportunities: [] }), saveSession: session => saved.push(session), now: () => '2026-10-29T06:00:00.000Z' })
+    expect(saved.at(-1)).toMatchObject({ theme: '蕎麦', status: 'running', jobIds: [] })
+    resolveEnqueue([{ id: 'job-1' }, { id: 'job-2' }, { id: 'job-3' }])
+    await expect(pending).resolves.toMatchObject({ session: { status: 'succeeded' }, result: { receivedCount: 18 } })
+    expect(saved.at(-1)).toMatchObject({ status: 'succeeded', jobIds: ['job-1', 'job-2', 'job-3'] })
+
+    const failure = new Error('enqueue failed')
+    const failed = []
+    await expect(executeDiscoveryRun({ plan, enqueue: async () => { throw failure }, refresh: noop, saveSession: session => failed.push(session), now: () => '2026-10-29T06:00:00.000Z' })).rejects.toBe(failure)
+    expect(failed.at(-1)).toMatchObject({ status: 'failed' })
+  })
+
+  it('hides stale candidates and renders current-theme running, success, empty, and failed states', () => {
+    const stale = { id: 'old', youtubeVideoId: 'old-video', title: '食品の旧候補', opportunityScore: 99, breakoutScore: 99 }
+    const current = { id: 'new', youtubeVideoId: 'new-video', title: '蕎麦の新候補', opportunityScore: 80, breakoutScore: 80 }
+    const themedState = { ...state([active()]), opportunities: [stale] }
+    const renderTheme = (session, discoveryResult = null) => renderToStaticMarkup(<RevenueLabView state={themedState} initialArea="products" discoverySession={session} discoveryResult={discoveryResult} {...handlers} />)
+    const base = { theme: '蕎麦', fingerprint: 'theme-fingerprint', activeQueryIds: ['query-1', 'query-2', 'query-3'], activeQueryStrings: ['蕎麦', '買ってよかった 蕎麦', '蕎麦 おすすめ'], jobIds: ['job-1', 'job-2', 'job-3'], startedAt: '2026-10-29T06:00:00.000Z' }
+    const running = renderTheme({ ...base, status: 'running' }, { status: 'running', completedCount: 1, totalCount: 3, opportunities: [] })
+    expect(running).toContain('蕎麦の候補を取得中...')
+    expect(running).toContain('1 / 3 完了')
+    expect(running).not.toContain('食品の旧候補')
+    const succeeded = renderTheme({ ...base, status: 'succeeded' }, { status: 'succeeded', completedCount: 3, totalCount: 3, receivedCount: 18, opportunities: [current] })
+    expect(succeeded).toContain('18件の候補を取得しました')
+    expect(succeeded).toContain('蕎麦の新候補')
+    expect(succeeded).not.toContain('食品の旧候補')
+    expect(renderTheme({ ...base, status: 'empty' }, { status: 'empty', completedCount: 3, totalCount: 3, receivedCount: 0, opportunities: [] })).toContain('このテーマでは候補が見つかりませんでした')
+    expect(renderTheme({ ...base, status: 'failed' }, { status: 'failed', completedCount: 3, totalCount: 3, errorCode: 'YOUTUBE_HTTP_ERROR', opportunities: [] })).toContain('候補の取得に失敗しました')
+  })
+
+  it('keeps Query Settings in audit while normal Discovery works from theme slots', () => {
+    const normal = workspaceMarkup([active()], 'products')
+    const full = fullMarkup([active()], 'products')
+    expect(normal).not.toContain('QUERY SETTINGS')
+    expect(normal).toContain('このテーマで候補を探す')
+    expect(full).toContain('Discovery設定')
+    expect(createDiscoveryRunPlan('レトルト', discoveryQueries).updates).toHaveLength(3)
+  })
+
   it('groups repeated registered records by canonical product lineage and keeps related records', () => {
     const campaigns = [1, 2, 3].map(index => active({
       id: `campaign-${index}`,
