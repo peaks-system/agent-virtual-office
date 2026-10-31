@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 // spec_ref: docs/specs/revenue-lab-workspace-ux.md
 import {
-  buildWorkspaceUrl, campaignFromLocation, createLatestRequestSequence, departmentFromLocation, deriveWorkspace,
+  buildWorkspaceUrl, campaignFromLocation, createLatestRequestSequence, departmentFromLocation, deriveAttentionItems, deriveWorkspace,
   installRevenueRefreshLifecycle, installWorkspacePopstate, selectActiveCampaign, shouldPollRevenueLab,
 } from '../src/components/revenueLabWorkspace'
 
@@ -33,6 +33,29 @@ describe('Revenue Lab route state', () => {
 })
 
 describe('Revenue Lab workspace derivation', () => {
+  it('blocks Planner while materials are missing and exposes the one-way lock action when all three are ready', () => {
+    const item = (index, ready) => ({ id: `item-${index}`, productName: `商品${index}`,
+      productUrl: `https://example.com/${index}`, assetRevision: ready ? { id: `revision-${index}`, availabilityStatus: 'available' } : null })
+    const building = readyCount => campaign({ name: 'おすすめ3選 Shorts', iterations: [{ id: 'building-i', iterationNumber: 1,
+      productSet: { archetype: 'three_picks_v2', status: 'building', items: [1, 2, 3].map(index => item(index, index <= readyCount)) }, archetypePlans: [] }] })
+    for (const readyCount of [0, 1, 2]) {
+      const model = deriveWorkspace({ campaigns: [building(readyCount)] })
+      expect(model.primaryAction).toMatchObject({ id: 'prepare-materials', missingMaterialCount: 3 - readyCount })
+    }
+    const ready = deriveWorkspace({ campaigns: [building(3)] })
+    expect(ready.primaryAction).toMatchObject({ id: 'lock-product-set', label: '制作を開始' })
+    const attention = deriveAttentionItems({ campaigns: [building(0)] })
+    expect(attention[0]).toMatchObject({ kind: 'material-preparation', status: '制作素材の準備', detail: '制作素材 3件未準備', cta: '素材を準備' })
+  })
+
+  it('keeps existing locked v2 and legacy v1 behavior unchanged', () => {
+    const locked = campaign({ iterations: [{ id: 'locked-i', iterationNumber: 1,
+      productSet: { archetype: 'three_picks_v2', status: 'locked', items: [1, 2, 3].map(index => ({ id: `item-${index}`, assetRevision: { id: `revision-${index}` } })) }, archetypePlans: [] }] })
+    expect(deriveWorkspace({ campaigns: [locked] }).primaryAction.id).toBe('generate-plan')
+    const legacy = campaign({ iterations: [{ id: 'legacy-i', iterationNumber: 1,
+      productSet: { archetype: 'three_picks_v1', status: 'locked', items: [] }, archetypePlans: [revision()] }] })
+    expect(deriveWorkspace({ campaigns: [legacy] }).primaryAction.id).toBe('legacy-read-only')
+  })
   it('maps a safe provider schema failure to user copy and keeps technical fields in audit data', () => {
     const failed = revision({ revisionNumber: 12, status: 'failed', planId: null, output: null,
       safeErrorCode: 'OPENAI_HTTP_ERROR' })

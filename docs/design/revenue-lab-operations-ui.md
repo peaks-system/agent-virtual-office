@@ -73,3 +73,32 @@ TTS
 ```
 
 Origin and review are independent metadata axes. Absence of persisted review metadata renders `未確認`; the UI never invents confirmation.
+
+## Three Picks material preparation
+
+Product selection and production-material readiness are separate axes.
+
+```text
+Three Picks候補
+┌ 商品名 ────────────────────────┐
+│ 商品選択  選択可能              │
+│ 制作素材  未準備                │
+│                         [選択]  │
+└────────────────────────────────┘
+
+3商品選択 → building Campaign
+
+制作素材を準備
+┌ PICK 1 / 商品名 ───────────────┐
+│ 商品情報 ✓                     │
+│ 制作素材 未準備                │
+│ [素材を追加] [AIで素材を作る]   │
+└────────────────────────────────┘
+
+全PICK準備済み → [制作を開始]
+```
+
+- Missing Asset Revisions never render as product ineligibility.
+- `building` Campaigns surface `制作素材の準備` in Today and Production.
+- The material card shows an existing preview when available; the AI action is an explicit unavailable placeholder in this phase.
+- `制作を開始` performs the explicit lock operation. Planner generation becomes available only after the refreshed Product Set is `locked`.

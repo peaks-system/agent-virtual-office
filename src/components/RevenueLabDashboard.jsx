@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { collectYouTubeAnalytics, createCampaignIteration, createDirectProductCampaign as createDirectProductCampaignRequest, createManualCampaign as createManualCampaignRequest, createProductAssetRevision, createProductCandidateDecision, createRevenueAnalysisReview, createThreePicksV2Campaign as createThreePicksCampaignRequest, enqueueCreativeAudioArtifactGeneration, enqueueCreativeAudioGeneration, enqueueCreativeProductionPlan, enqueueEnabledRevenueQueries, enqueueFinalComposition, enqueueFinalCompositionV2, enqueueImageVideoGeneration, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, enqueueThreePicksPlan, enqueueThreePicksV2Plan, enqueueVideoGeneration, hardDeleteDraftCampaign, loadDiscoveryThemeResults, loadFinalCompositionPreview, loadRevenueDashboard, registerCampaignPublication, startYouTubeAnalyticsOAuth, updateDraftCampaignIteration, updateRevenueQuery, voidCampaign } from '../services/revenueLabApi'
+import { assignThreePicksV2AssetRevision, collectYouTubeAnalytics, createCampaignIteration, createDirectProductCampaign as createDirectProductCampaignRequest, createManualCampaign as createManualCampaignRequest, createProductAssetRevision, createProductCandidateDecision, createRevenueAnalysisReview, createThreePicksV2Campaign as createThreePicksCampaignRequest, enqueueCreativeAudioArtifactGeneration, enqueueCreativeAudioGeneration, enqueueCreativeProductionPlan, enqueueEnabledRevenueQueries, enqueueFinalComposition, enqueueFinalCompositionV2, enqueueImageVideoGeneration, enqueueProductSearch, enqueueRevenueAnalysis, enqueueRevenueTracking, enqueueThreePicksPlan, enqueueThreePicksV2Plan, enqueueVideoGeneration, hardDeleteDraftCampaign, loadDiscoveryThemeResults, loadFinalCompositionPreview, loadRevenueDashboard, lockThreePicksV2Campaign, registerCampaignPublication, startYouTubeAnalyticsOAuth, updateDraftCampaignIteration, updateRevenueQuery, voidCampaign } from '../services/revenueLabApi'
 import { DISCOVERY_THEME_PRESETS, buildWorkspaceUrl, campaignFromLocation, createDiscoveryRunPlan, createLatestRequestSequence, deriveAttentionItems, deriveWorkspace, executeDiscoveryRun, installRevenueRefreshLifecycle, planGenerationFeedback, preferredOperatorCampaignId, readDiscoverySession, readDiscoveryTheme, resolveDiscoveryThemeSelection, shouldPollRevenueLab, writeDiscoverySession } from './revenueLabWorkspace'
 import './revenueLabDashboard.css'
 
@@ -654,7 +654,7 @@ function candidateFactBadge(factEntry) {
 
 export function buildThreePicksCandidatePool(campaigns = []) {
   const seen = new Set(); const candidates = []
-  for (const campaign of campaigns) for (const iteration of campaign.iterations || []) {
+  for (const campaign of campaigns) for (const iteration of campaign.status === 'active' ? campaign.iterations || [] : []) {
     const product = iteration.product
     if (!product?.id || seen.has(product.id)) continue
     seen.add(product.id)
@@ -667,10 +667,13 @@ export function buildThreePicksCandidatePool(campaigns = []) {
       && THREE_PICKS_ASSET_PERMISSIONS.has(revision.permissionSnapshot || revision.assetPermission))
     const commerceDestination = product.affiliateUrl || product.productUrl || null
     const ineligibleReasons = []
+    if (!String(product.productName || '').trim()) ineligibleReasons.push('商品名がありません')
+    if (['disabled', 'voided', 'deleted'].includes(product.status)) ineligibleReasons.push('商品が利用停止です')
     if (!factEntry) ineligibleReasons.push('確認済み事実がありません')
     if (!commerceDestination) ineligibleReasons.push('commerce destinationがありません')
-    if (!permittedAssets.length) ineligibleReasons.push('利用許可済みProduct Assetがありません')
-    if (permittedAssets.length && !revisions.length) ineligibleReasons.push('Asset Revisionがありません')
+    const materialIssues = []
+    if (!permittedAssets.length) materialIssues.push('利用許可済みProduct Assetがありません')
+    if (permittedAssets.length && !revisions.length) materialIssues.push('Asset Revisionがありません')
     candidates.push({
       product, asset: permittedAssets[0] || null, imageAsset: (product.assets || []).find(asset => asset.assetUrl) || null,
       revision: revisions[0] || null, revisions: revisions.slice(0, 4), verifiedFactRef: factEntry?.[0] || null,
@@ -679,6 +682,7 @@ export function buildThreePicksCandidatePool(campaigns = []) {
       verifiedFactsAvailable: Boolean(factEntry), commerceDestinationAvailable: Boolean(commerceDestination),
       productAssetAvailable: permittedAssets.length > 0, assetRevisionAvailable: revisions.length > 0,
       eligible: ineligibleReasons.length === 0, ineligibleReasons,
+      materialReady: revisions.length > 0, materialIssues,
     })
   }
   return candidates
@@ -695,7 +699,7 @@ export function canCreateThreePicks(selected, candidates) {
     && selected.every(id => candidates.find(candidate => candidate.product.id === id)?.eligible)
 }
 
-function ThreePicksIntake({ campaigns, busy, assetRevisionConfig, onCreate, onCreateAssetRevision }) {
+function ThreePicksIntake({ campaigns, busy, assetRevisionConfig, onCreate, onCreateAssetRevision, onCreated = () => {} }) {
   const candidates = buildThreePicksCandidatePool(campaigns)
   const eligibleCount = candidates.filter(candidate => candidate.eligible).length
   const [selected, setSelected] = useState([])
@@ -713,13 +717,14 @@ function ThreePicksIntake({ campaigns, busy, assetRevisionConfig, onCreate, onCr
     event.preventDefault(); if (!canSubmit || submitting || busy) return
     setSubmitting(true)
     try {
-      await onCreate({ idempotencyKey: keyRef.current, campaignName: 'おすすめ3選 Shorts v2',
+      const result = await onCreate({ idempotencyKey: keyRef.current, campaignName: 'おすすめ3選 Shorts v2',
         objective: '実商品画像を主役に35〜45秒で3商品を紹介する',
         items: selected.map(id => {
           const entry = candidates.find(candidate => candidate.product.id === id)
-          return { curatedProductId: id, productAssetRevisionIds: entry.revisions.map(revision => revision.id), verifiedFactRef: entry.verifiedFactRef }
+          return { curatedProductId: id, productAssetRevisionIds: [], verifiedFactRef: entry.verifiedFactRef }
         }) })
       setSaved(true)
+      onCreated(result)
     } finally { setSubmitting(false) }
   }
   return <section className="revenue-three-picks-intake" aria-labelledby="three-picks-intake-heading">
@@ -734,7 +739,10 @@ function ThreePicksIntake({ campaigns, busy, assetRevisionConfig, onCreate, onCr
         <label className="revenue-three-picks-check"><input type="checkbox" aria-label={`${candidate.product.productName}を選択`} checked={selectedIndex >= 0} disabled={busy || submitting || saved || selectionDisabled} onChange={event => setSelected(current => toggleThreePicksSelection(current, candidate.product.id, event.target.checked))} /><span>{selectedIndex >= 0 ? `PICK ${selectedIndex + 1}` : '選択'}</span></label>
         {candidate.imageAsset?.assetUrl ? <img src={candidate.imageAsset.assetUrl} alt={`${candidate.product.productName}の商品画像`} /> : <div className="revenue-three-picks-no-image">画像なし</div>}
         <div className="revenue-three-picks-candidate-copy"><h3>{candidate.displayName}</h3>
-          <p className={`revenue-three-picks-eligibility ${candidate.eligible ? 'is-eligible' : 'is-ineligible'}`}><strong>{candidate.eligible ? 'eligible' : 'not eligible'}</strong>{candidate.eligible ? ' · Three Picksに使用できます' : ` · ${candidate.ineligibleReasons.join(' / ')}`}</p>
+          <div className="revenue-three-picks-statuses">
+            <p className={`revenue-three-picks-eligibility ${candidate.eligible ? 'is-eligible' : 'is-ineligible'}`}><strong>{candidate.eligible ? '選択可能' : '選択不可'}</strong>{candidate.eligible ? ' · Three Picksの商品候補' : ` · ${candidate.ineligibleReasons.join(' / ')}`}</p>
+            <p className={`revenue-three-picks-material ${candidate.materialReady ? 'is-ready' : 'is-attention'}`}><strong>制作素材</strong> {candidate.materialReady ? '準備済み' : '素材未準備'}</p>
+          </div>
           <p className="revenue-three-picks-short-appeal"><strong>短い訴求</strong> {candidate.shortAppeal}</p>
           <span className="revenue-fact-badge">{candidate.factBadge}</span>
           {!candidate.assetRevisionAvailable && candidate.asset && <button type="button" disabled={busy || submitting || !assetRevisionConfig?.configured} onClick={async () => { setSubmitting(true); try { await onCreateAssetRevision(candidate.asset.id, false, false) } finally { setSubmitting(false) } }}>Asset Revisionを準備</button>}
@@ -743,9 +751,9 @@ function ThreePicksIntake({ campaigns, busy, assetRevisionConfig, onCreate, onCr
       </article>
     })}</div>
     <form className="revenue-three-picks-create" onSubmit={submit}>
-      {saved && <p className="revenue-save-success" role="status"><strong>Three Picks Campaignを保存しました。</strong> 台帳から制作案を生成できます。</p>}
+      {saved && <p className="revenue-save-success" role="status"><strong>Three Picks Campaignをbuildingで保存しました。</strong> 制作画面で素材を準備してください。</p>}
       <p className="revenue-three-picks-template">Creative Archetype v2 · 35〜45秒 · hero-carousel-v2</p>
-      <button className="corp-primary" disabled={busy || submitting || saved || !canSubmit}>{saved ? '保存済み' : submitting ? '保存中…' : 'Three Picks v2を作成'}</button>
+      <button className="corp-primary" disabled={busy || submitting || saved || !canSubmit}>{saved ? '保存済み' : submitting ? '保存中…' : '3商品を選択して制作準備へ'}</button>
     </form>
   </section>
 }
@@ -961,7 +969,8 @@ function RevenueWorkspace({ state, requestedCampaignId, busy, onReload, onSelect
   </section>
 }
 
-function OperatorProductionWorkspace({ state, requestedCampaignId, busy, onGeneratePlan, onGenerateAudio, onCompose, onPreview, onOpenPublication }) {
+function OperatorProductionWorkspace({ state, requestedCampaignId, busy, onGeneratePlan, onGenerateAudio, onCompose, onPreview,
+  onAssignAssetRevision, onLockCampaign, onOpenProducts, onOpenPublication }) {
   const [actionError, setActionError] = useState('')
   const [previewUrl, setPreviewUrl] = useState('')
   const keyRef = useRef(newCampaignIdempotencyKey())
@@ -973,6 +982,7 @@ function OperatorProductionWorkspace({ state, requestedCampaignId, busy, onGener
     setActionError('')
     try {
       if (primaryAction.id === 'generate-plan') await onGeneratePlan(iteration.id, keyRef.current)
+      if (primaryAction.id === 'lock-product-set') await onLockCampaign(campaign.id)
       if (primaryAction.id === 'generate-audio') await onGenerateAudio(revision.planId, keyRef.current)
       if (primaryAction.id === 'compose') await onCompose(revision.planId, keyRef.current)
       if (primaryAction.id === 'preview') { const result = await onPreview(primaryAction.outputId); setPreviewUrl(result.previewUrl) }
@@ -986,13 +996,38 @@ function OperatorProductionWorkspace({ state, requestedCampaignId, busy, onGener
   const actionReason = primaryAction.reason || configReason
   const audioReady = model.timing.ready
   const videoOutput = model.composition?.output || null
+  const materialPreparation = primaryAction.id === 'prepare-materials' || primaryAction.id === 'lock-product-set'
+  const candidatePool = buildThreePicksCandidatePool(state.campaigns || [])
+  const candidateByProduct = new Map(candidatePool.map(candidate => [candidate.product.id, candidate]))
+  const assignMaterial = async (item, candidate) => {
+    setActionError('')
+    if (!candidate?.revision?.id) { onOpenProducts(); return }
+    try { await onAssignAssetRevision(campaign.id, item.id, candidate.revision.id) }
+    catch (failure) { setActionError(failure?.message || '素材を割り当てられませんでした。') }
+  }
   return <section className="revenue-workspace revenue-operator-production" aria-label="Revenue Lab workspace">
     <div className="revenue-section-heading"><div><p className="revenue-kicker">PRODUCTION</p><h2>制作</h2><p>{campaign?.name || 'おすすめ3選 Shorts v2'}</p></div></div>
     {!campaign && <div className="revenue-state"><h3>制作対象がありません</h3><p>おすすめ3選 Shorts v2のCampaignを商品画面から作成してください。</p></div>}
     {campaign && <>
-      <section className="revenue-production-artifact"><h3>原稿</h3>{revision?.output ? <ThreePicksScriptReview output={revision.output} /> : <p>原稿生成が必要です。</p>}{primaryAction.id === 'generate-plan' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}{model.planFeedback?.kind === 'error' && <ThreePicksGenerationFeedback feedback={model.planFeedback} />}</section>
-      <section className="revenue-production-artifact"><h3>音声</h3><p className={`revenue-artifact-status ${audioReady ? 'is-ready' : 'is-attention'}`}>{audioReady ? '✓ 音声完成' : '音声生成が必要'}</p>{primaryAction.id === 'generate-audio' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}</section>
-      <section className="revenue-production-artifact"><h3>動画</h3><p className={`revenue-artifact-status ${videoOutput ? 'is-ready' : 'is-attention'}`}>{videoOutput ? '✓ 動画完成' : '動画生成が必要'}</p>{videoOutput && <p>{videoOutput.durationSeconds == null ? '尺未取得' : `${videoOutput.durationSeconds}秒`}</p>}{primaryAction.id === 'compose' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}{videoOutput && <button type="button" onClick={runPrimary}>Previewを開く</button>}{actionReason && <p className="revenue-warning">{actionReason}</p>}</section>
+      {materialPreparation ? <section className="revenue-material-preparation" aria-labelledby="revenue-material-preparation-heading">
+        <div className="revenue-section-heading"><div><p className="revenue-kicker">MATERIAL PREPARATION</p><h3 id="revenue-material-preparation-heading">制作素材を準備してください</h3><p>{primaryAction.id === 'lock-product-set' ? '3商品の素材準備が完了しました。確認後に制作を開始できます。' : primaryAction.reason}</p></div></div>
+        <div className="revenue-material-picks">{(iteration.productSet?.items || []).map((item, index) => {
+          const productId = item.curatedProductId || item.product?.id || item.productSnapshot?.curated_product_id
+          const candidate = candidateByProduct.get(productId)
+          const ready = Boolean(item.assetRevision?.id)
+          return <article key={item.id}><span>PICK {index + 1}</span><h4>{item.productName || item.product?.productName || `商品${index + 1}`}</h4>
+            {candidate?.imageAsset?.assetUrl && <img src={candidate.imageAsset.assetUrl} alt={`${item.productName || '商品'}の制作素材`} />}
+            <p className="is-ready">商品情報 ✓</p><p className={ready ? 'is-ready' : 'is-attention'}>制作素材 {ready ? '準備済み' : '未準備'}</p>
+            {ready && <small>Asset Revision #{item.assetRevision.revisionNumber || 'ready'}</small>}
+            {!ready && <div className="revenue-material-actions"><button type="button" disabled={busy} onClick={() => assignMaterial(item, candidate)}>素材を追加</button><button type="button" disabled title="AI素材生成は今後の対応です">AIで素材を作る</button></div>}
+          </article>
+        })}</div>
+        {primaryAction.id === 'lock-product-set' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>制作を開始</button>}
+      </section> : <>
+        <section className="revenue-production-artifact"><h3>原稿</h3>{revision?.output ? <ThreePicksScriptReview output={revision.output} /> : <p>原稿生成が必要です。</p>}{primaryAction.id === 'generate-plan' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}{model.planFeedback?.kind === 'error' && <ThreePicksGenerationFeedback feedback={model.planFeedback} />}</section>
+        <section className="revenue-production-artifact"><h3>音声</h3><p className={`revenue-artifact-status ${audioReady ? 'is-ready' : 'is-attention'}`}>{audioReady ? '✓ 音声完成' : '音声生成が必要'}</p>{primaryAction.id === 'generate-audio' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}</section>
+        <section className="revenue-production-artifact"><h3>動画</h3><p className={`revenue-artifact-status ${videoOutput ? 'is-ready' : 'is-attention'}`}>{videoOutput ? '✓ 動画完成' : '動画生成が必要'}</p>{videoOutput && <p>{videoOutput.durationSeconds == null ? '尺未取得' : `${videoOutput.durationSeconds}秒`}</p>}{primaryAction.id === 'compose' && <button className="corp-primary" type="button" disabled={actionDisabled} onClick={runPrimary}>{primaryAction.label}</button>}{videoOutput && <button type="button" onClick={runPrimary}>Previewを開く</button>}{actionReason && <p className="revenue-warning">{actionReason}</p>}</section>
+      </>}
       {previewUrl && <video className="revenue-workspace-preview" controls preload="metadata" src={previewUrl}>完成動画を再生できません。</video>}
       {videoOutput && <button className="corp-primary revenue-publish-next" type="button" onClick={onOpenPublication}>公開準備へ進む</button>}
       {actionError && <p className="revenue-warning" role="alert">{actionError}</p>}
@@ -1270,7 +1305,7 @@ function CampaignBoard({ campaigns = [], analyticsConnection, creativeProduction
   </section>
 }
 
-export function RevenueLabView({ state, error, busy, requestedCampaignId, initialArea = 'today', initialDiscoveryTheme, discoverySession, discoveryResult, onSelectCampaign = () => {}, onReload, onRun = async () => {}, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onCreateDirectProduct, onCreateThreePicks, onGenerateThreePicks, onGenerateThreePicksV2, onGenerateAudio, onGenerateAudioArtifact, onCompose, onComposeV2, onPreview, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication, onUpdateIteration, onCreateIteration, onDeleteCampaign, onVoidCampaign, onConnectAnalytics, onCollectAnalytics, onSave }) {
+export function RevenueLabView({ state, error, busy, requestedCampaignId, initialArea = 'today', initialDiscoveryTheme, discoverySession, discoveryResult, onSelectCampaign = () => {}, onReload, onRun = async () => {}, onTrack, onAnalyze, onReview, onProductSearch, onProductDecision, onCreateCampaign, onCreateDirectProduct, onCreateThreePicks, onAssignThreePicksAssetRevision = async () => {}, onLockThreePicksCampaign = async () => {}, onGenerateThreePicks, onGenerateThreePicksV2, onGenerateAudio, onGenerateAudioArtifact, onCompose, onComposeV2, onPreview, onGenerateProduction, onGenerateVideo, onCreateAssetRevision, onGenerateImageVideo, onRegisterPublication, onUpdateIteration, onCreateIteration, onDeleteCampaign, onVoidCampaign, onConnectAnalytics, onCollectAnalytics, onSave }) {
   const [activeArea, setActiveArea] = useState(() => OPERATIONS_AREAS.some(([id]) => id === initialArea) ? initialArea : 'today')
   const [auditOpen, setAuditOpen] = useState(false)
   const [discoveryTheme, setDiscoveryTheme] = useState(() => discoverySession?.theme || initialDiscoveryTheme || readDiscoveryTheme())
@@ -1300,9 +1335,9 @@ export function RevenueLabView({ state, error, busy, requestedCampaignId, initia
       <OpportunitySection title="今日の候補" description={`現在のテーマ「${currentDiscoveryTheme}」から確認する候補です。`} items={discoveryItems} configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
       <OpportunitySection title="継続上昇" description="登録後も伸びている候補です。" items={state.trackingOpportunities || []} tracking configured={state.config.configured} analysisByItem={analysisByItem} productSearchByAnalysis={productSearchByAnalysis} productConfig={state.config.products} busy={busy} onReview={onReview} onProductSearch={onProductSearch} onProductDecision={onProductDecision} onCreateCampaign={onCreateCampaign} />
       <RegisteredProducts campaigns={state.campaigns || []} />
-      <section><div className="revenue-section-heading"><div><p className="revenue-kicker">THREE PICKS</p><h2>Three Picks候補・選択</h2></div></div><ThreePicksIntake campaigns={state.campaigns || []} busy={busy} assetRevisionConfig={state.config.productAssetRevisions} onCreate={onCreateThreePicks} onCreateAssetRevision={onCreateAssetRevision} /></section>
+      <section><div className="revenue-section-heading"><div><p className="revenue-kicker">THREE PICKS</p><h2>Three Picks候補・選択</h2></div></div><ThreePicksIntake campaigns={state.campaigns || []} busy={busy} assetRevisionConfig={state.config.productAssetRevisions} onCreate={onCreateThreePicks} onCreateAssetRevision={onCreateAssetRevision} onCreated={result => { if (result?.campaignId) onSelectCampaign(result.campaignId); setActiveArea('production') }} /></section>
     </section>
-    <div hidden={activeArea !== 'production'}><OperatorProductionWorkspace state={state} requestedCampaignId={requestedCampaignId} busy={busy} onGeneratePlan={onGenerateThreePicksV2} onGenerateAudio={onGenerateAudio} onCompose={onComposeV2} onPreview={onPreview} onOpenPublication={() => setActiveArea('publication')} /></div>
+    <div hidden={activeArea !== 'production'}><OperatorProductionWorkspace state={state} requestedCampaignId={requestedCampaignId} busy={busy} onGeneratePlan={onGenerateThreePicksV2} onGenerateAudio={onGenerateAudio} onCompose={onComposeV2} onPreview={onPreview} onAssignAssetRevision={onAssignThreePicksAssetRevision} onLockCampaign={onLockThreePicksCampaign} onOpenProducts={() => setActiveArea('products')} onOpenPublication={() => setActiveArea('publication')} /></div>
     <div hidden={activeArea !== 'publication'}><OperatorPublicationOperations state={state} requestedCampaignId={requestedCampaignId} busy={busy} onPreview={onPreview} onRegisterPublication={onRegisterPublication} onCollectAnalytics={onCollectAnalytics} onOpenArea={setActiveArea} /></div>
     <aside className="revenue-audit-drawer" hidden={!auditOpen} aria-label="設定・監査"><div className="revenue-advanced-tools-body">
     {!state.config.configured && <section className="revenue-state revenue-config"><h3>接続設定が必要です</h3><p>サーバー側の環境変数を設定してください。</p><code>{state.config.missing.join(', ')}</code></section>}
@@ -1421,5 +1456,5 @@ export default function RevenueLabDashboard() {
   const review = (analysis, decision) => perform(() => createRevenueAnalysisReview(
     analysis.id, decision, decision === analysis.output?.recommendation ? 'agree' : 'disagree',
   )).catch(() => {})
-  return <RevenueLabView state={state} error={error} busy={busy} discoverySession={discoverySession} discoveryResult={discoveryResult} requestedCampaignId={requestedCampaignId} onSelectCampaign={selectCampaign} onReload={reload} onRun={runDiscovery} onTrack={() => { perform(enqueueRevenueTracking).catch(() => {}) }} onAnalyze={() => { perform(() => enqueueRevenueAnalysis(1)).catch(() => {}) }} onReview={review} onProductSearch={analysisId => { perform(() => enqueueProductSearch(analysisId)).catch(() => {}) }} onProductDecision={(candidateId, analysisId, decision) => { perform(() => createProductCandidateDecision(candidateId, analysisId, decision)).catch(() => {}) }} onCreateCampaign={(analysisId, input) => perform(() => createManualCampaignRequest(analysisId, input))} onCreateDirectProduct={input => perform(() => createDirectProductCampaignRequest(input))} onCreateThreePicks={input => perform(() => createThreePicksCampaignRequest(input))} onGenerateThreePicks={(iterationId, idempotencyKey) => perform(() => enqueueThreePicksPlan(iterationId, idempotencyKey))} onGenerateThreePicksV2={(iterationId, idempotencyKey) => perform(() => enqueueThreePicksV2Plan(iterationId, idempotencyKey))} onGenerateAudio={(planId, idempotencyKey) => perform(() => enqueueCreativeAudioGeneration(planId, idempotencyKey))} onGenerateAudioArtifact={(artifactId, idempotencyKey) => perform(() => enqueueCreativeAudioArtifactGeneration(artifactId, idempotencyKey))} onCompose={(planId, idempotencyKey) => perform(() => enqueueFinalComposition(planId, idempotencyKey))} onComposeV2={(planId, idempotencyKey) => perform(() => enqueueFinalCompositionV2(planId, idempotencyKey))} onPreview={outputId => loadFinalCompositionPreview(outputId)} onGenerateProduction={(iterationId, idempotencyKey) => perform(() => enqueueCreativeProductionPlan(iterationId, idempotencyKey))} onGenerateVideo={(planId, sceneNumber, idempotencyKey, regenerate) => perform(() => enqueueVideoGeneration(planId, sceneNumber, idempotencyKey, regenerate))} onCreateAssetRevision={(assetId, i2vAllowed, createNineSixteen) => perform(() => createProductAssetRevision(assetId, i2vAllowed, createNineSixteen))} onGenerateImageVideo={(planId, sceneNumber, revisionId, idempotencyKey, regenerate) => perform(() => enqueueImageVideoGeneration(planId, sceneNumber, revisionId, idempotencyKey, regenerate))} onRegisterPublication={(iterationId, input) => { perform(() => registerCampaignPublication(iterationId, input)).catch(() => {}) }} onUpdateIteration={(iterationId, input) => { perform(() => updateDraftCampaignIteration(iterationId, input)).catch(() => {}) }} onCreateIteration={(campaignId, sourceIterationId, input) => { perform(() => createCampaignIteration(campaignId, sourceIterationId, input)).catch(() => {}) }} onDeleteCampaign={campaignId => { perform(() => hardDeleteDraftCampaign(campaignId)).catch(() => {}) }} onVoidCampaign={(campaignId, reason, note) => { perform(() => voidCampaign(campaignId, reason, note)).catch(() => {}) }} onConnectAnalytics={() => { perform(startYouTubeAnalyticsOAuth).catch(() => {}) }} onCollectAnalytics={(publicationId, range) => { perform(() => collectYouTubeAnalytics(publicationId, range.startDate, range.endDate)).catch(() => {}) }} onSave={(id, values) => { perform(() => updateRevenueQuery(id, values)).catch(() => {}) }} />
+  return <RevenueLabView state={state} error={error} busy={busy} discoverySession={discoverySession} discoveryResult={discoveryResult} requestedCampaignId={requestedCampaignId} onSelectCampaign={selectCampaign} onReload={reload} onRun={runDiscovery} onTrack={() => { perform(enqueueRevenueTracking).catch(() => {}) }} onAnalyze={() => { perform(() => enqueueRevenueAnalysis(1)).catch(() => {}) }} onReview={review} onProductSearch={analysisId => { perform(() => enqueueProductSearch(analysisId)).catch(() => {}) }} onProductDecision={(candidateId, analysisId, decision) => { perform(() => createProductCandidateDecision(candidateId, analysisId, decision)).catch(() => {}) }} onCreateCampaign={(analysisId, input) => perform(() => createManualCampaignRequest(analysisId, input))} onCreateDirectProduct={input => perform(() => createDirectProductCampaignRequest(input))} onCreateThreePicks={input => perform(() => createThreePicksCampaignRequest(input))} onAssignThreePicksAssetRevision={(campaignId, itemId, revisionId) => perform(() => assignThreePicksV2AssetRevision(campaignId, itemId, revisionId))} onLockThreePicksCampaign={campaignId => perform(() => lockThreePicksV2Campaign(campaignId))} onGenerateThreePicks={(iterationId, idempotencyKey) => perform(() => enqueueThreePicksPlan(iterationId, idempotencyKey))} onGenerateThreePicksV2={(iterationId, idempotencyKey) => perform(() => enqueueThreePicksV2Plan(iterationId, idempotencyKey))} onGenerateAudio={(planId, idempotencyKey) => perform(() => enqueueCreativeAudioGeneration(planId, idempotencyKey))} onGenerateAudioArtifact={(artifactId, idempotencyKey) => perform(() => enqueueCreativeAudioArtifactGeneration(artifactId, idempotencyKey))} onCompose={(planId, idempotencyKey) => perform(() => enqueueFinalComposition(planId, idempotencyKey))} onComposeV2={(planId, idempotencyKey) => perform(() => enqueueFinalCompositionV2(planId, idempotencyKey))} onPreview={outputId => loadFinalCompositionPreview(outputId)} onGenerateProduction={(iterationId, idempotencyKey) => perform(() => enqueueCreativeProductionPlan(iterationId, idempotencyKey))} onGenerateVideo={(planId, sceneNumber, idempotencyKey, regenerate) => perform(() => enqueueVideoGeneration(planId, sceneNumber, idempotencyKey, regenerate))} onCreateAssetRevision={(assetId, i2vAllowed, createNineSixteen) => perform(() => createProductAssetRevision(assetId, i2vAllowed, createNineSixteen))} onGenerateImageVideo={(planId, sceneNumber, revisionId, idempotencyKey, regenerate) => perform(() => enqueueImageVideoGeneration(planId, sceneNumber, revisionId, idempotencyKey, regenerate))} onRegisterPublication={(iterationId, input) => { perform(() => registerCampaignPublication(iterationId, input)).catch(() => {}) }} onUpdateIteration={(iterationId, input) => { perform(() => updateDraftCampaignIteration(iterationId, input)).catch(() => {}) }} onCreateIteration={(campaignId, sourceIterationId, input) => { perform(() => createCampaignIteration(campaignId, sourceIterationId, input)).catch(() => {}) }} onDeleteCampaign={campaignId => { perform(() => hardDeleteDraftCampaign(campaignId)).catch(() => {}) }} onVoidCampaign={(campaignId, reason, note) => { perform(() => voidCampaign(campaignId, reason, note)).catch(() => {}) }} onConnectAnalytics={() => { perform(startYouTubeAnalyticsOAuth).catch(() => {}) }} onCollectAnalytics={(publicationId, range) => { perform(() => collectYouTubeAnalytics(publicationId, range.startDate, range.endDate)).catch(() => {}) }} onSave={(id, values) => { perform(() => updateRevenueQuery(id, values)).catch(() => {}) }} />
 }

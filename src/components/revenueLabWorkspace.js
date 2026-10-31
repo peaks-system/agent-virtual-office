@@ -208,9 +208,23 @@ function completedComposition(revision) {
   return (revision?.compositions || []).find(item => ['succeeded', 'completed', 'ready'].includes(item.status) && item.output) || null
 }
 
+export function threePicksMaterialReadiness(productSet) {
+  const items = productSet?.items || []
+  const readyItems = items.filter(item => item?.assetRevision?.id
+    && item.assetRevision.availabilityStatus !== 'unavailable')
+  return { total: items.length, readyCount: readyItems.length,
+    missingCount: Math.max(0, items.length - readyItems.length), ready: items.length === 3 && readyItems.length === 3 }
+}
+
 function primaryAction({ iteration, revision, legacy, timing, composition }) {
   if (!iteration) return { id: 'no-product', label: '商品を登録', disabled: true, reason: '制作対象の商品がありません' }
   if (legacy) return { id: 'legacy-read-only', label: 'Legacy・読取専用', disabled: true, reason: 'Three Picks v1は通常制作できません' }
+  if (iteration.productSet?.status === 'building') {
+    const materials = threePicksMaterialReadiness(iteration.productSet)
+    if (!materials.ready) return { id: 'prepare-materials', label: '素材を準備', disabled: false,
+      missingMaterialCount: materials.missingCount, reason: `制作素材 ${materials.missingCount}件未準備` }
+    return { id: 'lock-product-set', label: '制作を開始', disabled: false, missingMaterialCount: 0 }
+  }
   if (!revision || !revision.planId || revision.status !== 'succeeded') {
     const running = revision && ['queued', 'running', 'submitting', 'polling'].includes(revision.status)
     return { id: 'generate-plan', label: running ? `Revision ${revision.revisionNumber}の制作案を生成中` : '制作案を生成', disabled: Boolean(running), reason: running ? '制作案生成の完了を待っています' : undefined }
@@ -339,6 +353,14 @@ export function deriveAttentionItems(state = {}) {
       id: `${campaign.id}:${kind}`, kind, campaignId: campaign.id, campaignName: campaign.name,
       status, detail, cta, area,
     })
+    if (workspace.primaryAction.id === 'prepare-materials') {
+      add('material-preparation', '制作素材の準備', `制作素材 ${workspace.primaryAction.missingMaterialCount}件未準備`, '素材を準備', 'production')
+      return items
+    }
+    if (workspace.primaryAction.id === 'lock-product-set') {
+      add('material-lock', '制作素材の準備完了', '3商品の制作素材を確認しました', '制作を開始', 'production')
+      return items
+    }
     if (planFeedback?.kind === 'error') add('plan-error', '人間確認が必要', planFeedback.detail || planFeedback.message, '確認する', 'production')
     if (review.required) add('script-review', '原稿確認', review.detail, '確認する', 'production')
     if (revision?.planId && (iteration?.product || (iteration?.productSet?.items || []).length) && !linksReady) add('product-link', '商品リンク未登録', '公開に使う商品リンクを登録してください', 'リンクを登録', 'products')

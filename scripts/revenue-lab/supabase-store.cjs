@@ -703,6 +703,7 @@ function createSupabaseStore({
       const revision = revisionById.get(row.product_asset_revision_id)
       const destination = destinationByItem.get(row.id)
       records.push({ id: row.id, presentationOrder: row.presentation_order,
+        curatedProductId: row.curated_product_id,
         rankPosition: row.rank_position, productName: row.product_name_snapshot,
         verifiedFactRef: row.verified_fact_ref, verifiedFact: row.verified_fact_snapshot,
         price: row.price_snapshot, productSnapshot: row.product_snapshot,
@@ -1410,16 +1411,16 @@ function createSupabaseStore({
     if (!project) throw new RevenueStoreError('PROJECT_NOT_FOUND', 'Revenue Lab project was not found', 404)
     if (!Array.isArray(input.items) || input.items.length !== 3
       || new Set(input.items.map(item => item.curatedProductId)).size !== 3
-      || input.items.some(item => !Array.isArray(item.productAssetRevisionIds)
-        || item.productAssetRevisionIds.length < 1 || item.productAssetRevisionIds.length > 4
-        || new Set(item.productAssetRevisionIds).size !== item.productAssetRevisionIds.length)) {
-      throw new RevenueStoreError('THREE_PICKS_V2_VALIDATION_ERROR', 'Exactly three products with one to four distinct revisions are required', 400)
+      || input.items.some(item => !Array.isArray(item.productAssetRevisionIds || [])
+        || (item.productAssetRevisionIds || []).length > 4
+        || new Set(item.productAssetRevisionIds || []).size !== (item.productAssetRevisionIds || []).length)) {
+      throw new RevenueStoreError('THREE_PICKS_V2_VALIDATION_ERROR', 'Exactly three distinct products are required', 400)
     }
     const payload = {
       archetype: THREE_PICKS_V2_ARCHETYPE, selection_mode: 'human',
       campaign: { name: input.campaignName, objective: input.objective || null },
       items: input.items.map((item, index) => ({ curated_product_id: item.curatedProductId,
-        asset_revision_ids: item.productAssetRevisionIds, verified_fact_ref: item.verifiedFactRef,
+        asset_revision_ids: [], verified_fact_ref: item.verifiedFactRef,
         presentation_order: index + 1, rank_position: null })),
     }
     return rpc('create_three_picks_v2_campaign', {
@@ -1428,6 +1429,16 @@ function createSupabaseStore({
       p_treatment_fingerprint: inputFingerprint({ archetype: payload.archetype, campaign: payload.campaign, items: payload.items }),
       p_idempotency_key: input.idempotencyKey,
     })
+  }
+
+  async function assignThreePicksV2AssetRevision(campaignId, productSetItemId, assetRevisionId) {
+    return rpc('assign_three_picks_v2_asset_revision', {
+      p_campaign_id: campaignId, p_product_set_item_id: productSetItemId, p_asset_revision_id: assetRevisionId,
+    })
+  }
+
+  async function lockThreePicksV2Campaign(campaignId) {
+    return rpc('lock_three_picks_v2_campaign', { p_campaign_id: campaignId })
   }
 
   async function enqueueThreePicksPlan(iterationId, { idempotencyKey, model = THREE_PICKS_DEFAULT_MODEL } = {}) {
@@ -1483,7 +1494,22 @@ function createSupabaseStore({
         content_sha256: asset.content_sha256_snapshot })
       assetsByItem.set(asset.product_set_item_id, records)
     }
-    if (itemRows.some(row => !(assetsByItem.get(row.id)?.length))) throw new RevenueStoreError('THREE_PICKS_V2_ASSET_INVALID', 'Every product requires an immutable asset revision', 409)
+    const revisionIds = [...new Set(itemRows.map(row => row.product_asset_revision_id).filter(Boolean))]
+    const revisions = revisionIds.length ? await request(`product_asset_revisions?id=in.(${encodeURIComponent(revisionIds.join(','))})&select=*`) : []
+    const assetIds = [...new Set(revisions.map(row => row.product_asset_id).filter(Boolean))]
+    const productAssets = assetIds.length ? await request(`product_assets?id=in.(${encodeURIComponent(assetIds.join(','))})&select=*`) : []
+    const revisionById = new Map(revisions.map(row => [row.id, row]))
+    const productAssetById = new Map(productAssets.map(row => [row.id, row]))
+    const invalidMaterial = itemRows.some(row => {
+      const revision = revisionById.get(row.product_asset_revision_id)
+      const asset = revision ? productAssetById.get(revision.product_asset_id) : null
+      const links = assetsByItem.get(row.id) || []
+      return !revision || revision.availability_status !== 'available' || !asset
+        || asset.curated_product_id !== row.curated_product_id
+        || !['owned', 'licensed', 'authorized_reference'].includes(asset.usage_permission)
+        || !links.some(link => link.asset_order === 1 && link.product_asset_revision_id === row.product_asset_revision_id)
+    })
+    if (invalidMaterial) throw new RevenueStoreError('THREE_PICKS_V2_ASSET_INVALID', 'Every product requires a valid immutable asset revision', 409)
     const input = {
       contract: { archetype: THREE_PICKS_V2_ARCHETYPE, ranking_allowed: false,
         prompt_version: THREE_PICKS_V2_PROMPT_VERSION, schema_version: THREE_PICKS_V2_SCHEMA_VERSION,
@@ -2560,7 +2586,8 @@ function createSupabaseStore({
     persistSourceEnrichmentSuccess, persistSourceEnrichmentFailure,
     enqueueProductSearch, getProductSearchRun, markProductSearchRunning, persistProductSearchSuccess,
     persistProductSearchFailure, createProductDecision, createManualCampaign, createDirectProductCampaign,
-    createThreePicksCampaign, createThreePicksV2Campaign, enqueueThreePicksPlan, enqueueThreePicksV2Plan,
+    createThreePicksCampaign, createThreePicksV2Campaign, assignThreePicksV2AssetRevision, lockThreePicksV2Campaign,
+    enqueueThreePicksPlan, enqueueThreePicksV2Plan,
     getThreePicksRequest, markThreePicksRunning, persistThreePicksSuccess, persistThreePicksV2Success,
     persistThreePicksFailure, enqueueCreativeAudioGeneration, enqueueCreativeAudioArtifactGeneration, claimCreativeAudioGeneration,
     recordCreativeAudioProviderReceipt, completeCreativeAudioGeneration, failCreativeAudioGeneration,

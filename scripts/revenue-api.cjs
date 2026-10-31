@@ -288,11 +288,11 @@ function threePicksV2CampaignInput(input) {
   const idempotencyKey = boundedText(input.idempotencyKey, 'idempotencyKey', 36)
   if (!UUID.test(idempotencyKey) || !Array.isArray(input.items) || input.items.length !== 3) throw new TypeError('Invalid Creative Archetype v2 input')
   const normalized = input.items.map(item => {
-    if (!item || !UUID.test(item.curatedProductId || '') || !Array.isArray(item.productAssetRevisionIds)
-      || item.productAssetRevisionIds.length < 1 || item.productAssetRevisionIds.length > 4
-      || item.productAssetRevisionIds.some(id => !UUID.test(id))
-      || new Set(item.productAssetRevisionIds).size !== item.productAssetRevisionIds.length) throw new TypeError('Invalid Creative Archetype v2 product')
-    return { curatedProductId: item.curatedProductId, productAssetRevisionIds: item.productAssetRevisionIds,
+    const revisionIds = item?.productAssetRevisionIds == null ? [] : item.productAssetRevisionIds
+    if (!item || !UUID.test(item.curatedProductId || '') || !Array.isArray(revisionIds)
+      || revisionIds.length > 4 || revisionIds.some(id => !UUID.test(id))
+      || new Set(revisionIds).size !== revisionIds.length) throw new TypeError('Invalid Creative Archetype v2 product')
+    return { curatedProductId: item.curatedProductId, productAssetRevisionIds: [],
       verifiedFactRef: boundedText(item.verifiedFactRef, 'verifiedFactRef', 160) }
   })
   if (new Set(normalized.map(item => item.curatedProductId)).size !== 3) throw new TypeError('Duplicate Creative Archetype v2 product')
@@ -528,6 +528,8 @@ function createRevenueApi({
       const videoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/video-generations$/i)
       const imageVideoGenerationMatch = pathname.match(/^\/creative-production-plans\/([0-9a-f-]{36})\/scenes\/(\d+)\/image-video-generations$/i)
       const assetRevisionMatch = pathname.match(/^\/product-assets\/([0-9a-f-]{36})\/revisions$/i)
+      const threePicksV2AssetMatch = pathname.match(/^\/three-picks-v2\/campaigns\/([0-9a-f-]{36})\/items\/([0-9a-f-]{36})\/asset-revisions$/i)
+      const threePicksV2LockMatch = pathname.match(/^\/three-picks-v2\/campaigns\/([0-9a-f-]{36})\/lock$/i)
       const threePicksPlanMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/three-picks-plans$/i)
       const compositionMatch = pathname.match(/^\/three-picks-plans\/([0-9a-f-]{36})\/compositions$/i)
       const threePicksV2PlanMatch = pathname.match(/^\/campaign-iterations\/([0-9a-f-]{36})\/three-picks-v2-plans$/i)
@@ -611,6 +613,18 @@ function createRevenueApi({
         const result = await getStore().enqueueThreePicksV2Plan(threePicksV2PlanMatch[1], {
           idempotencyKey, model: config.multiProductShortsV2.requestedModel })
         return reply(res, result?.created === false ? 200 : 201, { data: result })
+      }
+      if (req.method === 'POST' && threePicksV2AssetMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        const input = await body(req)
+        if (!UUID.test(input.assetRevisionId || '')) return fail(res, 400, 'VALIDATION_ERROR', 'Asset Revision IDが正しくありません。')
+        const result = await getStore().assignThreePicksV2AssetRevision(threePicksV2AssetMatch[1], threePicksV2AssetMatch[2], input.assetRevisionId)
+        return reply(res, 200, { data: result })
+      }
+      if (req.method === 'POST' && threePicksV2LockMatch) {
+        if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')
+        const result = await getStore().lockThreePicksV2Campaign(threePicksV2LockMatch[1])
+        return reply(res, 200, { data: result })
       }
       if (req.method === 'POST' && assetRevisionMatch) {
         if (!authorize(req)) return fail(res, 401, 'UNAUTHORIZED', '操作にはAI Officeの認証が必要です。')

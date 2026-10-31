@@ -164,6 +164,36 @@ describe('Revenue Lab Workspace UX v2', () => {
     expect(canCreateThreePicks(['product-1', 'product-2', 'product-3'], pool)).toBe(true)
   })
 
+  it('keeps Amazon food products selectable without Asset Revisions and separates material readiness', () => {
+    const names = ['ウォーカー Lパケットフィンガーショートブレッド', 'Loacker（ローカー）ミニズアート', 'ポルボローネ チョコレート味 40g×10袋']
+    const campaigns = names.map((productName, index) => active({ id: `food-${index}`, iterations: [{ id: `food-iteration-${index}`, product: {
+      id: `food-product-${index}`, productName, merchant: 'Amazon', productUrl: `https://example.com/food-${index}`,
+      verifiedFacts: { summary: `${productName}の商品情報を確認済み` }, assets: [],
+    } }] }))
+    const pool = buildThreePicksCandidatePool(campaigns)
+    expect(pool).toHaveLength(3)
+    expect(pool.every(candidate => candidate.eligible)).toBe(true)
+    expect(pool.every(candidate => candidate.materialReady === false)).toBe(true)
+    expect(canCreateThreePicks(pool.map(candidate => candidate.product.id), pool)).toBe(true)
+    const html = workspaceMarkup(campaigns, 'products')
+    expect(html.match(/選択可能/g)).toHaveLength(3)
+    expect(html.match(/素材未準備/g)).toHaveLength(3)
+    expect(html).not.toContain('not eligible・Asset Revisionがありません')
+  })
+
+  it('shows material preparation before Planner for a building Campaign', () => {
+    const items = [1, 2, 3].map(index => ({ id: `building-item-${index}`, curatedProductId: `building-product-${index}`,
+      productName: `食品${index}`, productUrl: `https://example.com/building-${index}`, assetRevision: index === 1 ? { id: 'revision-1', revisionNumber: 1 } : null }))
+    const building = active({ name: 'おすすめ3選 Shorts', iterations: [{ id: 'building-iteration', iterationNumber: 1,
+      productSet: { archetype: 'three_picks_v2', status: 'building', items }, archetypePlans: [] }] })
+    const html = workspaceMarkup([building], 'production')
+    expect(html).toContain('制作素材を準備してください')
+    expect(html).toContain('制作素材 2件未準備')
+    expect(html.match(/AIで素材を作る/g)).toHaveLength(2)
+    expect(html.match(/<button[^>]*>素材を追加<\/button>/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(html).not.toContain('制作案を生成')
+  })
+
   it('defaults to a human-work inbox and excludes legacy, single-product, and automatic-only campaigns', () => {
     const output = {
       hook: { display_text: 'Hook', tts: 'Hook narration' }, product_presentations: [], cta: { display_text: 'CTA', tts: 'CTA narration' },

@@ -31,9 +31,26 @@ const creativeProductionRollback = readFileSync('supabase/rollback/2026101114000
 const videoGenerationMigration = readFileSync('supabase/migrations/20261011150000_revenue_lab_pollo_video_generation_v1.sql', 'utf8')
 const discoveryFingerprintMigration = readFileSync('supabase/migrations/20261029160000_revenue_lab_query_fingerprint_idempotency.sql', 'utf8')
 const discoveryFingerprintRollback = readFileSync('supabase/rollback/20261029160000_revenue_lab_query_fingerprint_idempotency_down.sql', 'utf8')
+const materialPreparationMigration = readFileSync('supabase/migrations/20261031120000_revenue_lab_three_picks_material_preparation.sql', 'utf8')
+const materialPreparationRollback = readFileSync('supabase/rollback/20261031120000_revenue_lab_three_picks_material_preparation_down.sql', 'utf8')
 const videoGenerationRollback = readFileSync('supabase/rollback/20261011150000_revenue_lab_pollo_video_generation_v1_down.sql', 'utf8')
 
 describe('Revenue Lab Supabase migration', () => {
+  it('separates building Product Sets from validated locked Three Picks v2 production', () => {
+    expect(materialPreparationMigration).toContain('alter column product_asset_revision_id drop not null')
+    expect(materialPreparationMigration).toContain('create or replace function revenue_lab.create_three_picks_v2_campaign')
+    expect(materialPreparationMigration).toContain('create function revenue_lab.assign_three_picks_v2_asset_revision')
+    expect(materialPreparationMigration).toContain('create function revenue_lab.lock_three_picks_v2_campaign')
+    expect(materialPreparationMigration).toContain("set_row.status <> 'building'")
+    expect(materialPreparationMigration).toContain("availability_status = 'available'")
+    expect(materialPreparationMigration).toContain("usage_permission not in ('owned', 'licensed', 'authorized_reference')")
+    expect(materialPreparationMigration).toContain('asset_row.curated_product_id <> item_row.curated_product_id')
+    expect(materialPreparationMigration).toContain("set_row.status <> 'locked'")
+    expect(materialPreparationMigration).toContain('item.product_asset_revision_id is null')
+    expect(materialPreparationMigration).not.toMatch(/update revenue_lab\.(?:curated_products|creative_archetype_plans|creative_audio_artifacts|final_composition_outputs)/)
+    expect(materialPreparationRollback).toContain('Rollback blocked: building Three Picks v2 material preparation exists')
+    expect(materialPreparationRollback).toContain('alter column product_asset_revision_id set not null')
+  })
   it('adds service-only provider attempts with active idempotency and cost provenance', () => {
     for (const table of ['video_generation_runs', 'video_generation_scenes']) {
       expect(videoGenerationMigration).toContain(`create table revenue_lab.${table}`)

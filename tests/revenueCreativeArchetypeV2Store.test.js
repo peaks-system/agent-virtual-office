@@ -5,9 +5,11 @@ const uuid = value => `00000000-0000-4000-8000-${String(value).padStart(12, '0')
 const response = (body, status = 200) => new Response(body == null ? null : JSON.stringify(body), {
   status, headers: body == null ? {} : { 'content-type': 'application/json' },
 })
+const plannerRevisions = () => [1, 2, 3].map(index => ({ id: uuid(20 + index), product_asset_id: uuid(30 + index), availability_status: 'available' }))
+const plannerAssets = () => [1, 2, 3].map(index => ({ id: uuid(30 + index), curated_product_id: uuid(40 + index), usage_permission: 'owned' }))
 
 describe('Creative Archetype v2 store', () => {
-  it('creates v2 lineage with ordered 1-4 revision arrays through the dedicated RPC', async () => {
+  it('creates building v2 lineage without assigning supplied revisions through the creation RPC', async () => {
     const calls = []
     const fetchImpl = vi.fn(async (url, options = {}) => {
       const body = options.body ? JSON.parse(options.body) : null; calls.push({ url, body })
@@ -21,7 +23,7 @@ describe('Creative Archetype v2 store', () => {
     })) })
     const rpc = calls.find(call => call.url.includes('/rpc/create_three_picks_v2_campaign'))
     expect(rpc.body.p_payload).toMatchObject({ archetype: 'three_picks_v2', selection_mode: 'human' })
-    expect(rpc.body.p_payload.items[0].asset_revision_ids).toEqual([uuid(21), uuid(31)])
+    expect(rpc.body.p_payload.items[0].asset_revision_ids).toEqual([])
     expect(rpc.body.p_selection_fingerprint).toMatch(/^[0-9a-f]{64}$/)
   })
 
@@ -37,10 +39,13 @@ describe('Creative Archetype v2 store', () => {
         { name: 'スマホホルダー 車 マグネット 車載ホルダー N56', fact: 'N56磁石を採用。スマホを悪路でもホールド。' },
         { name: '車用 カーアロマディフューザー USB式', fact: '6種類の香り。1本で約2週間。USB接続。' },
       ].map((item, index) => ({ id: uuid(11 + index), product_name_snapshot: item.name,
+        curated_product_id: uuid(41 + index), product_asset_revision_id: uuid(21 + index),
         verified_fact_ref: 'summary', verified_fact_snapshot: { key: 'summary', value: item.fact },
         presentation_order: index + 1 })))
       if (url.includes('/campaign_product_set_item_assets?')) return response([1, 2, 3].map(index => ({ product_set_item_id: uuid(10 + index),
         product_asset_revision_id: uuid(20 + index), asset_order: 1, content_sha256_snapshot: 'a'.repeat(64) })))
+      if (url.includes('/product_asset_revisions?')) return response(plannerRevisions())
+      if (url.includes('/product_assets?')) return response(plannerAssets())
       if (url.includes('/rpc/enqueue_three_picks_v2_plan')) return response({ requestId: uuid(50), created: true })
       throw new Error(`Unexpected request: ${url}`)
     })
@@ -80,6 +85,7 @@ describe('Creative Archetype v2 store', () => {
       if (url.includes('/campaign_product_sets?')) return response([{ id: uuid(3), archetype: 'three_picks_v2', status: 'locked' }])
       if (url.includes('/campaign_product_set_items?')) return response([1, 2, 3].map(index => ({
         id: uuid(10 + index), product_name_snapshot: ['車用ゴミ箱', 'マグネット式スマホホルダー', '車載アロマディフューザー'][index - 1],
+        curated_product_id: uuid(40 + index), product_asset_revision_id: uuid(20 + index),
         verified_fact_ref: 'summary',
         verified_fact_snapshot: { key: 'summary', value: index === 1 ? 'LEDライト付き'
           : index === 2 ? 'A'.repeat(121) : '6種類の香り' }, presentation_order: index,
@@ -88,6 +94,8 @@ describe('Creative Archetype v2 store', () => {
         product_set_item_id: uuid(10 + index), product_asset_revision_id: uuid(20 + index),
         asset_order: 1, content_sha256_snapshot: 'a'.repeat(64),
       })))
+      if (url.includes('/product_asset_revisions?')) return response(plannerRevisions())
+      if (url.includes('/product_assets?')) return response(plannerAssets())
       if (url.includes('/rpc/enqueue_three_picks_v2_plan')) return response({ requestId: uuid(50), created: true })
       throw new Error(`Unexpected request: ${url}`)
     })
@@ -111,12 +119,15 @@ describe('Creative Archetype v2 store', () => {
         { name: 'マグネット式スマホホルダー', fact: '毎日の運転を快適にします' },
         { name: '車載アロマディフューザー', fact: '6種類の香り' },
       ].map((item, index) => ({ id: uuid(11 + index), product_name_snapshot: item.name,
+        curated_product_id: uuid(41 + index), product_asset_revision_id: uuid(21 + index),
         verified_fact_ref: 'summary', verified_fact_snapshot: { key: 'summary', value: item.fact },
         presentation_order: index + 1 })))
       if (url.includes('/campaign_product_set_item_assets?')) return response([1, 2, 3].map(index => ({
         product_set_item_id: uuid(10 + index), product_asset_revision_id: uuid(20 + index),
         asset_order: 1, content_sha256_snapshot: 'a'.repeat(64),
       })))
+      if (url.includes('/product_asset_revisions?')) return response(plannerRevisions())
+      if (url.includes('/product_assets?')) return response(plannerAssets())
       throw new Error(`Unexpected request: ${url}`)
     })
     const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })

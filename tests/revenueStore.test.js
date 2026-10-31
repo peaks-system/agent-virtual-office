@@ -628,4 +628,75 @@ describe('Revenue Lab Supabase store snapshots', () => {
     await store.previousVideoSnapshots('source-1', ['video-1'])
     expect(calls.find(url => url.includes('/source_item_snapshots?'))).toContain('capture_kind=eq.discovery')
   })
+
+  it('creates a building v2 Campaign without materials and routes explicit assignment and lock RPCs', async () => {
+    const calls = []
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null
+      calls.push({ url, body })
+      if (url.includes('/projects?')) return response([{ id: 'project-1' }])
+      if (url.includes('/rpc/create_three_picks_v2_campaign')) return response({ campaignId: 'campaign-1', productSetId: 'set-1', status: 'building', created: true })
+      if (url.includes('/rpc/assign_three_picks_v2_asset_revision')) return response({ campaignId: 'campaign-1', productSetItemId: 'item-1', assetRevisionId: 'revision-1', assigned: true })
+      if (url.includes('/rpc/lock_three_picks_v2_campaign')) return response({ campaignId: 'campaign-1', productSetId: 'set-1', status: 'locked', locked: true })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const items = [1, 2, 3].map(index => ({ curatedProductId: `product-${index}`, verifiedFactRef: 'summary', productAssetRevisionIds: [] }))
+    await expect(store.createThreePicksV2Campaign({ idempotencyKey: 'key-1', campaignName: '食品3選', items })).resolves.toMatchObject({ status: 'building' })
+    await store.assignThreePicksV2AssetRevision('campaign-1', 'item-1', 'revision-1')
+    await store.lockThreePicksV2Campaign('campaign-1')
+    expect(calls.find(call => call.url.includes('/rpc/create_three_picks_v2_campaign')).body.p_payload.items.every(item => item.asset_revision_ids.length === 0)).toBe(true)
+    expect(calls.find(call => call.url.includes('/rpc/assign_three_picks_v2_asset_revision')).body).toEqual({ p_campaign_id: 'campaign-1', p_product_set_item_id: 'item-1', p_asset_revision_id: 'revision-1' })
+    expect(calls.find(call => call.url.includes('/rpc/lock_three_picks_v2_campaign')).body).toEqual({ p_campaign_id: 'campaign-1' })
+  })
+
+  it.each([0, 1, 2])('rejects Planner enqueue while a building v2 set has %i of 3 materials', async readyCount => {
+    const items = [1, 2, 3].map(index => ({ id: `item-${index}`, product_set_id: 'set-1', curated_product_id: `product-${index}`,
+      product_asset_revision_id: index <= readyCount ? `revision-${index}` : null, presentation_order: index,
+      product_name_snapshot: `商品${index}`, verified_fact_ref: 'summary', verified_fact_snapshot: { key: 'summary', value: `事実${index}` } }))
+    const fetchImpl = vi.fn(async url => {
+      if (url.includes('/campaign_iterations?')) return response([{ id: 'iteration-1', campaign_id: 'campaign-1', product_set_id: 'set-1', curated_product_id: null }])
+      if (url.includes('/campaigns?')) return response([{ id: 'campaign-1', status: 'active' }])
+      if (url.includes('/campaign_product_sets?')) return response([{ id: 'set-1', archetype: 'three_picks_v2', status: 'building' }])
+      if (url.includes('/campaign_product_set_items?')) return response(items)
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    await expect(store.enqueueThreePicksV2Plan('iteration-1', { idempotencyKey: 'key-1' }))
+      .rejects.toMatchObject({ code: 'THREE_PICKS_V2_LINEAGE_INVALID', status: 409 })
+  })
+
+  it.each([
+    ['available owned material', 'available', 'owned', false, true],
+    ['unavailable revision', 'unavailable', 'owned', false, false],
+    ['another product revision', 'available', 'owned', true, false],
+    ['unpermitted asset', 'available', 'reference_only', false, false],
+  ])('guards locked Planner input for %s', async (_label, availability, permission, wrongProduct, allowed) => {
+    const items = [1, 2, 3].map(index => ({ id: `item-${index}`, product_set_id: 'set-1', curated_product_id: `product-${index}`,
+      product_asset_revision_id: `revision-${index}`, presentation_order: index,
+      product_name_snapshot: `車載ダストボックス ${index}`, verified_fact_ref: 'summary',
+      verified_fact_snapshot: { key: 'summary', value: '開けるとLEDが点灯します' }, price_snapshot: null }))
+    const links = items.map((item, index) => ({ product_set_item_id: item.id,
+      product_asset_revision_id: `revision-${index + 1}`, asset_order: 1, content_sha256_snapshot: `${index + 1}`.repeat(64) }))
+    const revisions = items.map((_, index) => ({ id: `revision-${index + 1}`, product_asset_id: `asset-${index + 1}`,
+      availability_status: index === 0 ? availability : 'available' }))
+    const assets = items.map((_, index) => ({ id: `asset-${index + 1}`,
+      curated_product_id: index === 0 && wrongProduct ? 'another-product' : `product-${index + 1}`,
+      usage_permission: index === 0 ? permission : 'owned' }))
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      if (url.includes('/campaign_iterations?')) return response([{ id: 'iteration-1', campaign_id: 'campaign-1', product_set_id: 'set-1', curated_product_id: null }])
+      if (url.includes('/campaigns?')) return response([{ id: 'campaign-1', name: '食品3選', objective: null, status: 'active' }])
+      if (url.includes('/campaign_product_sets?')) return response([{ id: 'set-1', archetype: 'three_picks_v2', status: 'locked' }])
+      if (url.includes('/campaign_product_set_items?')) return response(items)
+      if (url.includes('/campaign_product_set_item_assets?')) return response(links)
+      if (url.includes('/product_asset_revisions?')) return response(revisions)
+      if (url.includes('/product_assets?')) return response(assets)
+      if (url.includes('/rpc/enqueue_three_picks_v2_plan')) return response({ created: true, requestId: 'request-1' })
+      throw new Error(`Unexpected request: ${url} ${options.method || 'GET'}`)
+    })
+    const store = createSupabaseStore({ url: 'https://example.supabase.co', serviceRoleKey: 'test-only', fetchImpl })
+    const operation = store.enqueueThreePicksV2Plan('iteration-1', { idempotencyKey: 'key-1' })
+    if (allowed) await expect(operation).resolves.toMatchObject({ created: true })
+    else await expect(operation).rejects.toMatchObject({ code: 'THREE_PICKS_V2_ASSET_INVALID', status: 409 })
+  })
 })

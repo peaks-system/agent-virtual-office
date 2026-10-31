@@ -681,3 +681,17 @@
   .revenue-theme-discovery form button { justify-self: start; }
   .revenue-current-theme button { margin-left: 0; }
 }
+
+.revenue-three-picks-statuses { display: grid; gap: 6px; }
+.revenue-three-picks-material { margin: 0; font-size: 14px; }
+.revenue-three-picks-material.is-ready, .revenue-material-picks .is-ready { color: #1e7052; }
+.revenue-three-picks-material.is-attention, .revenue-material-picks .is-attention { color: #9a5b12; font-weight: 800; }
+.revenue-material-preparation { display: grid; gap: 16px; padding: 18px; border: 1px solid rgba(171,116,20,.3); border-radius: 16px; background: #fffdf8; }
+.revenue-material-picks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.revenue-material-picks article { display: grid; gap: 8px; align-content: start; padding: 16px; border: 1px solid rgba(83,113,94,.18); border-radius: 14px; background: #fff; }
+.revenue-material-picks article > span { color: #1e7052; font-size: 12px; font-weight: 850; letter-spacing: .08em; }
+.revenue-material-picks h4, .revenue-material-picks p { margin: 0; }
+.revenue-material-picks h4 { font-size: 16px; line-height: 1.5; }
+.revenue-material-picks img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; border-radius: 10px; background: #f4f7f5; }
+.revenue-material-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+@media (max-width: 760px) { .revenue-material-picks { grid-template-columns: 1fr; } }

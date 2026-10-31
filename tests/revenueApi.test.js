@@ -23,12 +23,13 @@ async function fixture({ authorize = () => true, analyticsService, env, store } 
 }
 
 describe('Revenue Lab API', () => {
-  it('validates v2 Product Set asset cardinality and requires every local v2 composition dependency', () => {
+  it('accepts a building v2 Product Set without Asset Revisions and rejects duplicate products', () => {
     const input = threePicksV2CampaignInput({ idempotencyKey, campaignName: 'v2', items: [1, 2, 3].map(index => ({
       curatedProductId: `${index}1111111-1111-4111-8111-111111111111`,
-      productAssetRevisionIds: [`${index}2222222-2222-4222-8222-222222222222`], verifiedFactRef: 'summary',
+      verifiedFactRef: 'summary',
     })) })
     expect(input.items).toHaveLength(3)
+    expect(input.items.every(item => item.productAssetRevisionIds.length === 0)).toBe(true)
     expect(configurationStatus({ OPENAI_API_KEY: 'configured' }).multiProductShortsV2).toMatchObject({
       configured: true, archetype: 'three_picks_v2', templateId: 'hero-carousel-v2', templateSelection: 'server_fixed',
       promptVersion: 'three-picks-production-planner-v4', schemaVersion: 'multi-product-shorts-plan-v5',
@@ -41,8 +42,8 @@ describe('Revenue Lab API', () => {
       REVENUE_LAB_COMPOSITION_BUCKET: 'compositions', REVENUE_LAB_FFMPEG_PATH: process.execPath,
       REVENUE_LAB_FFPROBE_PATH: process.execPath, REVENUE_LAB_COMPOSITION_FONT_PATH: process.execPath,
     }).finalCompositionV2).toMatchObject({ configured: true, missing: [] })
-    expect(() => threePicksV2CampaignInput({ idempotencyKey, campaignName: 'v2', items: input.items.map(item => ({
-      ...item, productAssetRevisionIds: [uuid, uuid],
+    expect(() => threePicksV2CampaignInput({ idempotencyKey, campaignName: 'v2', items: input.items.map(() => ({
+      curatedProductId: uuid, verifiedFactRef: 'summary',
     })) })).toThrow(TypeError)
   })
 
@@ -77,19 +78,30 @@ describe('Revenue Lab API', () => {
 
   it('routes v2 campaign and plan mutations only to dedicated store methods', async () => {
     const store = { createThreePicksV2Campaign: vi.fn(async () => ({ created: true })),
+      assignThreePicksV2AssetRevision: vi.fn(async () => ({ assigned: true })),
+      lockThreePicksV2Campaign: vi.fn(async () => ({ locked: true })),
       enqueueThreePicksV2Plan: vi.fn(async () => ({ created: true })) }
     const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test',
       YOUTUBE_API_KEY: 'test', OPENAI_API_KEY: 'test' }
     const origin = await fixture({ store, env })
-    const items = [1, 2, 3].map(index => ({ curatedProductId: `${index}1111111-1111-4111-8111-111111111111`,
-      productAssetRevisionIds: [`${index}2222222-2222-4222-8222-222222222222`], verifiedFactRef: 'summary' }))
+    const items = [1, 2, 3].map(index => ({ curatedProductId: `${index}1111111-1111-4111-8111-111111111111`, verifiedFactRef: 'summary' }))
     const created = await fetch(`${origin}/api/revenue/three-picks-v2/campaigns`, { method: 'POST', headers: jsonHeaders,
       body: JSON.stringify({ idempotencyKey, campaignName: 'v2', items }) })
     expect(created.status).toBe(201)
+    const assigned = await fetch(`${origin}/api/revenue/three-picks-v2/campaigns/${uuid}/items/${idempotencyKey}/asset-revisions`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ assetRevisionId: '33333333-3333-4333-8333-333333333333' }),
+    })
+    expect(assigned.status).toBe(200)
+    const locked = await fetch(`${origin}/api/revenue/three-picks-v2/campaigns/${uuid}/lock`, {
+      method: 'POST', headers: jsonHeaders, body: '{}',
+    })
+    expect(locked.status).toBe(200)
     const planned = await fetch(`${origin}/api/revenue/campaign-iterations/${uuid}/three-picks-v2-plans`, {
       method: 'POST', headers: jsonHeaders, body: JSON.stringify({ idempotencyKey }) })
     expect(planned.status).toBe(201)
     expect(store.createThreePicksV2Campaign).toHaveBeenCalledOnce()
+    expect(store.assignThreePicksV2AssetRevision).toHaveBeenCalledWith(uuid, idempotencyKey, '33333333-3333-4333-8333-333333333333')
+    expect(store.lockThreePicksV2Campaign).toHaveBeenCalledWith(uuid)
     expect(store.enqueueThreePicksV2Plan).toHaveBeenCalledWith(uuid, expect.objectContaining({ idempotencyKey }))
   })
 

@@ -115,6 +115,18 @@ export function createThreePicksV2Campaign(input) {
   return request('/three-picks-v2/campaigns', { method: 'POST', body: JSON.stringify(input) })
 }
 
+export function assignThreePicksV2AssetRevision(campaignId, productSetItemId, assetRevisionId) {
+  return request(`/three-picks-v2/campaigns/${encodeURIComponent(campaignId)}/items/${encodeURIComponent(productSetItemId)}/asset-revisions`, {
+    method: 'POST', body: JSON.stringify({ assetRevisionId }),
+  })
+}
+
+export function lockThreePicksV2Campaign(campaignId) {
+  return request(`/three-picks-v2/campaigns/${encodeURIComponent(campaignId)}/lock`, {
+    method: 'POST', body: JSON.stringify({}),
+  })
+}
+
 export function enqueueThreePicksPlan(iterationId, idempotencyKey) {
   return request(`/campaign-iterations/${encodeURIComponent(iterationId)}/three-picks-plans`, {
     method: 'POST', body: JSON.stringify({ idempotencyKey }),
